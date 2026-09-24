@@ -4,11 +4,12 @@ mod solve;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use sqlx::postgres::PgPoolOptions;
-use std::{env, sync::Arc, time::Duration};
+use std::{env, path::Path, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,6 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         catalog: Arc::new(catalog),
         slots: Arc::new(Semaphore::new(concurrency)),
     };
+    let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "web/dist".into());
+    let serve_dir = ServeDir::new(&static_dir)
+        .fallback(ServeFile::new(Path::new(&static_dir).join("index.html")));
     let app = Router::new()
         .route("/api/health", get(api::health))
         .route("/api/puzzles", get(api::catalog))
@@ -50,15 +54,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/progress/{id}",
             get(progress::get).post(progress::save),
         )
+        .route("/api", any(api_not_found))
+        .route("/api/", any(api_not_found))
+        .route("/api/{*path}", any(api_not_found))
+        .fallback_service(serve_dir)
         .layer(DefaultBodyLimit::max(128 * 1024))
         .with_state(state);
     let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    if Path::new(&static_dir).is_dir() {
+        eprintln!("Serving web UI from {static_dir}");
+    } else {
+        eprintln!(
+            "{static_dir} not found; run `npm run build` to serve the web UI from this server"
+        );
+    }
     eprintln!("Sokomind API listening at http://{bind}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
+}
+
+async fn api_not_found() -> api::Error {
+    api::Error::not_found()
 }
 
 async fn shutdown() {

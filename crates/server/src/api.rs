@@ -29,6 +29,9 @@ impl Error {
     pub fn bad(message: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, message.into())
     }
+    pub fn not_found() -> Self {
+        Self(StatusCode::NOT_FOUND, "Unknown API endpoint".into())
+    }
     pub fn unavailable() -> Self {
         Self(
             StatusCode::SERVICE_UNAVAILABLE,
