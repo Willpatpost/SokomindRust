@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game, State};
-use sokomind_search::{Mode, Search, Status};
+use sokomind_search::{Mode, Proof, Search, Status};
 use std::collections::{HashSet, VecDeque};
 
 const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";
@@ -36,14 +36,19 @@ fn exact_routes_match_primitive_bfs() {
         let expected = bfs(&board);
         let mut search =
             Search::new(board.clone(), board.initial, Mode::Optimal, 20_000, 8).unwrap();
-        while search.status == Status::Running {
+        while search.status() == Status::Running {
             search.advance(32);
         }
         assert_eq!(search.best_moves(), expected);
         let mut game = Game::new(board);
         game.replay(&search.solution().unwrap().unwrap()).unwrap();
         assert!(game.solved());
-        assert!(search.proven);
+        assert_eq!(
+            search.proof(),
+            Some(Proof::Optimal {
+                moves: expected.unwrap()
+            })
+        );
     }
 }
 
@@ -52,24 +57,25 @@ fn bounded_and_cancelled_searches_do_not_claim_proof() {
     let board = Board::parse(TWO).unwrap();
     let mut search = Search::new(board.clone(), board.initial, Mode::Optimal, 1, 4).unwrap();
     search.advance(32);
-    assert_eq!(search.status.as_str(), "state_limit");
-    assert_eq!(search.generated, 1);
-    assert!(!search.proven);
+    assert_eq!(search.status().as_str(), "state_limit");
+    assert_eq!(search.generated(), 1);
+    assert_eq!(search.proof(), None);
     let mut search = Search::new(board.clone(), board.initial, Mode::Quality, 20_000, 8).unwrap();
     let mut best = u32::MAX;
-    while search.status == Status::Running {
+    while search.status() == Status::Running {
         search.advance(1);
         let current = search.best_moves().unwrap_or(u32::MAX);
         assert!(current <= best);
         best = current;
     }
     assert!(best < u32::MAX);
-    assert!(!search.proven);
+    assert_eq!(search.proof(), None);
+    assert_eq!(search.lower_bound(), None);
     let mut search = Search::new(board.clone(), board.initial, Mode::Optimal, 20_000, 8).unwrap();
     search.stop(Status::Cancelled);
     search.advance(32);
-    assert_eq!(search.generated, 1);
-    assert!(!search.proven);
+    assert_eq!(search.generated(), 1);
+    assert_eq!(search.proof(), None);
 }
 
 #[test]

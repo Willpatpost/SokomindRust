@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game};
-use sokomind_search::{Mode, Search, Status};
+use sokomind_search::{Mode, Proof, Search, Status};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -85,16 +85,31 @@ impl WasmSearch {
         });
     }
     pub fn status(&self) -> String {
-        self.search.status.as_str().into()
+        self.search.status().as_str().into()
     }
-    /// expanded, generated, accounted reserved bytes, best moves (u32::MAX if none), proven.
+    /// expanded, generated, accounted reserved bytes, best moves (u32::MAX if
+    /// none), proof kind (0 none, 1 bounded, 2 optimal, 3 unsolvable), and the
+    /// certified lower bound (u32::MAX if none).
     pub fn metrics(&self) -> Vec<u32> {
+        let proof = self.search.proof();
+        let kind = match proof {
+            Some(Proof::Optimal { .. }) => 2,
+            Some(Proof::Bounded { .. }) => 1,
+            Some(Proof::Unsolvable) => 3,
+            None => 0,
+        };
+        let lower = match proof {
+            Some(Proof::Bounded { lower_bound, .. }) => lower_bound,
+            Some(Proof::Optimal { moves }) => moves,
+            _ => self.search.lower_bound().unwrap_or(u32::MAX),
+        };
         vec![
-            self.search.expanded,
-            self.search.generated,
-            self.search.reserved_bytes as u32,
+            self.search.expanded(),
+            self.search.generated(),
+            self.search.reserved_bytes() as u32,
             self.search.best_moves().unwrap_or(u32::MAX),
-            self.search.proven as u32,
+            kind,
+            lower,
         ]
     }
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {

@@ -141,8 +141,13 @@ function applyUpdate(update: SearchUpdate) {
   $('reserved').textContent = `${(m[2] / 1048576).toFixed(1)} MiB`;
   $('elapsed').textContent = `${(update.elapsedMs / 1000).toFixed(1)} s`;
   const hasRoute = route !== undefined;
-  const result = hasRoute ? `${route!.length} remaining moves${m[4] ? ' · proven move-optimal from this position' : ' · optimality unproven'}. ` : '';
-  const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: 'No solution from this position.', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
+  const proofKind = m[4];
+  const note = proofKind === 2 ? ' · proven move-optimal from this position'
+    : proofKind === 3 ? ' · proven unsolvable'
+    : m[3] !== 0xffffffff && m[5] !== 0xffffffff ? ` · within ${m[3] - m[5]} of optimal`
+    : ' · optimality unproven';
+  const result = hasRoute ? `${route!.length} remaining moves${note}. ` : '';
+  const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proofKind === 3 ? 'No solution exists from this position.' : 'No solution from this position.', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
   $('search-status').textContent = result + (status[update.status] || update.status);
   if (update.type === 'done') endRun(); else updateButtons();
 }
@@ -175,8 +180,10 @@ async function solve() {
       if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.error || `Server returned HTTP ${response.status}`); }
       const r = await response.json();
       if (id !== generation) return;
+      const proofKinds: Record<string, number> = { bounded: 1, optimal: 2, unsolvable: 3 };
       applyUpdate({ type: 'done', status: r.status, route: r.route ?? undefined, elapsedMs: r.elapsed_ms,
-        metrics: new Uint32Array([r.expanded, r.generated, r.reserved_bytes, r.moves ?? 0xffffffff, r.proven ? 1 : 0]) });
+        metrics: new Uint32Array([r.expanded, r.generated, r.reserved_bytes, r.moves ?? 0xffffffff,
+          r.proof ? proofKinds[r.proof.kind] ?? 0 : 0, r.proof?.lower_bound ?? 0xffffffff]) });
     } catch (error) { if (id === generation) fail(error); }
   }
 }

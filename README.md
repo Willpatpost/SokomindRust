@@ -49,7 +49,7 @@ Terminate HTTPS at your existing proxy before exposing this beyond localhost.
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free incremental search, arena, transposition table, reachability, assignment |
+| `crates/search` | Dependency-free exact and bounded engines over a shared arena, transposition table, reachability, and assignment; proof certificates |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP, bounded native CPU jobs, SQLx/PostgreSQL route verification |
 | `web/src` | Vite/TypeScript, HTML/CSS, canvas renderer, cancellable module worker |
@@ -69,13 +69,18 @@ buffers, reverse-push distances, and minimum-cost label-compatible assignment.
 Each edge is one push plus a shortest walk to its support cell. Keeper position
 remains part of state identity. Walks are reconstructed only for reported routes.
 
-Fast uses weighted A* and returns its first route. Quality continues weighted
-search, preserving the shortest verified incumbent. Optimal uses admissible A*
-with reopenings and only marks a route proven when its goal is popped from the
-global queue. Limits and cancellation never establish optimality. The objective
-is total remaining moves, not pushes. These are MVP algorithms: the reference's
-advanced portfolio, tunnel/corral/PDB machinery, generators, and route-repair
-strategies are not yet ported; Grand Hall performance parity is not claimed.
+Fast and Quality run one bounded engine: weighted A* that returns its first
+route, with Quality continuing to preserve the shortest verified incumbent.
+Optimal runs a separate exact kernel: admissible A* with reopenings that emits
+certificates — `optimal` when a goal pops or the frontier drains below the
+incumbent, `unsolvable` only when an admissible frontier fully drains, and
+`bounded` (verified incumbent plus a certified lower bound and gap) when a
+limit or cancellation stops the run. Limits and cancellation keep existing
+bounds but never upgrade a certificate; the bounded engine never emits one.
+The objective is total remaining moves, not pushes. These are MVP algorithms:
+the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
+and route-repair strategies are not yet ported; Grand Hall performance parity
+is not claimed.
 
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 500,000 states,

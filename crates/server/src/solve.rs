@@ -2,7 +2,7 @@ use crate::api::{App, Error};
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game};
-use sokomind_search::{Mode, Search, Status};
+use sokomind_search::{Mode, Proof, Search, Status};
 use std::{
     sync::{
         Arc,
@@ -35,6 +35,36 @@ fn default_memory() -> usize {
     64
 }
 #[derive(Serialize)]
+struct ProofBody {
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lower_bound: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upper_bound: Option<u32>,
+}
+fn proof_body(proof: Option<Proof>) -> Option<ProofBody> {
+    Some(match proof? {
+        Proof::Bounded {
+            lower_bound,
+            upper_bound,
+        } => ProofBody {
+            kind: "bounded",
+            lower_bound: Some(lower_bound),
+            upper_bound: Some(upper_bound),
+        },
+        Proof::Optimal { moves } => ProofBody {
+            kind: "optimal",
+            lower_bound: Some(moves),
+            upper_bound: Some(moves),
+        },
+        Proof::Unsolvable => ProofBody {
+            kind: "unsolvable",
+            lower_bound: None,
+            upper_bound: None,
+        },
+    })
+}
+#[derive(Serialize)]
 pub struct ResultBody {
     status: &'static str,
     route: Option<String>,
@@ -44,7 +74,7 @@ pub struct ResultBody {
     generated: u32,
     reserved_bytes: usize,
     elapsed_ms: u64,
-    proven: bool,
+    proof: Option<ProofBody>,
 }
 struct CancelOnDrop(Arc<AtomicBool>);
 impl Drop for CancelOnDrop {
@@ -91,7 +121,7 @@ pub async fn solve(
             request.memory_mib,
         )
         .map_err(Error::bad)?;
-        while search.status == Status::Running {
+        while search.status() == Status::Running {
             if cancel.load(Ordering::Relaxed) {
                 search.stop(Status::Cancelled);
             } else if started.elapsed() >= deadline {
@@ -115,15 +145,15 @@ pub async fn solve(
             (None, None)
         };
         Ok(ResultBody {
-            status: search.status.as_str(),
+            status: search.status().as_str(),
             route,
             moves,
             pushes,
-            expanded: search.expanded,
-            generated: search.generated,
-            reserved_bytes: search.reserved_bytes,
+            expanded: search.expanded(),
+            generated: search.generated(),
+            reserved_bytes: search.reserved_bytes(),
             elapsed_ms: started.elapsed().as_millis() as u64,
-            proven: search.proven,
+            proof: proof_body(search.proof()),
         })
     })
     .await
