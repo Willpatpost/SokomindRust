@@ -1,0 +1,8 @@
+[package]
+name = "sokomind-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sokomind-core.workspace = true

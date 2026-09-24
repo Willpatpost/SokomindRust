@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sokomind
+      POSTGRES_DB: sokomind
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sokomind -d sokomind"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build:
+      context: .
+      target: server
+    environment:
+      DATABASE_URL: postgres://sokomind:${POSTGRES_PASSWORD}@db:5432/sokomind
+      SOLVE_CONCURRENCY: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    init: true
+    stop_grace_period: 35s
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - api
+volumes:
+  postgres-data:

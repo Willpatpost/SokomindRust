@@ -1,0 +1,14 @@
+[package]
+name = "sokomind-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sokomind-core.workspace = true
+sokomind-search.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros"] }

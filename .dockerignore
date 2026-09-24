@@ -1,0 +1,8 @@
+.git
+.tools
+target
+node_modules
+web/dist
+web/wasm
+.env
+*.log
