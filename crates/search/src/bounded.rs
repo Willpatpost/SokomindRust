@@ -1,5 +1,6 @@
 use crate::{
     arena::{Arena, Node},
+    deadlock::Deadlock,
     heuristic::Heuristic,
     reach::Reach,
     Status,
@@ -15,6 +16,7 @@ pub struct BoundedSearch {
     fast: bool,
     heuristic: Heuristic,
     reach: Reach,
+    deadlock: Deadlock,
     arena: Arena,
     status: Status,
     expanded: u32,
@@ -34,6 +36,7 @@ impl BoundedSearch {
         let cells = board.tiles.len();
         let arena = Arena::new(cells, board.goals.len(), max_states, memory_mib)?;
         let heuristic = Heuristic::new(&board);
+        let deadlock = Deadlock::new(&board);
         let h = heuristic.estimate(&board, &start);
         let weight = if fast { 5 } else { 3 };
         let mut search = Self {
@@ -43,6 +46,7 @@ impl BoundedSearch {
             start,
             fast,
             heuristic,
+            deadlock,
             status: Status::Running,
             expanded: 0,
             generated: 1,
@@ -126,6 +130,8 @@ impl BoundedSearch {
             }
             self.expanded += 1;
             self.reach.fill(&self.board, &node.state);
+            self.deadlock
+                .refresh(&node.state.boxes[..self.board.labels.len()]);
             for i in 0..self.board.labels.len() {
                 let from = node.state.boxes[i];
                 for (d, &opposite) in OPPOSITE.iter().enumerate() {
@@ -146,6 +152,15 @@ impl BoundedSearch {
                     next.player = from;
                     next.boxes[i] = to;
                     self.board.canonicalize(&mut next);
+                    if self.deadlock.is_dead_after_push(
+                        &self.board,
+                        &next.boxes[..self.board.labels.len()],
+                        i,
+                        from,
+                        to,
+                    ) {
+                        continue;
+                    }
                     let slot = self.arena.slot(&next, self.board.labels.len());
                     let previous = self.arena.entry(slot);
                     if previous != u32::MAX && self.arena.node(previous).g <= g {

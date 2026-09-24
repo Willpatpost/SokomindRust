@@ -2,12 +2,14 @@
 mod arena;
 mod bounded;
 mod certificate;
+mod deadlock;
 mod exact;
 mod heuristic;
 mod reach;
 
 pub use bounded::BoundedSearch;
 pub use certificate::Proof;
+pub use deadlock::Deadlock;
 pub use exact::ExactSearch;
 use sokomind_core::{Board, State};
 

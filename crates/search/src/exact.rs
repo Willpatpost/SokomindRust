@@ -1,6 +1,7 @@
 use crate::{
     arena::{Arena, Node},
     certificate::Proof,
+    deadlock::Deadlock,
     heuristic::Heuristic,
     reach::Reach,
     Status,
@@ -15,6 +16,7 @@ pub struct ExactSearch {
     start: State,
     heuristic: Heuristic,
     reach: Reach,
+    deadlock: Deadlock,
     arena: Arena,
     status: Status,
     expanded: u32,
@@ -36,6 +38,7 @@ impl ExactSearch {
         let cells = board.tiles.len();
         let arena = Arena::new(cells, board.goals.len(), max_states, memory_mib)?;
         let heuristic = Heuristic::new(&board);
+        let deadlock = Deadlock::new(&board);
         let h = heuristic.estimate(&board, &start);
         let mut search = Self {
             reach: Reach::new(cells),
@@ -43,6 +46,7 @@ impl ExactSearch {
             board,
             start,
             heuristic,
+            deadlock,
             status: Status::Running,
             expanded: 0,
             generated: 1,
@@ -162,6 +166,8 @@ impl ExactSearch {
             }
             self.expanded += 1;
             self.reach.fill(&self.board, &node.state);
+            self.deadlock
+                .refresh(&node.state.boxes[..self.board.labels.len()]);
             for i in 0..self.board.labels.len() {
                 let from = node.state.boxes[i];
                 for (d, &opposite) in OPPOSITE.iter().enumerate() {
@@ -182,6 +188,15 @@ impl ExactSearch {
                     next.player = from;
                     next.boxes[i] = to;
                     self.board.canonicalize(&mut next);
+                    if self.deadlock.is_dead_after_push(
+                        &self.board,
+                        &next.boxes[..self.board.labels.len()],
+                        i,
+                        from,
+                        to,
+                    ) {
+                        continue;
+                    }
                     let slot = self.arena.slot(&next, self.board.labels.len());
                     let previous = self.arena.entry(slot);
                     if previous != u32::MAX && self.arena.node(previous).g <= g {

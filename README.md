@@ -49,7 +49,7 @@ Terminate HTTPS at your existing proxy before exposing this beyond localhost.
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free exact and bounded engines over a shared arena, transposition table, reachability, and assignment; proof certificates |
+| `crates/search` | Dependency-free exact and bounded engines over a shared arena, transposition table, reachability, assignment, and sound deadlock pruning; proof certificates |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP, bounded native CPU jobs, SQLx/PostgreSQL route verification |
 | `web/src` | Vite/TypeScript, HTML/CSS, canvas renderer, cancellable module worker |
@@ -77,6 +77,9 @@ incumbent, `unsolvable` only when an admissible frontier fully drains, and
 `bounded` (verified incumbent plus a certified lower bound and gap) when a
 limit or cancellation stops the run. Limits and cancellation keep existing
 bounds but never upgrade a certificate; the bounded engine never emits one.
+Both engines share the reference's sound post-push deadlock pruning: fully
+blocked 2x2 wall/box squares and frozen-component fixpoints, which only
+remove states from which no solution exists.
 The objective is total remaining moves, not pushes. These are MVP algorithms:
 the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
 and route-repair strategies are not yet ported; Grand Hall performance parity

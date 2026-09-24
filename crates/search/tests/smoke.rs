@@ -4,6 +4,13 @@ use std::collections::{HashSet, VecDeque};
 
 const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
+/// Pushing both boxes against the wall forms a wall/box 2x2 square.
+const WALL_PAIR: &str = "OOOOOOO\nOR    O\nO AB  O\nO     O\nOa b  O\nOOOOOOO";
+/// D is frozen on its goal once pushed down; pushing A left then freezes A
+/// against it, while pushing A right solves.
+const FREEZE_CHAIN: &str = "O    O\nODO  O\nOd AaO\nOOO RO\nOOOOOO";
+/// The player can only reach A's freezing side, so every line ends dead.
+const FROZEN_UNSOLVABLE: &str = "OOOOOO\nODO RO\nOd AaO\nOOOOOO";
 
 // Independent primitive-move BFS oracle (not a second push-search implementation).
 fn bfs(board: &Board) -> Option<u32> {
@@ -31,6 +38,9 @@ fn exact_routes_match_primitive_bfs() {
         TWO,
         "OOOOOOO\nOR    O\nO XX  O\nO SS  O\nOOOOOOO",
         "OOOOOOO\nORX  SO\nOOOOOOO",
+        WALL_PAIR,
+        FREEZE_CHAIN,
+        FROZEN_UNSOLVABLE,
     ] {
         let board = Board::parse(rows).unwrap();
         let expected = bfs(&board);
@@ -40,15 +50,18 @@ fn exact_routes_match_primitive_bfs() {
             search.advance(32);
         }
         assert_eq!(search.best_moves(), expected);
-        let mut game = Game::new(board);
-        game.replay(&search.solution().unwrap().unwrap()).unwrap();
-        assert!(game.solved());
-        assert_eq!(
-            search.proof(),
-            Some(Proof::Optimal {
-                moves: expected.unwrap()
-            })
-        );
+        match expected {
+            Some(moves) => {
+                let mut game = Game::new(board);
+                game.replay(&search.solution().unwrap().unwrap()).unwrap();
+                assert!(game.solved());
+                assert_eq!(search.proof(), Some(Proof::Optimal { moves }));
+            }
+            None => {
+                assert_eq!(search.solution().unwrap(), None);
+                assert_eq!(search.proof(), Some(Proof::Unsolvable));
+            }
+        }
     }
 }
 
