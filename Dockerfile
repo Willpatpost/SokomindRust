@@ -3,10 +3,22 @@ WORKDIR /app
 # Manifests first: the toolchain install survives crate and web edits.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN rustup target add wasm32-unknown-unknown && cargo install wasm-bindgen-cli --version 0.2.128 --locked
+# Dependencies alone, against stub sources (and no build.rs), so crate edits
+# reuse this layer. The stubs' own outputs are deleted so nothing stale remains.
+COPY crates/core/Cargo.toml crates/core/
+COPY crates/search/Cargo.toml crates/search/
+COPY crates/wasm/Cargo.toml crates/wasm/
+COPY crates/server/Cargo.toml crates/server/
+RUN for crate in core search wasm; do mkdir -p crates/$crate/src && touch crates/$crate/src/lib.rs; done \
+    && mkdir -p crates/server/src && echo 'fn main() {}' > crates/server/src/main.rs \
+    && cargo build --locked --release -p sokomind-server \
+    && cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
+    && find target -name '*sokomind*' -prune -exec rm -rf {} +
 COPY crates crates
 COPY data data
 COPY migrations migrations
-RUN cargo build --locked --release -p sokomind-server
+# COPY keeps the build context's mtimes, which can predate the stub build.
+RUN find crates data migrations -type f -exec touch {} + && cargo build --locked --release -p sokomind-server
 RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release && wasm-bindgen --target web --out-dir web/wasm --out-name sokomind target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm
 
 FROM debian:bookworm-slim AS server

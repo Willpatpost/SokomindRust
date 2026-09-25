@@ -1,5 +1,7 @@
 export class BoardView {
   private ctx: CanvasRenderingContext2D;
+  /** The whole board fits at 4 px tiles or larger, so it never scrolls and swipes can move the robot. */
+  fits = true;
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas is unavailable');
@@ -7,10 +9,14 @@ export class BoardView {
   }
   draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Uint32Array, onGoal: Uint8Array) {
     const available = this.canvas.parentElement!.clientWidth - 38;
-    const ratio = Math.min(devicePixelRatio || 1, 2);
-    // Canvas dimensions are capped well under the browser limit: oversized
-    // custom boards scroll instead of rendering blank.
-    const tile = Math.max(4, Math.min(48, available / width, 540 / height, 14000 / (width * ratio), 14000 / (height * ratio)));
+    const fit = Math.min(48, available / width, 540 / height);
+    const tile = Math.max(4, fit);
+    this.fits = fit >= 4;
+    // An oversized board scrolls, so touch pans it instead of swiping.
+    this.canvas.classList.toggle('pan', !this.fits);
+    // The backing store stays well under the 32,767 px browser limit on both
+    // axes: an oversized board renders at a lower pixel ratio, never blank.
+    const ratio = Math.min(devicePixelRatio || 1, 2, 14000 / (width * tile), 14000 / (height * tile));
     this.canvas.width = Math.round(width * tile * ratio);
     this.canvas.height = Math.round(height * tile * ratio);
     this.canvas.style.width = `${width * tile}px`;

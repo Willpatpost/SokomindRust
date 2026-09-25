@@ -1,6 +1,6 @@
 # Sokomind Rust
 
-A small Rust/WASM port of `SokomindSolver`: 57 original catalog puzzles, labeled
+A small Rust/WASM port of `SokomindSolver`: its 57 catalog puzzles, labeled
 box rules, keyboard/touch play, undo, restart, route replay, custom board import,
 browser session/best-route storage, worker search, and optional native search and
 PostgreSQL persistence. No frontend framework and no JavaScript game-rule duplicate.
@@ -38,11 +38,18 @@ Use `npm run dev:web` when the WASM package is already built. Rust changes requi
 
 ## Full stack with Docker
 
-Copy `.env.example` to `.env`, choose a PostgreSQL password (URL-encode special
-characters in connection URLs), then run `docker compose up --build`. Open
-`http://127.0.0.1:8080`. The database uses a named volume; only NGINX is exposed.
-For existing NGINX, serve `web/dist` and adapt `deploy/nginx.conf`'s API upstream.
-Terminate HTTPS at your existing proxy before exposing this beyond localhost.
+Copy `.env.example` to `.env`, choose a PostgreSQL password, then run
+`docker compose up --build`. Open `http://127.0.0.1:8080`. The database uses a
+named volume; only NGINX is exposed. For existing NGINX, serve `web/dist` and
+adapt `deploy/nginx.conf`'s API upstream. Terminate HTTPS at your existing proxy
+before exposing this beyond localhost.
+
+Upgrading a database created before migration `0002` deletes every saved server
+route: `0002` drops and recreates the `progress` table to key it by layout
+fingerprint. Back up with `pg_dump` first if you need the old rows. Browsers keep
+their profile token and local best routes, but the server only receives a route
+when that browser solves the puzzle again; opening a puzzle and letting Replay
+best play to the end re-uploads its local best.
 
 ## Layout and boundaries
 
@@ -65,18 +72,20 @@ stream requiring WebSockets.
 
 The search uses dense u16 cells, precomputed neighbors, fixed inline box arrays,
 equal-label canonicalization, an arena-index transposition table, reusable flood
-buffers, reverse-push distances, and minimum-cost label-compatible assignment.
+buffers, reverse-push distances, and a minimum-cost assignment per box label
+(dual-repaired from the parent for label groups of 8 or more boxes).
 Each edge is one push plus a shortest walk to its support cell. Keeper position
 remains part of state identity. Walks are reconstructed only for reported routes.
 
 Fast and Quality run one bounded engine: weighted A* that returns its first
 route, with Quality continuing to preserve the shortest verified incumbent.
-Optimal runs a separate exact kernel: admissible A* with reopenings that emits
-certificates — `optimal` when a goal pops or the frontier drains below the
-incumbent, `unsolvable` only when an admissible frontier fully drains, and
-`bounded` (verified incumbent plus a certified lower bound and gap) when a
-limit or cancellation stops the run. Limits and cancellation keep existing
-bounds but never upgrade a certificate; the bounded engine never emits one.
+Neither ever proves anything. Optimal runs a separate exact kernel: admissible
+A* with reopenings, the only source of certificates. It reports `optimal` when a
+goal pops or the frontier empties with a verified route, and `unsolvable` only
+when the frontier empties without one. When a limit or cancellation stops it
+with a route, it reports `optimal` if the frontier's lower bound has reached
+the route's length, otherwise `bounded` (verified route plus a certified lower
+bound and gap). A run stopped before any route carries no certificate.
 Both engines share the reference's sound post-push deadlock pruning: fully
 blocked 2x2 wall/box squares and frozen-component fixpoints, which only
 remove states from which no solution exists.
@@ -88,8 +97,8 @@ is not claimed.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 500,000 states,
 64 MiB accounted search storage, and one concurrent CPU job by default. Change
-`SOLVE_CONCURRENCY` intentionally; each job reserves its own arena. The search
-memory metric covers major reserved structures, not process RSS, allocator
+`SOLVE_CONCURRENCY` (1..8) intentionally; each job reserves its own arena. The
+search memory metric covers major reserved structures, not process RSS, allocator
 overhead, WASM runtime, or frontend memory. Deadline checks occur between bounded
 expansion batches; setup/reconstruction can add latency.
 
@@ -106,9 +115,29 @@ expansion batches; setup/reconstruction can add latency.
 Progress endpoints require `x-profile-id`, a browser-generated random 32-hex token.
 This is an anonymous local profile capability, not an account/login system. Losing
 browser storage loses the profile token. Custom puzzles stay local. No database
-credentials or SQL cross into the frontend. Native solve overload returns 429;
-persistence without a database returns 503. Saves are rate-limited per client IP
-(60 per minute) and routes are capped at 10,000 moves.
+credentials or SQL cross into the frontend. Saved routes are capped at 10,000 moves.
+
+Every API error body is `{"error": "..."}` (nginx's own 413 and 5xx pages are
+not): 400 invalid input, a missing or malformed profile, a route that does not
+replay or solve, or a solve position plus route over the 100,000-move replay
+limit; 404 unknown endpoint, catalog puzzle, or saved route; 405 wrong method;
+408 a JSON body not received within 10 seconds; 413 a body over 128 KiB; 415 a
+missing or non-JSON content type; 422 JSON of the wrong shape; 429 rate limited
+or solver busy; 503 PostgreSQL not configured or unreachable, or a failed search
+allocation; 500 a server bug.
+
+Rate limits are per client address (an IPv4 address or an IPv6 /64): 60 saves and
+`SOLVE_RATE_PER_MINUTE` solves (default 20, 1..600) per minute. A solve that finds
+every `SOLVE_CONCURRENCY` slot taken gets 429 at once; nothing queues. The server
+holds at most `MAX_CONNECTIONS` open connections (default 256, 1..65536); beyond
+that it stops accepting and the kernel backlog holds new ones. A connection with no
+bytes read or written for 60 seconds is closed. There is no separate header timeout
+(axum gives hyper no timer); the idle timeout, the cap, and nginx bound slow clients.
+Out-of-range `SOLVE_CONCURRENCY`, `SOLVE_RATE_PER_MINUTE`, and `MAX_CONNECTIONS`
+values are clamped and non-numbers use the default, each with a warning. Every
+application response carries `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: same-origin`, so the single binary needs no proxy for them;
+nginx hides the API's copies and adds its own.
 
 Stored progress is keyed by layout fingerprint (`puzzle-v1:{fnv1a}`, identical to
 the reference): a changed catalog layout starts fresh records instead of returning
@@ -120,10 +149,28 @@ extensionless paths return the app shell with `no-cache`, `/assets/` files carry
 hang on a dead content hash after a rebuild. Configure the database with either
 `DATABASE_URL` or `DATABASE_PASSWORD` (plus optional `DATABASE_USER`, `DATABASE_HOST`,
 `DATABASE_PORT`, `DATABASE_NAME`); the server percent-encodes the components, so any
-password characters are safe in compose. The API retries the database connection for
-30 seconds at startup. Behind the TLS reverse proxy the README of the reference
-deployment style suggests, enable nginx's `real_ip` module (see the commented block
-in `deploy/nginx.conf`) so per-IP rate limiting sees real clients.
+password characters are safe in compose. At startup the API retries only transient
+database failures, for about 30 seconds, logging each attempt; authentication
+failures (SQLSTATE 28P01/28000), a missing database (3D000), and other
+non-transient errors fail immediately. `PROGRESS_RETENTION_DAYS` unset or 0 keeps
+progress forever; 1..36500 deletes records whose best route was stored more than
+that many days ago (equal or worse saves do not refresh it), after migrations at
+startup and then hourly, logging the count when nonzero. Any other value warns and
+keeps everything.
+
+`TRUSTED_PROXIES` lists the proxies (comma-separated IPv4/IPv6 addresses or CIDRs)
+whose `X-Forwarded-For` the API believes. Unset or empty trusts none: the socket
+address is the client. An invalid entry stops startup with an error naming it. When
+the peer is trusted, the client is the rightmost untrusted `X-Forwarded-For` entry;
+an unparseable entry ends the walk at the last trusted hop, and a chain of only
+trusted hops yields the leftmost. `::ffff:` addresses count as IPv4. Compose sets
+`172.16.0.0/12`, Docker's bridge range, because nginx is the API's only peer and
+overwrites `X-Forwarded-For` with its own client address instead of appending to
+it. If Docker gives your networks another range, set that instead; otherwise every
+client shares one API rate-limit bucket. nginx itself limits `/api/` to 10 requests
+per second per address (burst 20), answers excess with a JSON 429, and exempts
+`/api/health`. Behind another proxy, such as TLS on the host, also enable the
+commented `real_ip` block in `deploy/nginx.conf` so both limits see real clients.
 
 ## Small validation surface
 
@@ -139,10 +186,19 @@ unsolvable must all be reproduced exactly.
 
 `SokomindSolver/` was read as the behavior reference and left unchanged. Puzzle
 data retains the original MIT license. The MVP deliberately omits React, PWA,
-music, accounts, cloud jobs, elaborate editor tooling, and extensive test/CI setup.
+music, accounts, cloud jobs, and CI, and the reference's editor, generator, journey,
+daily challenge, achievements, stats, favorites, ratings, share links, progress
+import, solver hints, solver lab, board zoom, and in-play deadlock warning.
 
-Deliberate deviations from the reference: strict board parsing (no carriage
-returns, no empty rows; one trailing newline tolerated); touch input is swipe plus
-on-screen buttons (the reference also has tap-to-move); `Cargo.lock` contains
-rsa and sqlx's other optional drivers because Cargo locks all-target resolution
-even when they are never compiled, so `cargo audit` may false-positive on rsa.
+Deliberate deviations from the reference: strict board parsing (empty rows and
+carriage returns are rejected, where the reference's editor import drops blank
+lines; one trailing newline tolerated); boards cap at 4096 cells and 32 boxes
+(the reference core has no cap; its editor import takes 3x3 to 20x20); sessions
+stop at the 100,000-move replay limit (the reference has no in-game cap);
+pasted routes are uppercased and stripped of whitespace, which the reference's
+route decoder rejects; undo is Z (the reference uses U or Ctrl+Z and binds Z to
+Zen mode); touch input is one-finger swipes plus on-screen buttons, and a board
+too big to fit pans instead of taking swipes (the reference also has tap-to-move);
+`Cargo.lock` contains rsa and sqlx's other optional drivers because
+Cargo locks all-target resolution even when they are never compiled, so
+`cargo audit` may false-positive on rsa.

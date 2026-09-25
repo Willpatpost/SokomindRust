@@ -53,7 +53,7 @@ impl WasmGame {
         if index >= self.game.board.labels.len() {
             return false;
         }
-        let cell = self.game.state.boxes[index] as usize;
+        let cell = self.game.state().boxes[index] as usize;
         self.game.board.tiles[cell] == self.game.board.labels[index]
     }
 }
@@ -76,9 +76,10 @@ impl WasmSearch {
         let mut game = Game::new(board);
         game.replay(actions).map_err(|e| JsError::new(&e))?;
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
+        let start = game.state();
         let search = Search::new(
             game.board,
-            game.state,
+            start,
             mode,
             max_states as usize,
             memory_mib as usize,

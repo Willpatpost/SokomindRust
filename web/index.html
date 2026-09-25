@@ -21,7 +21,7 @@
       <aside>
         <section class="card"><p class="eyebrow">SHARED RUST ENGINE</p><h2>Find a route</h2>
           <label for="mode">Search mode</label><select id="mode"><option value="fast">Fast · first solution</option><option value="quality">Quality · improve over time</option><option value="optimal">Optimal · exact move search</option></select>
-          <p id="mode-help" class="muted">Prioritizes a quick first route. It may use extra moves.</p>
+          <p id="mode-help" class="muted">Prioritizes a quick first route. It may use extra moves and never proves optimality.</p>
           <div class="fields"><div><label for="seconds">Time budget</label><select id="seconds"><option value="5">5 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option></select></div><div><label for="memory">Memory budget</label><select id="memory"><option value="16">16 MiB</option><option value="32">32 MiB</option><option value="64" selected>64 MiB</option></select></div></div>
           <label for="engine">Run on</label><select id="engine"><option value="browser">This browser · WebAssembly</option><option value="native">Server · native Rust</option></select>
           <div class="actions"><button id="solve" class="primary">Solve from here</button><button id="cancel" disabled>Stop</button></div>

@@ -1,46 +1,76 @@
+use crate::client::prefix;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-const WINDOW_SECS: u64 = 60;
-const MAX_PER_WINDOW: u32 = 60;
 const MAX_TRACKED: usize = 65_536;
 
-/// Fixed-window per-IP limiter for progress saves. Anonymous profile rows
-/// are otherwise unbounded: anyone can invent unlimited 32-hex profile IDs.
+/// Fixed-window per-client limiter for saves and native solves. Anonymous
+/// profile rows are otherwise unbounded (anyone can invent 32-hex profile
+/// IDs), and one client could otherwise hold the solver slots.
+///
 /// The map is hard-bounded so attacker addresses cannot grow it without
-/// limit; stale windows are dropped first, and a full map resets.
-pub struct SaveLimiter {
-    window: Mutex<HashMap<IpAddr, (u64, u32)>>,
+/// limit. Stale windows are swept at most once per window; while the map is
+/// still full, unknown clients are refused rather than resetting everyone's
+/// budget, and known clients keep their windows.
+pub struct RateLimiter {
+    max: u32,
+    window: Duration,
+    capacity: usize,
+    state: Mutex<Windows>,
 }
-impl SaveLimiter {
-    pub fn new() -> Self {
+struct Windows {
+    clients: HashMap<IpAddr, (Instant, u32)>,
+    swept: Instant,
+}
+impl RateLimiter {
+    pub fn new(max: u32, window: Duration) -> Self {
+        Self::with_capacity(max, window, MAX_TRACKED)
+    }
+    fn with_capacity(max: u32, window: Duration, capacity: usize) -> Self {
         Self {
-            window: Mutex::new(HashMap::new()),
+            max,
+            window,
+            capacity,
+            state: Mutex::new(Windows {
+                clients: HashMap::new(),
+                swept: Instant::now(),
+            }),
         }
     }
     pub fn allow(&self, ip: IpAddr) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let mut window = self.window.lock().unwrap();
-        window.retain(|_, (start, _)| now.saturating_sub(*start) < WINDOW_SECS);
-        if window.len() >= MAX_TRACKED {
-            window.clear();
+        self.allow_at(ip, Instant::now())
+    }
+    fn allow_at(&self, ip: IpAddr, now: Instant) -> bool {
+        let key = key(ip);
+        let mut state = self.state.lock().unwrap();
+        let Windows { clients, swept } = &mut *state;
+        if now.saturating_duration_since(*swept) >= self.window {
+            clients.retain(|_, (start, _)| now.saturating_duration_since(*start) < self.window);
+            *swept = now;
         }
-        let slot = window.entry(ip).or_insert((now, 0));
-        if now.saturating_sub(slot.0) >= WINDOW_SECS {
+        if clients.len() >= self.capacity && !clients.contains_key(&key) {
+            return false;
+        }
+        let slot = clients.entry(key).or_insert((now, 0));
+        if now.saturating_duration_since(slot.0) >= self.window {
             *slot = (now, 0);
         }
+        if slot.1 >= self.max {
+            return false;
+        }
         slot.1 += 1;
-        slot.1 <= MAX_PER_WINDOW
+        true
     }
 }
-impl Default for SaveLimiter {
-    fn default() -> Self {
-        Self::new()
+
+/// IPv6 clients are keyed by /64: one subscriber usually holds a whole
+/// prefix, so per-address keys would hand out 2^64 budgets.
+fn key(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => prefix(IpAddr::V6(v6), 64),
+        v4 => v4,
     }
 }
 
@@ -48,15 +78,64 @@ impl Default for SaveLimiter {
 mod tests {
     use super::*;
 
+    const MINUTE: Duration = Duration::from_secs(60);
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
     #[test]
     fn per_ip_cap_and_independent_addresses() {
-        let limiter = SaveLimiter::new();
-        let first: IpAddr = "127.0.0.1".parse().unwrap();
-        let second: IpAddr = "127.0.0.2".parse().unwrap();
-        for _ in 0..MAX_PER_WINDOW {
+        let limiter = RateLimiter::new(60, MINUTE);
+        let first = ip("127.0.0.1");
+        for _ in 0..60 {
             assert!(limiter.allow(first));
         }
         assert!(!limiter.allow(first));
-        assert!(limiter.allow(second));
+        assert!(limiter.allow(ip("127.0.0.2")));
+    }
+
+    #[test]
+    fn windows_restart() {
+        let limiter = RateLimiter::new(2, MINUTE);
+        let start = Instant::now();
+        let client = ip("192.0.2.1");
+        assert!(limiter.allow_at(client, start));
+        assert!(limiter.allow_at(client, start));
+        assert!(!limiter.allow_at(client, start + MINUTE / 2));
+        assert!(limiter.allow_at(client, start + MINUTE));
+    }
+
+    #[test]
+    fn ipv6_is_keyed_by_64_prefix() {
+        let limiter = RateLimiter::new(2, MINUTE);
+        let now = Instant::now();
+        assert!(limiter.allow_at(ip("2001:db8:1:2::1"), now));
+        assert!(limiter.allow_at(ip("2001:db8:1:2:ffff::9"), now));
+        assert!(!limiter.allow_at(ip("2001:db8:1:2::3"), now));
+        assert!(limiter.allow_at(ip("2001:db8:1:3::1"), now));
+        // Mapped addresses share the IPv4 client's bucket.
+        assert!(limiter.allow_at(ip("192.0.2.1"), now));
+        assert!(limiter.allow_at(ip("::ffff:192.0.2.1"), now));
+        assert!(!limiter.allow_at(ip("192.0.2.1"), now));
+    }
+
+    #[test]
+    fn full_map_refuses_new_clients_until_swept() {
+        let limiter = RateLimiter::with_capacity(3, MINUTE, 2);
+        let start = Instant::now();
+        let (a, b, c) = (ip("192.0.2.1"), ip("192.0.2.2"), ip("192.0.2.3"));
+        assert!(limiter.allow_at(a, start));
+        assert!(limiter.allow_at(b, start));
+        assert!(!limiter.allow_at(c, start));
+        // Known clients keep their budgets; nothing was reset.
+        assert!(limiter.allow_at(a, start));
+        assert!(limiter.allow_at(a, start));
+        assert!(!limiter.allow_at(a, start));
+        assert!(!limiter.allow_at(c, start + MINUTE / 2));
+        // The next window sweeps the stale entries and admits newcomers.
+        assert!(limiter.allow_at(c, start + MINUTE));
+        assert!(limiter.allow_at(a, start + MINUTE));
+        assert!(!limiter.allow_at(b, start + MINUTE));
     }
 }

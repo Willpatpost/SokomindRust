@@ -21,21 +21,29 @@ const CROSSING: &str = "OOOOOOO\nOOOR OO\nOO X  O\nOSX   O\nOOSOOOO\nOOOOOOO";
 
 // Independent primitive-move BFS oracle (not a second push-search implementation).
 fn bfs(board: &Board) -> Option<u32> {
+    bfs_within(board, usize::MAX).unwrap()
+}
+
+/// `bfs`, or `None` once it has seen more than `cap` states.
+fn bfs_within(board: &Board, cap: usize) -> Option<Option<u32>> {
     let key = |s: State| (s.player, s.boxes);
     let mut queue = VecDeque::from([(board.initial, 0)]);
     let mut seen = HashSet::from([key(board.initial)]);
     while let Some((state, moves)) = queue.pop_front() {
         if board.solved(&state) {
-            return Some(moves);
+            return Some(Some(moves));
         }
         for direction in 0..4 {
             let mut next = state;
             if board.step(&mut next, direction).is_some() && seen.insert(key(next)) {
+                if seen.len() > cap {
+                    return None;
+                }
                 queue.push_back((next, moves + 1));
             }
         }
     }
-    None
+    Some(None)
 }
 
 fn run(board: &Board, mode: Mode) -> Search {
@@ -44,6 +52,123 @@ fn run(board: &Board, mode: Mode) -> Search {
         search.advance(64);
     }
     search
+}
+
+/// Runs a search in small slices, checking the live lower bound after each.
+fn drive(
+    board: &Board,
+    mode: Mode,
+    max_states: usize,
+    optimum: Option<u32>,
+    context: &str,
+) -> Search {
+    let mut search = Search::new(board.clone(), board.initial, mode, max_states, 8).unwrap();
+    while search.status() == Status::Running {
+        search.advance(4);
+        if let (Some(bound), Some(optimum)) = (search.lower_bound(), optimum) {
+            assert!(
+                bound <= optimum,
+                "live bound {bound} > {optimum}: {context}"
+            );
+        }
+    }
+    search
+}
+
+/// Everything a finished search claims must agree with the BFS optimum
+/// (`None` when unsolvable): its bound, its certificate, and its route.
+fn assert_consistent(board: &Board, search: &mut Search, optimum: Option<u32>, context: &str) {
+    if let (Some(bound), Some(optimum)) = (search.lower_bound(), optimum) {
+        assert!(
+            bound <= optimum,
+            "lower bound {bound} > {optimum}: {context}"
+        );
+    }
+    let best = search.best_moves();
+    match search.proof() {
+        None => {}
+        Some(Proof::Unsolvable) => assert_eq!(optimum, None, "{context}"),
+        Some(Proof::Optimal { moves }) => assert_eq!(Some(moves), optimum, "{context}"),
+        Some(Proof::Bounded {
+            lower_bound,
+            upper_bound,
+        }) => {
+            assert_eq!(Some(upper_bound), best, "{context}");
+            let optimum = optimum.expect(context);
+            assert!(
+                lower_bound <= optimum && optimum <= upper_bound,
+                "{context}"
+            );
+        }
+    }
+    let Some(best) = best else {
+        return;
+    };
+    let optimum = optimum.unwrap_or_else(|| panic!("route on an unsolvable board: {context}"));
+    assert!(best >= optimum, "{context}");
+    let route = search.solution().unwrap().unwrap();
+    assert_eq!(route.len(), best as usize, "{context}");
+    let mut game = Game::new(board.clone());
+    game.replay(&route).unwrap();
+    assert!(game.solved(), "{context}");
+}
+
+/// Seeded LCG, so every run generates the same boards.
+struct Lcg(u64);
+impl Lcg {
+    fn below(&mut self, bound: usize) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 33) as usize % bound
+    }
+    fn take(&mut self, free: &mut Vec<usize>) -> usize {
+        let index = self.below(free.len());
+        free.swap_remove(index)
+    }
+}
+
+/// A walled 5..=6 x 5..=6 room with one to three X boxes, sometimes an A box,
+/// their goals, and about a quarter of the spare floor walled. Boxes start off
+/// the room's rim. Every board parses; many are unsolvable.
+fn random_board(rng: &mut Lcg) -> String {
+    let (width, height) = (5 + rng.below(2), 5 + rng.below(2));
+    let mut cells = vec![b' '; width * height];
+    let mut boxes = vec![b'X'; 1 + rng.below(3)];
+    if rng.below(4) == 0 {
+        boxes.push(b'A');
+    }
+    let mut free: Vec<usize> = (0..cells.len())
+        .filter(|&c| {
+            (1..width - 1).contains(&(c % width)) && (1..height - 1).contains(&(c / width))
+        })
+        .collect();
+    for &label in &boxes {
+        cells[rng.take(&mut free)] = label;
+    }
+    let mut free: Vec<usize> = (0..cells.len()).filter(|&c| cells[c] == b' ').collect();
+    for &label in &boxes {
+        let goal = if label == b'X' {
+            b'S'
+        } else {
+            label.to_ascii_lowercase()
+        };
+        cells[rng.take(&mut free)] = goal;
+    }
+    cells[rng.take(&mut free)] = b'R';
+    for cell in free {
+        if rng.below(100) < 25 {
+            cells[cell] = b'O';
+        }
+    }
+    let wall = "O".repeat(width + 2);
+    let mut rows = vec![wall.clone()];
+    for row in cells.chunks(width) {
+        rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
+    }
+    rows.push(wall);
+    rows.join("\n")
 }
 
 #[test]
@@ -135,20 +260,31 @@ fn solutions_survive_exact_limit_boundaries() {
     // Sweep the state limit across the boundary where a solution child is
     // discovered at the exact moment the arena fills.
     let board = Board::parse(TWO).unwrap();
+    let mut kept = 0;
     for max_states in 1..=40 {
         let mut search =
             Search::new(board.clone(), board.initial, Mode::Fast, max_states, 8).unwrap();
         while search.status() == Status::Running {
             search.advance(16);
         }
-        if let Some(moves) = search.best_moves() {
-            let route = search.solution().unwrap().unwrap();
-            assert_eq!(route.len(), moves as usize, "at {max_states} states");
-            let mut game = Game::new(board.clone());
-            game.replay(&route).unwrap();
-            assert!(game.solved(), "at {max_states} states");
+        let Some(moves) = search.best_moves() else {
+            assert_eq!(
+                search.status(),
+                Status::StateLimit,
+                "at {max_states} states"
+            );
+            continue;
+        };
+        if search.status() == Status::StateLimit {
+            kept += 1;
         }
+        let route = search.solution().unwrap().unwrap();
+        assert_eq!(route.len(), moves as usize, "at {max_states} states");
+        let mut game = Game::new(board.clone());
+        game.replay(&route).unwrap();
+        assert!(game.solved(), "at {max_states} states");
     }
+    assert!(kept > 0, "no state limit kept the solution it found");
 }
 
 #[test]
@@ -174,31 +310,114 @@ fn same_label_reordering_keeps_proofs_sound() {
     }
 }
 
+/// Sweeps every state limit up to the unlimited run's node count. A limit
+/// always cuts an expansion short, so the frontier must count that node's
+/// unpushed children (`interrupted_g`); some limits land exactly as the solved
+/// child needs the arena's spare node (`push_final`).
 #[test]
 fn limited_optimal_bounds_never_pass_the_optimum() {
-    let board = Board::parse(CROSSING).unwrap();
-    let optimum = bfs(&board).unwrap();
-    for max_states in 1..=40 {
-        let mut search =
-            Search::new(board.clone(), board.initial, Mode::Optimal, max_states, 8).unwrap();
-        while search.status() == Status::Running {
-            search.advance(16);
-        }
-        assert!(
-            search.lower_bound().is_none_or(|bound| bound <= optimum),
-            "at {max_states} states"
-        );
-        match search.proof() {
-            Some(Proof::Optimal { moves }) => assert_eq!(moves, optimum, "at {max_states} states"),
-            Some(Proof::Bounded {
-                lower_bound,
-                upper_bound,
-            }) => assert!(
-                lower_bound <= optimum && optimum <= upper_bound,
-                "at {max_states} states"
-            ),
-            Some(Proof::Unsolvable) => panic!("false unsolvable at {max_states} states"),
-            None => assert_eq!(search.best_moves(), None, "at {max_states} states"),
+    let (mut kept, mut spare) = (0, 0);
+    for (rows, optimum) in [(CROSSING, 9), (TWO, 20)].into_iter().chain(REORDERED) {
+        let board = Board::parse(rows).unwrap();
+        assert_eq!(bfs(&board), Some(optimum), "{rows:?}");
+        let full = run(&board, Mode::Optimal).generated() as usize;
+        for max_states in 1..=full {
+            let context = format!("{rows:?} at {max_states} states");
+            let mut search = drive(&board, Mode::Optimal, max_states, Some(optimum), &context);
+            assert_consistent(&board, &mut search, Some(optimum), &context);
+            if max_states == full {
+                assert_eq!(
+                    search.proof(),
+                    Some(Proof::Optimal { moves: optimum }),
+                    "{context}"
+                );
+                continue;
+            }
+            assert_eq!(search.status(), Status::StateLimit, "{context}");
+            let Some(best) = search.best_moves() else {
+                assert_eq!(search.proof(), None, "{context}");
+                continue;
+            };
+            kept += 1;
+            // Only the spare node can take the arena past its limit.
+            if search.generated() as usize == max_states + 1 {
+                spare += 1;
+            }
+            match search.proof() {
+                Some(Proof::Optimal { moves }) => assert_eq!(moves, optimum, "{context}"),
+                Some(Proof::Bounded {
+                    lower_bound,
+                    upper_bound,
+                }) => {
+                    assert_eq!(upper_bound, best, "{context}");
+                    assert!(
+                        lower_bound <= optimum && optimum <= upper_bound,
+                        "{context}"
+                    );
+                }
+                other => panic!("{other:?} with an incumbent: {context}"),
+            }
         }
     }
+    assert!(kept > 0, "no limited run kept an incumbent");
+    assert!(spare > 0, "no limited run used the spare node");
+}
+
+/// All three modes against the BFS oracle on seeded random boards, plus two
+/// limited exact runs per board. Boards whose oracle would see more than
+/// 10,000 states are skipped to keep the test fast in debug builds.
+#[test]
+fn engines_agree_with_bfs_on_generated_boards() {
+    let mut rng = Lcg(1);
+    let (mut solvable, mut unsolvable) = (0, 0);
+    for _ in 0..200 {
+        let rows = random_board(&mut rng);
+        let board = Board::parse(&rows).unwrap();
+        let Some(optimum) = bfs_within(&board, 10_000) else {
+            continue;
+        };
+        match optimum {
+            Some(_) => solvable += 1,
+            None => unsolvable += 1,
+        }
+        let mut full = 1;
+        for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
+            let context = format!("{mode:?} on {rows:?}");
+            let mut search = drive(&board, mode, 20_000, optimum, &context);
+            assert_consistent(&board, &mut search, optimum, &context);
+            if mode == Mode::Optimal {
+                full = search.generated() as usize;
+            } else {
+                assert_eq!(search.proof(), None, "{context}");
+                assert_eq!(search.lower_bound(), None, "{context}");
+            }
+            // A run cut short by a limit only has to stay consistent.
+            if matches!(search.status(), Status::StateLimit | Status::MemoryLimit) {
+                continue;
+            }
+            let finished = if optimum.is_some() {
+                Status::Solved
+            } else {
+                Status::Exhausted
+            };
+            assert_eq!(search.status(), finished, "{context}");
+            if mode == Mode::Optimal {
+                let proof = optimum.map_or(Proof::Unsolvable, |moves| Proof::Optimal { moves });
+                assert_eq!(search.proof(), Some(proof), "{context}");
+            }
+        }
+        // Stop the exact engine midway and one node short of finishing.
+        for max_states in [full / 2, full - 1] {
+            if max_states == 0 {
+                continue;
+            }
+            let context = format!("{rows:?} at {max_states} states");
+            let mut search = drive(&board, Mode::Optimal, max_states, optimum, &context);
+            assert_consistent(&board, &mut search, optimum, &context);
+        }
+    }
+    assert!(
+        solvable >= 40 && unsolvable >= 40,
+        "{solvable} solvable, {unsolvable} unsolvable"
+    );
 }

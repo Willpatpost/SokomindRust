@@ -1,4 +1,4 @@
-use sokomind_core::{Board, Cell, State, MAX_BOXES, NONE};
+use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State};
 use sokomind_search::Deadlock;
 
 /// D is frozen on its goal once pushed down; pushing A left then freezes A

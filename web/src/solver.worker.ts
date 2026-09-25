@@ -23,6 +23,7 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
     search = new WasmSearch(r.rows, r.actions, r.mode, r.maxStates, r.memoryMiB);
     let reportedBest = 0xffffffff;
     let lastReport = 0;
+    let lastRoute = 0;
     while (true) {
       const slice = performance.now();
       while (performance.now() - slice < 8 && search.status() === 'running') {
@@ -32,17 +33,22 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
       const elapsedMs = performance.now() - started;
       const metrics = search.metrics();
       const status = search.status();
-      const improved = metrics[3] < reportedBest;
-      if (improved || status !== 'running' || elapsedMs - lastReport >= 150) {
+      const running = status === 'running';
+      // Rebuilding a route walks every push, so a stream of Quality improvements
+      // is sampled every 500 ms; the first route and the final best always go out.
+      const improved = metrics[3] < reportedBest
+        && (!running || reportedBest === 0xffffffff || elapsedMs - lastRoute >= 500);
+      if (improved || !running || elapsedMs - lastReport >= 150) {
         // Serialize only tiny telemetry and a newly improved, Rust-verified route.
         const route = improved ? search.solution() : undefined;
+        if (improved) lastRoute = elapsedMs;
         if (route !== undefined) reportedBest = metrics[3];
-        post({ type: status === 'running' ? 'progress' : 'done', status, metrics, elapsedMs, route });
+        post({ type: running ? 'progress' : 'done', status, metrics, elapsedMs, route });
         lastReport = elapsedMs;
       }
-      if (status !== 'running') break;
+      if (!running) break;
       await yieldToEventLoop();
     }
-  } catch (error) { post({ type: 'error', message: String(error) }); }
+  } catch (error) { post({ type: 'error', message: error instanceof Error ? error.message : String(error) }); }
   finally { search?.free(); active = false; }
 };

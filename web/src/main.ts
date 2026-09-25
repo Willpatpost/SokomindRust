@@ -10,7 +10,8 @@ interface Puzzle { id: string; title: string; difficulty: string; rows: string[]
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
 const select = (id: string) => $<HTMLSelectElement>(id);
-const message = (value: string) => { $('message').textContent = value; };
+// role=status re-announces every write, so identical text is left alone.
+const message = (value: string) => { const el = $('message'); if (el.textContent !== value) el.textContent = value; };
 const board = new BoardView($<HTMLCanvasElement>('board'));
 let game: WasmGame;
 let current: Puzzle;
@@ -33,7 +34,7 @@ const profile = storage.profile();
 
 function updateButtons() {
   button('solve').disabled = busy || !game || snapshot[3] === 1;
-  button('cancel').disabled = !busy && !playback;
+  button('cancel').disabled = !busy && !playback && !pausedRoute;
   button('play').disabled = busy || (!route && !playback && !pausedRoute);
   button('copy').disabled = !route;
   button('undo').disabled = !game || snapshot[1] === 0;
@@ -47,16 +48,20 @@ function stopPlayback() {
   if (playback) clearInterval(playback.timer);
   playback = undefined; button('play').textContent = 'Play route';
 }
+// Playback leaves the robot away from where the route starts, so a finished,
+// blocked, or stopped playback drops the route instead of offering a replay.
+function endPlayback() { stopPlayback(); pausedRoute = undefined; route = undefined; updateButtons(); }
 function animate(actions: string, start = 0) {
   stopPlayback();
   pausedRoute = undefined;
   button('play').textContent = 'Pause';
   playback = { actions, index: start, timer: setInterval(() => {
     if (!playback) return;
-    if (playback.index >= playback.actions.length) { stopPlayback(); route = undefined; updateButtons(); return; }
-    if (!game.step('UDLR'.indexOf(playback.actions[playback.index++]))) { stopPlayback(); message('Replay was blocked.'); return; }
+    if (playback.index >= playback.actions.length) { endPlayback(); return; }
+    if (!game.step('UDLR'.indexOf(playback.actions[playback.index++]))) { endPlayback(); message('Replay was blocked.'); return; }
     changed();
   }, 70) };
+  updateButtons();
 }
 function invalidate() {
   generation++; requestAbort?.abort(); endRun(); stopPlayback(); pausedRoute = undefined; route = undefined; updateButtons();
@@ -106,16 +111,27 @@ function keepBest(fullRoute: string) {
   }
   updateBest();
 }
+// API errors carry {error}; a proxy's own error page has none.
+async function errorText(response: Response): Promise<string | undefined> {
+  const body: { error?: unknown } | null = await response.json().catch(() => null);
+  return typeof body?.error === 'string' ? body.error : undefined;
+}
 async function syncBest(fullRoute: string) {
   if (!persistence || !profile || current.id === 'custom') return;
+  const failed = 'Server save failed. Local progress is still available if browser storage is enabled.';
   try {
     const response = await fetch(`/api/progress/${encodeURIComponent(current.id)}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-profile-id': profile }, body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      // A rejected save (bad input, rate limit) is final; 5xx means the server could not save.
+      $('storage').textContent = response.status === 429 ? 'Server save rate-limited; try again shortly. Local progress is kept.'
+        : response.status < 500 ? `Server save rejected: ${(await errorText(response)) ?? `HTTP ${response.status}`}` : failed;
+      return;
+    }
     const result = await response.json();
     $('storage').textContent = result.improved
       ? 'Verified best route saved in PostgreSQL for this browser profile.'
       : 'Server already stored an equal or better route for this puzzle.';
-  } catch { $('storage').textContent = 'Server save failed. Local progress is still available if browser storage is enabled.'; }
+  } catch { $('storage').textContent = failed; }
 }
 async function pullBest() {
   if (!persistence || !profile || current.id === 'custom') return;
@@ -149,7 +165,7 @@ function load(puzzle: Puzzle, actions = '') {
 }
 function move(direction: number) {
   if (!game) return;
-  if (busy || route || playback) invalidate();
+  if (busy || route || playback || pausedRoute) invalidate();
   if (game.step(direction)) changed();
   else if (game.moves() >= 100000) message('Session move limit reached (100000). Undo or restart to continue.');
 }
@@ -169,16 +185,17 @@ function applyUpdate(update: SearchUpdate) {
   const proofKind = m[4];
   const note = proofKind === 2 ? ' · proven move-optimal from this position'
     : proofKind === 3 ? ' · proven unsolvable'
-    : m[3] !== 0xffffffff && m[5] !== 0xffffffff ? ` · within ${m[3] - m[5]} of optimal`
+    // Worker routes arrive throttled, so the gap is measured on the route shown.
+    : hasRoute && m[5] !== 0xffffffff ? ` · within ${route!.length - m[5]} of optimal`
     : ' · optimality unproven';
   const result = hasRoute ? `${route!.length} remaining moves${note}. ` : '';
-  const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proofKind === 3 ? 'No solution exists from this position.' : 'No solution from this position.', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
+  const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proofKind === 3 ? 'No solution exists from this position.' : 'Search ended without finding a route (not a proof — use Optimal to prove unsolvability).', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
   setStatus(result + (status[update.status] || update.status));
   // The run timer owns the elapsed display; the final value lands once, here.
   if (update.type === 'done') { endRun(); $('elapsed').textContent = `${(update.elapsedMs / 1000).toFixed(1)} s`; }
   else updateButtons();
 }
-function fail(error: unknown) { setStatus(String(error)); endRun(); }
+function fail(error: unknown) { setStatus(error instanceof Error ? error.message : String(error)); endRun(); }
 async function solve() {
   if (busy) return;
   invalidate(); busy = true; runPrefix = game.actions(); updateButtons();
@@ -206,7 +223,11 @@ async function solve() {
     try {
       const response = await fetch('/api/solve', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: requestAbort.signal,
         body: JSON.stringify({ rows: current.rows, actions: request.actions, mode: request.mode, time_ms: request.timeMs, max_states: request.maxStates, memory_mib: request.memoryMiB }) });
-      if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.error || `Server returned HTTP ${response.status}`); }
+      if (!response.ok) {
+        const error = (await errorText(response)) ?? `Server returned HTTP ${response.status}`;
+        // A rate-limited or busy server leaves the in-browser solver available.
+        throw new Error(response.status === 429 && !/browser/i.test(error) ? `${error}. The browser solver still works: set Run on to This browser.` : error);
+      }
       const r = await response.json();
       if (id !== generation) return;
       const proofKinds: Record<string, number> = { bounded: 1, optimal: 2, unsolvable: 3 };
@@ -264,20 +285,29 @@ async function start() {
   };
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]')) control.onclick = () => move(Number(control.dataset.direction));
   // Swipe on the board moves the robot; taps stay with the on-screen buttons.
+  // Only a clean one-finger swipe counts: a second finger (pinch), a cancelled
+  // touch, or any scroll during the gesture discards it, and an oversized
+  // board that must pan takes no swipes at all.
   const canvas = $<HTMLCanvasElement>('board');
-  let touchStart: { x: number; y: number } | undefined;
+  const scrollOffsets = () => `${scrollX},${scrollY},${canvas.parentElement!.scrollLeft},${canvas.parentElement!.scrollTop}`;
+  let swipe: { id: number; x: number; y: number; scroll: string } | undefined;
   canvas.addEventListener('touchstart', event => {
-    const touch = event.touches[0];
-    touchStart = { x: touch.clientX, y: touch.clientY };
-  }, { passive: true });
-  canvas.addEventListener('touchend', event => {
-    if (!touchStart) return;
     const touch = event.changedTouches[0];
-    const dx = touch.clientX - touchStart.x;
-    const dy = touch.clientY - touchStart.y;
-    touchStart = undefined;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
-    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0));
+    swipe = event.touches.length === 1 && board.fits
+      ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, scroll: scrollOffsets() } : undefined;
+  }, { passive: true });
+  // A second finger that lands off the board still makes this a pinch.
+  document.addEventListener('touchstart', event => { if (event.touches.length > 1) swipe = undefined; }, { passive: true });
+  canvas.addEventListener('touchcancel', () => { swipe = undefined; }, { passive: true });
+  canvas.addEventListener('touchend', event => {
+    const gesture = swipe; swipe = undefined;
+    const touch = event.changedTouches[0];
+    if (!gesture || event.touches.length !== 0 || touch.identifier !== gesture.id || scrollOffsets() !== gesture.scroll) return;
+    const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    // A swipe travels 24 px and at least twice as far along one axis as the other.
+    if (Math.max(ax, ay) < 24 || Math.max(ax, ay) < 2 * Math.min(ax, ay)) return;
+    move(ax > ay ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0));
   }, { passive: true });
   document.addEventListener('keydown', event => {
     if (event.ctrlKey || event.metaKey || event.altKey || (event.target as HTMLElement).matches('input,textarea,select')) return;
@@ -288,10 +318,11 @@ async function start() {
   });
   button('solve').onclick = () => { void solve(); };
   button('cancel').onclick = () => {
-    if (playback) { stopPlayback(); pausedRoute = undefined; message('Playback stopped.'); updateButtons(); return; }
+    if (playback || pausedRoute) { endPlayback(); message('Playback stopped.'); return; }
     if (worker) {
+      // The grace period covers rebuilding the final best route, which the worker sends last.
       worker.postMessage({ type: 'cancel' }); clearTimeout(watchdog);
-      watchdog = setTimeout(() => { setStatus(route ? 'Stopped. Verified route retained.' : 'Stopped.'); endRun(); }, 250);
+      watchdog = setTimeout(() => { setStatus(route ? 'Stopped. Verified route retained.' : 'Stopped.'); endRun(); }, 1000);
     } else { generation++; requestAbort?.abort(); setStatus('Stopped waiting for the native search.'); endRun(); }
   };
   button('play').onclick = () => {
@@ -308,7 +339,7 @@ async function start() {
     try { await navigator.clipboard.writeText(runPrefix + (route || '')); message('Full route copied as U/D/L/R.'); }
     catch { message('Clipboard is unavailable in this browser.'); }
   };
-  const modeHelp: Record<string, string> = { fast: 'Prioritizes a quick first route. It may use extra moves.', quality: 'Keeps the best verified route and searches for shorter routes until the budget ends.', optimal: 'Exact A* minimizes total moves. A limited search makes no optimality claim.' };
+  const modeHelp: Record<string, string> = { fast: 'Prioritizes a quick first route. It may use extra moves and never proves optimality.', quality: 'Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality.', optimal: 'Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal.' };
   const syncModeHelp = () => { $('mode-help').textContent = modeHelp[select('mode').value] ?? ''; };
   select('mode').onchange = syncModeHelp;
   // The browser can restore the select's value on reload; match the help text.

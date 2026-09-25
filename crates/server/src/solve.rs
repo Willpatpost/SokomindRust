@@ -1,15 +1,27 @@
-use crate::api::{App, ApiJson, Error};
-use axum::{Json, extract::State, http::StatusCode};
+use crate::api::{ApiJson, App, Error};
+use crate::listen::Peer;
+use axum::{
+    Json,
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, StatusCode},
+};
 use serde::{Deserialize, Serialize};
-use sokomind_core::{Board, Game};
+use sokomind_core::{Board, Game, MAX_ROUTE};
 use sokomind_search::{Mode, Proof, Search, Status};
 use std::{
+    ops::RangeInclusive,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
+
+const TIME_MS: RangeInclusive<u64> = 10..=30_000;
+const MAX_STATES: RangeInclusive<usize> = 1..=500_000;
+const MEMORY_MIB: RangeInclusive<usize> = 4..=64;
+const LIMITS: &str = "Server limits: 10..30000 ms, 1..500000 states, 4..64 MiB";
+const ROUTE_LIMIT: &str = "Position and route together exceed the 100000-move replay limit";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,17 +97,25 @@ impl Drop for CancelOnDrop {
 
 pub async fn solve(
     State(app): State<App>,
+    ConnectInfo(Peer(peer)): ConnectInfo<Peer>,
+    headers: HeaderMap,
     ApiJson(request): ApiJson<Request>,
 ) -> Result<Json<ResultBody>, Error> {
-    if !(10..=30_000).contains(&request.time_ms)
-        || !(1..=500_000).contains(&request.max_states)
-        || !(4..=64).contains(&request.memory_mib)
+    if !TIME_MS.contains(&request.time_ms)
+        || !MAX_STATES.contains(&request.max_states)
+        || !MEMORY_MIB.contains(&request.memory_mib)
     {
-        return Err(Error::bad(
-            "Server limits: 10..30000 ms, 1..500000 states, 4..64 MiB",
-        ));
+        return Err(Error::bad(LIMITS));
     }
     let mode = Mode::parse(&request.mode).map_err(Error::bad)?;
+    // The busy slot only stops concurrent solves; this stops one client
+    // from taking every slot the moment it frees.
+    if !app.solves.allow(app.proxies.client(&headers, peer.ip())) {
+        return Err(Error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many solve requests; try again shortly".into(),
+        ));
+    }
     let permit = app.slots.clone().try_acquire_owned().map_err(|_| {
         Error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -111,11 +131,16 @@ pub async fn solve(
         let deadline = Duration::from_millis(request.time_ms);
         let mut game = Game::new(Board::parse(&request.rows.join("\n")).map_err(Error::bad)?);
         game.replay(&request.actions).map_err(Error::bad)?;
+        // A full-length unsolved position can only be extended past the
+        // limit; refuse before spending the search budget on it.
+        if request.actions.len() >= MAX_ROUTE && !game.solved() {
+            return Err(Error::bad(ROUTE_LIMIT));
+        }
         let initial_moves = game.moves();
         let initial_pushes = game.pushes;
         let mut search = Search::new(
             game.board.clone(),
-            game.state,
+            game.state(),
             mode,
             request.max_states,
             request.memory_mib,
@@ -135,13 +160,16 @@ pub async fn solve(
                 search.advance(8);
             }
         }
+        // Checked on the incumbent's length before reconstruction, which
+        // would otherwise fail a route alone over the limit as a 500.
+        if search
+            .best_moves()
+            .is_some_and(|moves| request.actions.len() + moves as usize > MAX_ROUTE)
+        {
+            return Err(Error::bad(ROUTE_LIMIT));
+        }
         let route = search.solution().map_err(Error::internal)?;
         let (moves, pushes) = if let Some(route) = &route {
-            if request.actions.len() + route.len() > sokomind_core::MAX_ROUTE {
-                return Err(Error::bad(
-                    "Position and route together exceed the 100000-move replay limit",
-                ));
-            }
             game.replay(&(request.actions + route))
                 .map_err(Error::internal)?;
             if !game.solved() {

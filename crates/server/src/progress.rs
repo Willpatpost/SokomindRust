@@ -1,13 +1,13 @@
-use crate::api::{ApiJson, App, Error};
+use crate::api::{ApiJson, ApiPath, App, Error};
+use crate::listen::Peer;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game};
 use sqlx::Row;
-use std::net::{IpAddr, SocketAddr};
 
 /// Twenty times the longest route the catalog can need, bounding stored
 /// rows to ~10 KB; anything longer is wandering, not a best route.
@@ -23,15 +23,6 @@ fn profile(headers: &HeaderMap) -> Result<&str, Error> {
     }
     Ok(value)
 }
-/// First X-Forwarded-For entry behind a proxy, else the socket address.
-fn client_ip(headers: &HeaderMap, remote: SocketAddr) -> IpAddr {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|first| first.trim().parse().ok())
-        .unwrap_or_else(|| remote.ip())
-}
 #[derive(Serialize)]
 pub struct Record {
     puzzle_id: String,
@@ -46,6 +37,12 @@ pub struct Save {
     route: String,
 }
 
+const LIST: &str = "
+SELECT puzzle_id, moves, pushes, fingerprint FROM progress
+WHERE profile = $1 ORDER BY puzzle_id";
+const FETCH: &str = "
+SELECT puzzle_id, moves, pushes, route FROM progress
+WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3";
 const UPSERT: &str = "
 INSERT INTO progress (profile, puzzle_id, fingerprint, moves, pushes, route)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -60,21 +57,18 @@ fn current_fingerprint(app: &App, id: &str) -> Option<String> {
     app.catalog
         .iter()
         .find(|puzzle| puzzle.id == id)
-        .map(|puzzle| Board::parse(&puzzle.rows.join("\n")).ok())
-        .flatten()
+        .and_then(|puzzle| Board::parse(&puzzle.rows.join("\n")).ok())
         .map(|board| board.fingerprint)
 }
 
 pub async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Vec<Record>>, Error> {
     let profile = profile(&headers)?;
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let rows = sqlx::query(
-        "SELECT puzzle_id, moves, pushes, fingerprint FROM progress WHERE profile = $1 ORDER BY puzzle_id",
-    )
-    .bind(profile)
-    .fetch_all(db)
-    .await
-    .map_err(Error::internal)?;
+    let rows = sqlx::query(LIST)
+        .bind(profile)
+        .fetch_all(db)
+        .await
+        .map_err(Error::database)?;
     // A catalog layout change retires old records: they cannot be beaten by
     // fresh saves and their routes no longer replay.
     let records = rows
@@ -95,15 +89,23 @@ pub async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Vec
 pub async fn get(
     State(app): State<App>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> Result<Json<Record>, Error> {
     let profile = profile(&headers)?;
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
     let Some(fingerprint) = current_fingerprint(&app, &id) else {
-        return Err(Error(StatusCode::NOT_FOUND, "Unknown catalog puzzle".into()));
+        return Err(Error(
+            StatusCode::NOT_FOUND,
+            "Unknown catalog puzzle".into(),
+        ));
     };
-    let row = sqlx::query("SELECT puzzle_id, moves, pushes, route FROM progress WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3")
-        .bind(profile).bind(&id).bind(&fingerprint).fetch_optional(db).await.map_err(Error::internal)?
+    let row = sqlx::query(FETCH)
+        .bind(profile)
+        .bind(&id)
+        .bind(&fingerprint)
+        .fetch_optional(db)
+        .await
+        .map_err(Error::database)?
         .ok_or_else(|| Error(StatusCode::NOT_FOUND, "No saved route".into()))?;
     Ok(Json(Record {
         puzzle_id: row.get("puzzle_id"),
@@ -114,25 +116,30 @@ pub async fn get(
 }
 pub async fn save(
     State(app): State<App>,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    ConnectInfo(Peer(peer)): ConnectInfo<Peer>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<Save>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let profile = profile(&headers)?;
-    if !app.saves.allow(client_ip(&headers, remote)) {
+    if body.route.len() > MAX_SAVED_ROUTE {
+        return Err(Error::bad("Route exceeds 10000 moves"));
+    }
+    let Some(puzzle) = app.catalog.iter().find(|p| p.id == id) else {
+        return Err(Error(
+            StatusCode::NOT_FOUND,
+            "Unknown catalog puzzle".into(),
+        ));
+    };
+    let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
+    // Charged after the cheap checks: the budget guards replays and writes,
+    // so malformed or misaddressed saves should not spend it.
+    if !app.saves.allow(app.proxies.client(&headers, peer.ip())) {
         return Err(Error(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many saves; try again shortly".into(),
         ));
     }
-    if body.route.len() > MAX_SAVED_ROUTE {
-        return Err(Error::bad("Route exceeds 10000 moves"));
-    }
-    let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let Some(puzzle) = app.catalog.iter().find(|p| p.id == id) else {
-        return Err(Error(StatusCode::NOT_FOUND, "Unknown catalog puzzle".into()));
-    };
     let rows = puzzle.rows.join("\n");
     let route = body.route;
     let replay_route = route.clone();
@@ -162,7 +169,7 @@ pub async fn save(
         .bind(route)
         .execute(db)
         .await
-        .map_err(Error::internal)?;
+        .map_err(Error::database)?;
     Ok(Json(
         serde_json::json!({ "saved": true, "improved": result.rows_affected() > 0 }),
     ))
