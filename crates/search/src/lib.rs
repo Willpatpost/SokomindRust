@@ -11,6 +11,7 @@ pub use bounded::BoundedSearch;
 pub use certificate::Proof;
 pub use deadlock::Deadlock;
 pub use exact::ExactSearch;
+pub use heuristic::Heuristic;
 use sokomind_core::{Board, State};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -85,6 +85,24 @@ impl Reach {
     pub fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
     }
+    /// Whether any push is currently legal. An unsolved state without one can
+    /// never change: walking moves no boxes, so its subtree is dead.
+    pub fn has_legal_push(&self, board: &Board, state: &State) -> bool {
+        for &from in &state.boxes[..board.labels.len()] {
+            for d in 0..4 {
+                let to = board.neighbors[from as usize][d];
+                let stand = board.neighbors[from as usize][OPPOSITE[d]];
+                if to != NONE
+                    && stand != NONE
+                    && !self.blocked(to)
+                    && self.distance(stand) != NONE
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
     pub fn append_path(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
         let start = route.len();
         while self.distance(cell) != 0 {

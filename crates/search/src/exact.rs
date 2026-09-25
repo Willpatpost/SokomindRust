@@ -22,6 +22,9 @@ pub struct ExactSearch {
     expanded: u32,
     generated: u32,
     incumbent: Option<u32>,
+    /// Dual repair only pays on large label groups; otherwise children
+    /// re-solve their own changed group.
+    incremental: bool,
     /// Cost of a node whose expansion a limit cut short. Its unpushed
     /// successors have f >= g + 1, which the frontier bound must include.
     interrupted_g: Option<u32>,
@@ -39,7 +42,8 @@ impl ExactSearch {
         let arena = Arena::new(cells, board.goals.len(), max_states, memory_mib)?;
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
-        let h = heuristic.estimate(&board, &start);
+        let h = heuristic.estimate(&start);
+        let incremental = heuristic.repairs_worthwhile();
         let mut search = Self {
             reach: Reach::new(cells),
             arena,
@@ -51,6 +55,7 @@ impl ExactSearch {
             expanded: 0,
             generated: 1,
             incumbent: None,
+            incremental,
             interrupted_g: None,
         };
         search.arena.push(Node {
@@ -168,6 +173,15 @@ impl ExactSearch {
             self.reach.fill(&self.board, &node.state);
             self.deadlock
                 .refresh(&node.state.boxes[..self.board.labels.len()]);
+            if !self.board.solved(&node.state) && !self.reach.has_legal_push(&self.board, &node.state)
+            {
+                continue;
+            }
+            let parent_assignment = if self.incremental {
+                self.heuristic.assignment(&node.state)
+            } else {
+                None
+            };
             for i in 0..self.board.labels.len() {
                 let from = node.state.boxes[i];
                 for (d, &opposite) in OPPOSITE.iter().enumerate() {
@@ -202,7 +216,11 @@ impl ExactSearch {
                     if previous != u32::MAX && self.arena.node(previous).g <= g {
                         continue;
                     }
-                    let Some(h) = self.heuristic.estimate(&self.board, &next) else {
+                    let estimate = match &parent_assignment {
+                        Some(parent) => self.heuristic.estimate_from(parent, &next),
+                        None => self.heuristic.estimate(&next),
+                    };
+                    let Some(h) = estimate else {
                         continue;
                     };
                     if self
