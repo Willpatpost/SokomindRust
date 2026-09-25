@@ -24,12 +24,13 @@ fn routes_stop_at_max_route_moves() {
     // One move over is refused atomically.
     let error = game.replay(&format!("{full}L")).unwrap_err();
     assert!(error.contains("too long"), "{error}");
+    assert!(error.contains(&MAX_ROUTE.to_string()), "{error}");
     assert_eq!(game.moves() as usize, MAX_ROUTE);
     assert_eq!(game.actions(), full);
 }
 
 #[test]
-fn undo_restores_state_and_counters_after_pushes() {
+fn rules_undo_and_atomic_replay() {
     let board = Board::parse(CROSSING_PAIR).unwrap();
     let at = |row: usize, column: usize| (row * board.width + column) as Cell;
     let snapshot = |game: &Game| {
@@ -42,12 +43,18 @@ fn undo_restores_state_and_counters_after_pushes() {
     };
     let mut game = Game::new(board.clone());
     let mut trail = vec![snapshot(&game)];
+    // The wall above the robot refuses the step and changes nothing.
+    assert!(!game.step(0));
+    assert_eq!(snapshot(&game), trail[0]);
     for action in "DLDR".bytes() {
         assert!(game.step(decode_direction(action).unwrap()));
         trail.push(snapshot(&game));
     }
     assert!(game.solved());
     assert_eq!((game.moves(), game.pushes), (4, 3));
+    // Reference sessions stop accepting moves once solved, even legal ones.
+    assert!(!game.step(0));
+    assert_eq!(&snapshot(&game), trail.last().unwrap());
     // Undo records box indices into this live order, never a sorted one.
     assert_eq!(trail[1].0.boxes[..2], [at(3, 3), at(3, 2)]);
     for expected in trail.iter().rev().skip(1) {
@@ -59,4 +66,10 @@ fn undo_restores_state_and_counters_after_pushes() {
     // The restored game replays the same route to the same result.
     game.replay("DLDR").unwrap();
     assert_eq!(&snapshot(&game), trail.last().unwrap());
+    // A route blocked by a wall, by the solved position, or by a bad action
+    // is refused as a whole and leaves the finished game untouched.
+    for route in ["DLU", "DLDRU", "DX"] {
+        assert!(game.replay(route).is_err(), "{route}");
+        assert_eq!(&snapshot(&game), trail.last().unwrap());
+    }
 }

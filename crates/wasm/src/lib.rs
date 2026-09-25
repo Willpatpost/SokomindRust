@@ -26,8 +26,20 @@ impl WasmGame {
     pub fn labels(&self) -> Vec<u8> {
         self.game.board.labels.clone()
     }
+    /// Snapshot ABI: player, moves, pushes, solved, then box cells. Labels are static.
     pub fn snapshot(&self) -> Vec<u32> {
-        self.game.snapshot()
+        let game = &self.game;
+        let state = game.state();
+        let boxes = &state.boxes[..game.board.labels.len()];
+        let mut out = Vec::with_capacity(4 + boxes.len());
+        out.extend([
+            u32::from(state.player),
+            game.moves(),
+            game.pushes,
+            u32::from(game.solved()),
+        ]);
+        out.extend(boxes.iter().map(|&cell| u32::from(cell)));
+        out
     }
     pub fn step(&mut self, direction: u32) -> bool {
         self.game.step(direction as usize)
@@ -50,11 +62,8 @@ impl WasmGame {
     /// Whether box `index` sits on its matching goal. The renderer styles
     /// solved boxes from this, so no game rule lives in JavaScript.
     pub fn on_goal(&self, index: usize) -> bool {
-        if index >= self.game.board.labels.len() {
-            return false;
-        }
-        let cell = self.game.state().boxes[index] as usize;
-        self.game.board.tiles[cell] == self.game.board.labels[index]
+        let board = &self.game.board;
+        index < board.labels.len() && board.on_goal(index, self.game.state().boxes[index])
     }
 }
 

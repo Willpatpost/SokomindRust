@@ -1,4 +1,4 @@
-use sokomind_core::{Board, MAX_BOXES};
+use sokomind_core::{Board, MAX_BOXES, NONE, WALL};
 
 const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
@@ -24,6 +24,15 @@ fn rejects_carriage_returns_and_empty_rows() {
     let board = Board::parse("OOOOO\nO R O\nO A O\nO a O\nOOOOO\n").unwrap();
     assert_eq!(board.height, 5);
     assert_eq!(board.fingerprint, "puzzle-v1:5ae6cd46");
+}
+
+#[test]
+fn ragged_rows_are_padded_with_walls() {
+    let board = Board::parse("OOOOOO\nOR XS\nOO").unwrap();
+    assert_eq!((board.width, board.height), (6, 3));
+    assert_eq!([board.tiles[11], board.tiles[17]], [WALL; 2]);
+    // The padding blocks movement like any other wall.
+    assert_eq!(board.neighbors[10][3], NONE);
 }
 
 /// The rejection message, panicking if the text parses.

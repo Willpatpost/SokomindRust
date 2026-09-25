@@ -2,6 +2,8 @@ pub type Cell = u16;
 pub const NONE: Cell = u16::MAX;
 pub const MAX_BOXES: usize = 32;
 pub const MAX_CELLS: usize = 4096;
+/// The tile value of a wall; floor is 0 and a goal is its label.
+pub const WALL: u8 = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct State {
@@ -13,12 +15,10 @@ pub struct State {
 pub struct Board {
     pub width: usize,
     pub height: usize,
-    /// Raw rows exactly as received; the fingerprint must not depend on padding.
-    pub rows: Vec<String>,
     /// `puzzle-v1:{fnv1a}` over the canonical row form, matching the reference.
     pub fingerprint: String,
     pub neighbors: Vec<[Cell; 4]>,
-    /// 0 = floor, 255 = wall, A..Z = matching goal label.
+    /// 0 = floor, `WALL` = wall, A..Z = matching goal label.
     pub tiles: Vec<u8>,
     /// Boxes are grouped by label; equal-label boxes are interchangeable in search.
     pub labels: Vec<u8>,
@@ -28,6 +28,7 @@ pub struct Board {
 
 impl Board {
     pub fn parse(text: &str) -> Result<Self, String> {
+        // A one-column board of MAX_CELLS rows needs a newline after every cell.
         if text.len() > MAX_CELLS * 2 {
             return Err("Board text is too large".into());
         }
@@ -36,23 +37,18 @@ impl Board {
         }
         // A single trailing newline is a paste artifact; empty rows are not boards.
         let text = text.strip_suffix('\n').unwrap_or(text);
-        let rows: Vec<&str> = if text.is_empty() {
-            Vec::new()
-        } else {
-            text.split('\n').collect()
-        };
-        if rows.is_empty() || rows.iter().any(|row| row.is_empty()) {
+        let rows: Vec<&str> = text.split('\n').collect();
+        if rows.iter().any(|row| row.is_empty()) {
             return Err("Board rows cannot be empty".into());
         }
         let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
         let height = rows.len();
-        let size = width
-            .checked_mul(height)
-            .ok_or("Board dimensions overflow")?;
-        if size == 0 || size > MAX_CELLS {
-            return Err("Board must contain 1..4096 cells".into());
+        // Both are nonzero, and 8 KiB of text cannot overflow their product.
+        let size = width * height;
+        if size > MAX_CELLS {
+            return Err(format!("Board must contain 1..{MAX_CELLS} cells"));
         }
-        let mut tiles = vec![255; size];
+        let mut tiles = vec![WALL; size];
         let mut player = NONE;
         let mut boxes = Vec::new();
         let mut goals = Vec::new();
@@ -63,7 +59,7 @@ impl Board {
                 let tile = &mut tiles[cell as usize];
                 *tile = 0;
                 match symbol {
-                    b'O' => *tile = 255,
+                    b'O' => *tile = WALL,
                     b' ' => (),
                     b'R' => {
                         if player != NONE {
@@ -71,20 +67,20 @@ impl Board {
                         }
                         player = cell;
                     }
-                    b'S' => {
-                        *tile = b'X';
-                        goals.push((cell, b'X'));
-                        counts[23] -= 1;
+                    // Goals come before boxes: S is X's goal, not an S box.
+                    b'S' | b'a'..=b'z' if symbol != b'x' => {
+                        let label = if symbol == b'S' {
+                            b'X'
+                        } else {
+                            symbol.to_ascii_uppercase()
+                        };
+                        *tile = label;
+                        goals.push((cell, label));
+                        counts[(label - b'A') as usize] -= 1;
                     }
                     b'A'..=b'Z' => {
                         boxes.push((symbol, cell));
                         counts[(symbol - b'A') as usize] += 1;
-                    }
-                    b'a'..=b'z' if symbol != b'x' => {
-                        let label = symbol.to_ascii_uppercase();
-                        *tile = label;
-                        goals.push((cell, label));
-                        counts[(label - b'A') as usize] -= 1;
                     }
                     _ => {
                         return Err(format!(
@@ -100,7 +96,7 @@ impl Board {
             return Err("Exactly one robot R is required".into());
         }
         if boxes.is_empty() || boxes.len() > MAX_BOXES {
-            return Err("Use 1..32 boxes".into());
+            return Err(format!("Use 1..{MAX_BOXES} boxes"));
         }
         if counts.iter().any(|&n| n != 0) {
             return Err("Each box label must have the same number of matching goals".into());
@@ -120,7 +116,7 @@ impl Board {
             .collect();
         let mut neighbors = vec![[NONE; 4]; size];
         for i in 0..size {
-            if tiles[i] == 255 {
+            if tiles[i] == WALL {
                 continue;
             }
             let (x, y) = (i % width, i / width);
@@ -132,7 +128,7 @@ impl Board {
             ];
             for (d, next) in candidates.into_iter().enumerate() {
                 if let Some(n) = next {
-                    if tiles[n] != 255 {
+                    if tiles[n] != WALL {
                         neighbors[i][d] = n as Cell;
                     }
                 }
@@ -141,7 +137,6 @@ impl Board {
         Ok(Self {
             width,
             height,
-            rows: rows.iter().map(|row| row.to_string()).collect(),
             fingerprint: fingerprint(&boxes, &rows),
             neighbors,
             tiles,
@@ -152,10 +147,13 @@ impl Board {
     }
 
     pub fn solved(&self, state: &State) -> bool {
-        self.labels
-            .iter()
-            .enumerate()
-            .all(|(i, &label)| self.tiles[state.boxes[i] as usize] == label)
+        (0..self.labels.len()).all(|i| self.on_goal(i, state.boxes[i]))
+    }
+
+    /// Whether box `index` at `cell` sits on a goal of its own label.
+    #[inline]
+    pub fn on_goal(&self, index: usize, cell: Cell) -> bool {
+        self.tiles[cell as usize] == self.labels[index]
     }
 
     /// Sorts interchangeable same-label boxes so states compare canonically.

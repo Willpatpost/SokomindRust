@@ -1,10 +1,11 @@
 use crate::{ACTIONS, Board, Cell, MAX_BOXES, State};
 pub const MAX_ROUTE: usize = 100_000;
 
+/// The player's previous cell and the pushed box index, or MAX_BOXES for a
+/// walk. A pushed box came from the cell the player now stands on.
 struct Undo {
     player: Cell,
     box_index: usize,
-    box_cell: Cell,
 }
 
 pub struct Game {
@@ -55,11 +56,9 @@ impl Game {
         let Some(i) = self.board.step(&mut self.state, direction) else {
             return false;
         };
-        let box_cell = self.state.player;
         self.history.push(Undo {
             player,
             box_index: i,
-            box_cell,
         });
         self.pushes += u32::from(i < MAX_BOXES);
         self.actions.push(ACTIONS[direction] as char);
@@ -69,11 +68,11 @@ impl Game {
         let Some(undo) = self.history.pop() else {
             return false;
         };
-        self.state.player = undo.player;
         if undo.box_index < MAX_BOXES {
-            self.state.boxes[undo.box_index] = undo.box_cell;
+            self.state.boxes[undo.box_index] = self.state.player;
             self.pushes -= 1;
         }
+        self.state.player = undo.player;
         self.actions.pop();
         true
     }
@@ -86,7 +85,7 @@ impl Game {
     /// Atomic strict replay: malformed or blocked routes leave the game unchanged.
     pub fn replay(&mut self, route: &str) -> Result<(), String> {
         if route.len() > MAX_ROUTE {
-            return Err("Route is too long".into());
+            return Err(format!("Route is too long: the limit is {MAX_ROUTE} moves"));
         }
         let mut next = Game::new(self.board.clone());
         for (i, action) in route.bytes().enumerate() {
@@ -96,21 +95,5 @@ impl Game {
         }
         *self = next;
         Ok(())
-    }
-    /// Snapshot ABI: player, moves, pushes, solved, then box cells. Labels are static.
-    pub fn snapshot(&self) -> Vec<u32> {
-        let mut out = Vec::with_capacity(4 + self.board.labels.len());
-        out.extend([
-            self.state.player as u32,
-            self.moves(),
-            self.pushes,
-            self.solved() as u32,
-        ]);
-        out.extend(
-            self.state.boxes[..self.board.labels.len()]
-                .iter()
-                .map(|&c| c as u32),
-        );
-        out
     }
 }
