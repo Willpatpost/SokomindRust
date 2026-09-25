@@ -10,7 +10,6 @@ mod reach;
 
 use engine::{Engine, Policy};
 pub use exact::ExactSearch;
-pub use heuristic::Heuristic;
 pub use proof::Proof;
 use sokomind_core::{Board, State};
 use std::ops::{Deref, DerefMut};

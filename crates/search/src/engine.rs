@@ -2,7 +2,7 @@ use crate::{
     Status,
     arena::{Arena, NIL, Node},
     deadlock::Deadlock,
-    heuristic::Heuristic,
+    heuristic::{Heuristic, ParentGroup},
     reach::Reach,
 };
 use sokomind_core::{ACTIONS, Board, MAX_ROUTE, NONE, OPPOSITE, State};
@@ -61,9 +61,6 @@ pub struct Engine {
     status: Status,
     expanded: u32,
     incumbent: Option<u32>,
-    /// Dual repair only pays on large label groups; otherwise every child
-    /// gets a full estimate.
-    incremental: bool,
     /// Cost of a node whose expansion a limit cut short. Its unpushed
     /// successors have f >= g + 1, which the exact frontier must include.
     pub(crate) interrupted_g: Option<u32>,
@@ -83,7 +80,6 @@ impl Engine {
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
         let h = heuristic.estimate(&start);
-        let incremental = heuristic.repairs_worthwhile();
         let mut search = Self {
             policy,
             reach: Reach::new(cells),
@@ -95,7 +91,6 @@ impl Engine {
             status: Status::Running,
             expanded: 0,
             incumbent: None,
-            incremental,
             interrupted_g: None,
         };
         let (slot, _) = search.arena.find(&start);
@@ -156,7 +151,7 @@ impl Engine {
             return;
         }
         for _ in 0..pops {
-            let Some(index) = self.arena.dequeue() else {
+            let Some((index, parent_h)) = self.arena.dequeue() else {
                 // The queue emptied: every state was popped, dominated, or
                 // pruned by an admissible rule. Under the exact policy that
                 // makes the incumbent optimal.
@@ -189,11 +184,7 @@ impl Engine {
             self.reach.fill(&self.board, &node.state);
             self.deadlock
                 .refresh(&node.state.boxes[..self.board.labels.len()]);
-            let parent_assignment = if self.incremental {
-                self.heuristic.assignment(&node.state)
-            } else {
-                None
-            };
+            let mut parent_group = ParentGroup::EMPTY;
             for i in 0..self.board.labels.len() {
                 let from = node.state.boxes[i];
                 for (d, &opposite) in OPPOSITE.iter().enumerate() {
@@ -223,11 +214,15 @@ impl Engine {
                     }) {
                         continue;
                     }
-                    let estimate = match &parent_assignment {
-                        Some(parent) => self.heuristic.estimate_from(parent, &next),
-                        None => self.heuristic.estimate(&next),
-                    };
-                    let Some(h) = estimate else {
+                    // Solves the parent's group lazily, only once a child
+                    // gets this far.
+                    let Some(h) = self.heuristic.child_estimate(
+                        parent_h,
+                        &mut parent_group,
+                        &node.state,
+                        i,
+                        to,
+                    ) else {
                         continue;
                     };
                     if self

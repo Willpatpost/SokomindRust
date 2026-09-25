@@ -147,9 +147,10 @@ impl Arena {
     pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
         self.heap.push(Reverse((f, h, id)));
     }
-    /// The node of the lowest queued entry, which may be stale.
-    pub(crate) fn dequeue(&mut self) -> Option<u32> {
-        self.heap.pop().map(|Reverse((_, _, id))| id)
+    /// The node of the lowest queued entry, which may be stale, with the h
+    /// it was queued with.
+    pub(crate) fn dequeue(&mut self) -> Option<(u32, u32)> {
+        self.heap.pop().map(|Reverse((_, h, id))| (id, h))
     }
     /// Lowest queued f, stale entries included.
     pub(crate) fn min_f(&self) -> Option<u64> {

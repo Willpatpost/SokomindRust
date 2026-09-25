@@ -339,7 +339,7 @@ fn fast_routes_survive_state_limit_boundaries() {
 /// Sweeps every state limit up to the unlimited run's node count. A limit
 /// always cuts an expansion short, so the frontier must count that node's
 /// unpushed children (`interrupted_g`); some limits land exactly as the solved
-/// child needs the arena's spare node (`push_final`).
+/// child needs the arena's spare node (`Arena::insert` past the limit).
 #[test]
 fn limited_optimal_bounds_never_pass_the_optimum() {
     let (mut kept, mut spare) = (0, 0);

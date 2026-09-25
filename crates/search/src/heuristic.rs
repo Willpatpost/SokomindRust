@@ -1,19 +1,21 @@
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State};
 
 const INF: i32 = 1_000_000;
-/// A parent's duals amortize across a node's children, so the repair path
-/// only pays once a label group is large enough for a full solve to dominate
-/// child generation. Below this, per-child full solves of one group win.
-const REPAIR_CROSSOVER: usize = 8;
+/// Group size from which a child's group cost is repaired from the parent's
+/// duals with one augment instead of re-solved. Models put the crossover at
+/// 2-4; re-measure it on real hardware.
+const REPAIR_CROSSOVER: usize = 3;
 
 /// Per-goal reverse-push distances plus per-label assignment with duals.
-pub struct Heuristic {
+pub(crate) struct Heuristic {
     /// Cell-major push distances: `distances[cell * goals + goal]` is the
     /// distance from `cell` to goal column `goal`, `NONE` when unreachable.
     distances: Vec<u16>,
     goals: usize,
     /// Boxes are grouped by label into contiguous index ranges.
     groups: Vec<Group>,
+    /// The index into `groups` of each box's label group.
+    group_of: [u8; MAX_BOXES],
 }
 /// A label group's boxes are indices `start..start + len`. Goal columns
 /// follow the same order, so the group's goals are the same column range.
@@ -24,6 +26,7 @@ struct Group {
 
 /// Hungarian working state for one group: 1-based potentials and matching,
 /// with row and column 0 as the dummies the augment starts from.
+#[derive(Clone, Copy)]
 struct Duals {
     u: [i32; MAX_BOXES + 1],
     v: [i32; MAX_BOXES + 1],
@@ -42,35 +45,33 @@ impl Duals {
     };
 }
 
-/// An optimal box/goal assignment per label group, carrying the dual
-/// potentials that `estimate_from` repairs after a single box move.
-pub struct Assignment {
-    total: u32,
-    /// The cells this assignment solved for, sorted within each group.
-    cells: [Cell; MAX_BOXES],
-    groups: Vec<GroupSolution>,
-}
-struct GroupSolution {
+/// One label group of the node being expanded, solved once for all of its
+/// children. Children come box-major and groups are contiguous index runs,
+/// so one slot per expansion is enough.
+pub(crate) struct ParentGroup {
+    /// Index into `groups`; `usize::MAX` until the first child needs it.
+    group: usize,
+    /// The group's optimal cost in the parent.
     cost: u32,
-    /// Matched local goal index per local row, -1 when unmatched.
-    columns: [i32; MAX_BOXES],
-    /// Dual potentials per local row and per local goal.
-    u: [i32; MAX_BOXES],
-    v: [i32; MAX_BOXES],
+    /// The parent's optimal duals and matching for this group.
+    duals: Duals,
 }
-enum Repair {
-    Cost(u32),
-    /// The single-row augment proved no perfect matching exists.
-    Infeasible,
-    /// Not a single-cell change; the caller falls back to a full solve.
-    Diff,
+
+impl ParentGroup {
+    pub(crate) const EMPTY: Self = Self {
+        group: usize::MAX,
+        cost: 0,
+        duals: Duals::EMPTY,
+    };
 }
 
 impl Heuristic {
-    pub fn new(board: &Board) -> Self {
+    pub(crate) fn new(board: &Board) -> Self {
         let mut groups = Vec::new();
+        let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
         for run in board.labels.chunk_by(|a, b| a == b) {
+            group_of[start..start + run.len()].fill(groups.len() as u8);
             groups.push(Group {
                 start,
                 len: run.len(),
@@ -110,6 +111,7 @@ impl Heuristic {
             distances,
             goals,
             groups,
+            group_of,
         }
     }
 
@@ -119,145 +121,92 @@ impl Heuristic {
         &self.distances[at..at + group.len]
     }
 
-    /// Whether any label group is large enough for dual repair to amortize.
-    pub fn repairs_worthwhile(&self) -> bool {
-        self.groups
-            .iter()
-            .any(|group| group.len >= REPAIR_CROSSOVER)
-    }
-
-    fn sorted_cells(&self, state: &State) -> [Cell; MAX_BOXES] {
-        let mut cells = state.boxes;
-        for group in &self.groups {
-            cells[group.start..group.start + group.len].sort_unstable();
-        }
-        cells
-    }
-
     /// Minimum-cost label-compatible matching over relaxed push distances.
     /// Admissible for total moves: the relaxation removes every other box.
-    /// Lean path: totals only, no dual extraction or cell sorting.
-    pub fn estimate(&self, state: &State) -> Option<u32> {
+    /// It is the sum of independent per-group optima, `None` when some group
+    /// has no perfect matching over reachable goals.
+    pub(crate) fn estimate(&self, state: &State) -> Option<u32> {
         let mut total = 0u32;
         for group in &self.groups {
             total += self
-                .solve_group(
-                    group,
-                    &state.boxes[group.start..group.start + group.len],
-                    false,
-                )?
+                .solve(group, &state.boxes[group.start..group.start + group.len])?
                 .0;
         }
         Some(total)
     }
 
-    /// Incremental estimate after one box moved: the changed label group is
-    /// repaired from the parent's duals; other groups reuse the parent cost.
-    pub fn estimate_from(&self, parent: &Assignment, child: &State) -> Option<u32> {
-        let cells = self.sorted_cells(child);
-        let mut total = parent.total;
-        for (g, group) in self.groups.iter().enumerate() {
-            let (start, end) = (group.start, group.start + group.len);
-            if cells[start..end] == parent.cells[start..end] {
-                continue;
-            }
-            total -= parent.groups[g].cost;
-            if group.len >= REPAIR_CROSSOVER {
-                match self.repair_group(
-                    group,
-                    &parent.cells[start..end],
-                    &cells[start..end],
-                    &parent.groups[g],
-                ) {
-                    Repair::Cost(cost) => {
-                        total += cost;
-                        continue;
-                    }
-                    Repair::Infeasible => return None,
-                    Repair::Diff => {}
-                }
-            }
-            total += self.solve_group(group, &cells[start..end], false)?.0;
-        }
-        Some(total)
-    }
-
-    pub fn assignment(&self, state: &State) -> Option<Assignment> {
-        let cells = self.sorted_cells(state);
-        let mut total = 0u32;
-        let mut solutions = Vec::with_capacity(self.groups.len());
-        for group in &self.groups {
-            let (cost, solution) =
-                self.solve_group(group, &cells[group.start..group.start + group.len], true)?;
-            total += cost;
-            if let Some(solution) = solution {
-                solutions.push(solution);
-            }
-        }
-        Some(Assignment {
-            total,
-            cells,
-            groups: solutions,
-        })
-    }
-
-    /// Deterministic Hungarian over one label group. `duals` also extracts
-    /// the potentials later repairs need; the lean path skips that cost.
-    fn solve_group(
+    /// `estimate` of the child where box `i` of `parent` moved to `to`,
+    /// given the parent's own estimate `parent_h`. A push changes only box
+    /// `i`'s group, so the child's total is the parent's with that group's
+    /// cost swapped: equal to a fresh `estimate` of the child, because the
+    /// optimal cost is unique. `cache` holds the parent's solution of the
+    /// last group asked for and is re-solved only when the group changes.
+    pub(crate) fn child_estimate(
         &self,
-        group: &Group,
-        cells: &[Cell],
-        duals: bool,
-    ) -> Option<(u32, Option<GroupSolution>)> {
-        let n = group.len;
-        // A one-box group needs no Hungarian: one distance is the assignment.
-        if n == 1 {
-            let cost = cost(self.goal_distances(group, cells[0])[0]);
-            if cost >= INF {
-                return None;
-            }
-            if !duals {
-                return Some((cost as u32, None));
-            }
-            let mut v = [0i32; MAX_BOXES];
-            v[0] = cost;
-            return Some((
-                cost as u32,
-                Some(GroupSolution {
-                    cost: cost as u32,
-                    columns: [0i32; MAX_BOXES],
-                    u: [0i32; MAX_BOXES],
-                    v,
-                }),
-            ));
-        }
-        let mut state = Duals::EMPTY;
-        for row in 1..=n {
-            if !self.augment(group, cells, row, &mut state) {
-                return None;
-            }
-        }
-        let cost = self.matched_cost(group, cells, &state)?;
-        if !duals {
-            return Some((cost, None));
-        }
-        let mut columns = [-1i32; MAX_BOXES];
-        for j in 1..=n {
-            columns[state.p[j] - 1] = (j - 1) as i32;
-        }
-        let mut u = [0i32; MAX_BOXES];
-        let mut v = [0i32; MAX_BOXES];
-        u[..n].copy_from_slice(&state.u[1..=n]);
-        v[..n].copy_from_slice(&state.v[1..=n]);
-        Some((
-            cost,
-            Some(GroupSolution {
+        parent_h: u32,
+        cache: &mut ParentGroup,
+        parent: &State,
+        i: usize,
+        to: Cell,
+    ) -> Option<u32> {
+        let g = self.group_of[i] as usize;
+        let group = &self.groups[g];
+        let range = group.start..group.start + group.len;
+        if cache.group != g {
+            // Never `None`: every group of a queued state is feasible.
+            let (cost, duals) = self.solve(group, &parent.boxes[range.clone()])?;
+            *cache = ParentGroup {
+                group: g,
                 cost,
-                columns,
-                u,
-                v,
-            }),
-        ))
+                duals,
+            };
+        }
+        let mut boxes = parent.boxes;
+        boxes[i] = to;
+        let cells = &boxes[range];
+        let cost = if group.len < REPAIR_CROSSOVER {
+            self.solve(group, cells)?.0
+        } else {
+            self.repair(group, cells, i - group.start, &cache.duals)?
+        };
+        Some(parent_h - cache.cost + cost)
+    }
+
+    /// Deterministic Hungarian over one label group: its optimal cost with
+    /// the final duals, `None` when no perfect matching exists.
+    fn solve(&self, group: &Group, cells: &[Cell]) -> Option<(u32, Duals)> {
+        // A one-box group needs no Hungarian: one distance is the assignment.
+        if group.len == 1 {
+            let cost = cost(self.goal_distances(group, cells[0])[0]);
+            return (cost < INF).then_some((cost as u32, Duals::EMPTY));
+        }
+        let mut duals = Duals::EMPTY;
+        for row in 1..=group.len {
+            if !self.augment(group, cells, row, &mut duals) {
+                return None;
+            }
+        }
+        Some((self.matched_cost(group, cells, &duals)?, duals))
+    }
+
+    /// One-row repair of a parent's optimal `duals` after only 0-based `row`
+    /// moved, to `cells[row]`. Freeing the row's column and zeroing its
+    /// potential keeps the duals feasible (every `v <= 0 <= cost`), so one
+    /// augmenting path from that row restores an optimal matching; a missing
+    /// finite column proves no matching exists.
+    fn repair(&self, group: &Group, cells: &[Cell], row: usize, duals: &Duals) -> Option<u32> {
+        let mut state = *duals;
+        let row = row + 1;
+        state.u[row] = 0;
+        for p in &mut state.p[1..=group.len] {
+            if *p == row {
+                *p = 0;
+            }
+        }
+        if !self.augment(group, cells, row, &mut state) {
+            return None;
+        }
+        self.matched_cost(group, cells, &state)
     }
 
     /// One Hungarian augmenting path from 1-based `row`, which must be
@@ -326,92 +275,6 @@ impl Heuristic {
         }
         (total < INF).then_some(total as u32)
     }
-
-    /// One-row repair of a parent's optimal assignment: remap the unchanged
-    /// rows onto the child's cell order, then run a single augmenting path
-    /// from the changed row. With optimal parent duals, one augment restores
-    /// optimality; a missing finite column proves no matching exists.
-    fn repair_group(
-        &self,
-        group: &Group,
-        parent_cells: &[Cell],
-        child_cells: &[Cell],
-        previous: &GroupSolution,
-    ) -> Repair {
-        let n = group.len;
-        // Require exactly one removed and one added cell.
-        let (mut pi, mut ci) = (0, 0);
-        let (mut removed, mut added) = (-1i32, -1i32);
-        while pi < n && ci < n {
-            if parent_cells[pi] == child_cells[ci] {
-                pi += 1;
-                ci += 1;
-            } else if parent_cells[pi] < child_cells[ci] {
-                if removed >= 0 {
-                    return Repair::Diff;
-                }
-                removed = parent_cells[pi] as i32;
-                pi += 1;
-            } else {
-                if added >= 0 {
-                    return Repair::Diff;
-                }
-                added = child_cells[ci] as i32;
-                ci += 1;
-            }
-        }
-        while pi < n {
-            if removed >= 0 {
-                return Repair::Diff;
-            }
-            removed = parent_cells[pi] as i32;
-            pi += 1;
-        }
-        while ci < n {
-            if added >= 0 {
-                return Repair::Diff;
-            }
-            added = child_cells[ci] as i32;
-            ci += 1;
-        }
-        if removed < 0 || added < 0 {
-            return Repair::Diff;
-        }
-        let mut columns = [-1i32; MAX_BOXES];
-        let mut u = [0i32; MAX_BOXES];
-        let mut changed = usize::MAX;
-        for (ci, &cell) in child_cells.iter().enumerate() {
-            if let Some(pi) = parent_cells.iter().position(|&c| c == cell) {
-                columns[ci] = previous.columns[pi];
-                u[ci] = previous.u[pi];
-            } else {
-                if changed != usize::MAX {
-                    return Repair::Diff;
-                }
-                changed = ci;
-            }
-        }
-        let Some(changed) = (changed != usize::MAX).then_some(changed) else {
-            return Repair::Diff;
-        };
-        let mut state = Duals::EMPTY;
-        state.u[1..=n].copy_from_slice(&u[..n]);
-        state.v[1..=n].copy_from_slice(&previous.v[..n]);
-        for r in 0..n {
-            if columns[r] >= 0 {
-                state.p[columns[r] as usize + 1] = r + 1;
-            } else if r != changed {
-                return Repair::Diff;
-            }
-        }
-        if !self.augment(group, child_cells, changed + 1, &mut state) {
-            return Repair::Infeasible;
-        }
-        match self.matched_cost(group, child_cells, &state) {
-            Some(cost) => Repair::Cost(cost),
-            None => Repair::Infeasible,
-        }
-    }
 }
 
 /// A push distance as a Hungarian cost, `INF` when the goal is unreachable.
@@ -420,5 +283,130 @@ fn cost(distance: u16) -> i32 {
         INF
     } else {
         distance as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
+    use sokomind_core::{Board, NONE};
+
+    /// Nine interchangeable X boxes and a lone A: the widest group here.
+    const WIDE: &str = concat!(
+        "OOOOOOOOOOOO\n",
+        "O          O\n",
+        "O SSS  SSS O\n",
+        "O  XXXXX   O\n",
+        "O   R      O\n",
+        "O  XXXX  A O\n",
+        "O SSS      O\n",
+        "O        a O\n",
+        "OOOOOOOOOOOO",
+    );
+
+    /// Fixed-seed LCG, so every run sees the same boards and walks.
+    struct Lcg(u64);
+    impl Lcg {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as usize % n
+        }
+    }
+
+    /// An open 11x9 room with `x` X boxes, one A box, their goals and the
+    /// robot on distinct cells at least two steps from the wall. A box pushed
+    /// next to a wall can never leave that line, which holds no goal, so
+    /// walks meet infeasible children.
+    fn room(x: usize, rng: &mut Lcg) -> Board {
+        let (width, height) = (11, 9);
+        let mut rows = vec![vec![b'O'; width]; height];
+        for row in &mut rows[1..height - 1] {
+            row[1..width - 1].fill(b' ');
+        }
+        let mut symbols = vec![b'R', b'A', b'a'];
+        symbols.extend(std::iter::repeat_n(b'X', x));
+        symbols.extend(std::iter::repeat_n(b'S', x));
+        for symbol in symbols {
+            loop {
+                let (column, row) = (2 + rng.below(width - 4), 2 + rng.below(height - 4));
+                if rows[row][column] == b' ' {
+                    rows[row][column] = symbol;
+                    break;
+                }
+            }
+        }
+        let text: Vec<&str> = rows
+            .iter()
+            .map(|row| std::str::from_utf8(row).unwrap())
+            .collect();
+        Board::parse(&text.join("\n")).unwrap()
+    }
+
+    /// Walks `steps` random feasible states of `board`, restarting every 25.
+    /// Moves every box onto every free neighbor cell, box-major with one
+    /// cache per parent as the engine does, and checks the incremental child
+    /// estimate against a fresh one. Tallies `[feasible, infeasible]` per
+    /// path: singleton, re-solve, dual repair.
+    fn walk(board: &Board, steps: usize, rng: &mut Lcg, counts: &mut [[u32; 2]; 3]) {
+        let heuristic = Heuristic::new(board);
+        let boxes = board.labels.len();
+        let mut state = board.initial;
+        for step in 0..steps {
+            if step % 25 == 0 {
+                state = board.initial;
+            }
+            let parent_h = heuristic.estimate(&state).unwrap();
+            let mut cache = ParentGroup::EMPTY;
+            let mut options = Vec::new();
+            for i in 0..boxes {
+                let len = heuristic.groups[heuristic.group_of[i] as usize].len;
+                let path = if len == 1 {
+                    0
+                } else if len < REPAIR_CROSSOVER {
+                    1
+                } else {
+                    2
+                };
+                for to in board.neighbors[state.boxes[i] as usize] {
+                    if to == NONE || state.boxes[..boxes].contains(&to) {
+                        continue;
+                    }
+                    let mut child = state;
+                    child.boxes[i] = to;
+                    board.canonicalize(&mut child);
+                    let fresh = heuristic.estimate(&child);
+                    let incremental = heuristic.child_estimate(parent_h, &mut cache, &state, i, to);
+                    assert_eq!(incremental, fresh, "{state:?} box {i} to {to}");
+                    counts[path][fresh.is_none() as usize] += 1;
+                    if fresh.is_some() {
+                        options.push(child);
+                    }
+                }
+            }
+            state = if options.is_empty() {
+                board.initial
+            } else {
+                options[rng.below(options.len())]
+            };
+        }
+    }
+
+    /// The incremental child estimate equals a fresh estimate for label
+    /// groups of 1 through 8 boxes and WIDE's 9, on every path, including
+    /// children with no perfect matching.
+    #[test]
+    fn child_estimate_matches_fresh_estimate() {
+        let mut rng = Lcg(1);
+        let mut counts = [[0; 2]; 3];
+        for x in 1..=8 {
+            for _ in 0..3 {
+                walk(&room(x, &mut rng), 50, &mut rng, &mut counts);
+            }
+        }
+        walk(&Board::parse(WIDE).unwrap(), 200, &mut rng, &mut counts);
+        assert!(counts.iter().flatten().all(|&n| n > 0), "{counts:?}");
     }
 }
