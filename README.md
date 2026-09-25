@@ -24,8 +24,8 @@ npm run server
 ```
 
 The server answers only `/api`, which the Vite dev server proxies to it. For server
-persistence, export `DATABASE_URL` before starting the server. Migrations run
-automatically. Example PowerShell:
+persistence, export `DATABASE_URL` (see Configuration) before starting the
+server. Example PowerShell:
 
 ```powershell
 $env:DATABASE_URL = 'postgres://sokomind:your-password@127.0.0.1:5432/sokomind'
@@ -100,18 +100,16 @@ is not claimed.
 
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 500,000 states,
-64 MiB accounted search storage, and one concurrent CPU job by default. Change
-`SOLVE_CONCURRENCY` (1..8) intentionally; each job reserves its own arena. The
-search memory metric covers major reserved structures, not process RSS, allocator
-overhead, WASM runtime, or frontend memory. Deadline checks occur between bounded
-expansion batches; setup/reconstruction can add latency.
+64 MiB accounted search storage, and one concurrent CPU job by default (see
+`SOLVE_CONCURRENCY` under Configuration). The search memory metric covers major
+reserved structures, not process RSS, allocator overhead, WASM runtime, or
+frontend memory. Deadline checks occur between bounded expansion batches;
+setup/reconstruction can add latency.
 
 ## HTTP
 
 * `GET /api/health` — API and persistence availability.
-* `GET /api/puzzles` — shared catalog.
 * `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 200000, memory_mib: 64}`.
-* `GET /api/progress` — best-route summaries.
 * `GET /api/progress/{id}` — one saved route.
 * `POST /api/progress/{id}` — `{route: "UDLR..."}`; server replay validates counters
   and completion, then atomically keeps a better moves/pushes pair.
@@ -131,14 +129,14 @@ or solver busy; 503 PostgreSQL not configured or unreachable, or a failed search
 allocation; 500 a server bug.
 
 Rate limits are per client address (an IPv4 address or an IPv6 /64): 60 saves and
-`SOLVE_RATE_PER_MINUTE` solves (default 20, 1..600) per minute. A solve that finds
-every `SOLVE_CONCURRENCY` slot taken gets 429 at once; nothing queues.
-Out-of-range `SOLVE_CONCURRENCY` and `SOLVE_RATE_PER_MINUTE` values are clamped
-and non-numbers use the default, each with a warning. The binary has no connection
-cap and no idle or header timeout (axum gives hyper no timer), and it sends no
-security headers: nginx, which must sit in front of it, bounds slow clients and
-open connections and adds `X-Content-Type-Options: nosniff` and
-`Referrer-Policy: same-origin` to every response.
+`SOLVE_RATE_PER_MINUTE` solves per minute. A solve that finds every
+`SOLVE_CONCURRENCY` slot taken gets 429 at once; nothing queues. The binary has no
+connection cap and no idle or header timeout (axum gives hyper no timer), and it
+sends no security headers: nginx, which must sit in front of it, bounds slow
+clients and open connections and adds `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: same-origin` to every response. nginx also limits `/api/` to 10
+requests per second per address (burst 20), answers excess with a JSON 429, and
+exempts `/api/health`.
 
 Stored progress is keyed by layout fingerprint (`puzzle-v1:{fnv1a}`, identical to
 the reference): a changed catalog layout starts fresh records instead of returning
@@ -148,43 +146,53 @@ The binary serves only `/api`; any other path is a JSON 404. nginx serves the we
 app: unknown paths get the app shell, web-app files outside `/assets/` carry
 `no-cache`, `/assets/` files carry `immutable` cache headers, and a missing
 `/assets/` file is a 404 so a stale page cannot hang on a dead content hash after a
-rebuild. Configure the database with either `DATABASE_URL` or `DATABASE_PASSWORD`
-(plus optional `DATABASE_USER`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`);
-the server percent-encodes the components, so any password characters are safe in
-compose. A remote database can require TLS (for example `?sslmode=require` in
-`DATABASE_URL`): the server deliberately keeps sqlx's `tls-rustls-ring` feature,
-which trusts the bundled webpki roots rather than the system store, so the server
-image needs no CA certificates. At startup the API retries only transient database
-failures, for about 30 seconds, logging each attempt; authentication failures
-(SQLSTATE 28P01/28000), a missing database (3D000), and other non-transient errors
-fail immediately. `PROGRESS_RETENTION_DAYS` unset or 0 keeps progress forever;
-1..36500 deletes records whose best route was stored more than that many days ago
-(equal or worse saves do not refresh it), after migrations at startup and then
-hourly, logging the count when nonzero. Any other value warns and keeps everything.
+rebuild.
 
-`TRUSTED_PROXIES` lists the proxies (comma-separated IPv4/IPv6 addresses or CIDRs)
-whose `X-Forwarded-For` the API believes. Unset or empty trusts none: the socket
-address is the client. An invalid entry stops startup with an error naming it. When
-the peer is trusted, the client is the rightmost untrusted `X-Forwarded-For` entry;
-an unparseable entry ends the walk at the last trusted hop, and a chain of only
-trusted hops yields the leftmost. `::ffff:` addresses count as IPv4. Compose sets
-`172.16.0.0/12`, Docker's bridge range, because nginx is the API's only peer and
-overwrites `X-Forwarded-For` with its own client address instead of appending to
-it. If Docker gives your networks another range, set that instead; otherwise every
-client shares one API rate-limit bucket. nginx itself limits `/api/` to 10 requests
-per second per address (burst 20), answers excess with a JSON 429, and exempts
-`/api/health`. Behind another proxy, such as TLS on the host, also enable the
-commented `real_ip` block in `deploy/nginx.conf` so both limits see real clients.
+## Configuration
+
+The server reads these environment variables. Empty counts as unset. The three
+numeric settings clamp an out-of-range value and replace a non-number with the
+default, each with a warning; every other invalid value stops startup before the
+database wait.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BIND_ADDR` | `127.0.0.1:3000` | Listen address (the Docker image sets `0.0.0.0:3000`) |
+| `DATABASE_URL` | unset | Full `postgres://` URL; wins when set. A remote database can require TLS, e.g. `?sslmode=require`: sqlx's `tls-rustls-ring` feature trusts the bundled webpki roots, so the image needs no CA certificates |
+| `DATABASE_PASSWORD` | unset | Without `DATABASE_URL`, enables persistence using the parts below; passed as-is, so any characters are safe. With neither set, persistence is off |
+| `DATABASE_HOST` | `db` | Used with `DATABASE_PASSWORD` |
+| `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
+| `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
+| `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
+| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena |
+| `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
+| `PROGRESS_RETENTION_DAYS` | `0` | 0 keeps progress forever; 1..36500 deletes records whose best route was stored longer ago (equal or worse saves do not refresh it), at startup and hourly |
+| `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
+
+libpq's `PG*` variables (such as `PGSSLMODE`) also apply as defaults. Migrations run
+at startup. The API retries only transient database failures, for about 30 seconds;
+authentication failures (SQLSTATE 28P01/28000), a missing database (3D000), and
+other non-transient errors fail immediately.
+
+When the peer is a trusted proxy, the client is the rightmost untrusted
+`X-Forwarded-For` entry; an unparseable entry ends the walk at the last trusted
+hop, and a chain of only trusted hops yields the leftmost. `::ffff:` addresses
+count as IPv4. Compose trusts `172.16.0.0/12`, Docker's bridge range, because nginx
+is the API's only peer and overwrites `X-Forwarded-For` with its own client
+address. If Docker gives your networks another range, set that instead; otherwise
+every client shares one rate-limit bucket. Behind another proxy, such as TLS on the
+host, also enable the commented `real_ip` block in `deploy/nginx.conf` so both
+limits see real clients.
 
 ## Small validation surface
 
 ```sh
 npm run check:rust
-npm run test:core
+npm run test:rust
 npm run build
 ```
 
-`test:core` includes the reference solver's frozen fixtures: 42 boards whose
+`test:rust` includes the reference solver's frozen fixtures: 42 boards whose
 independent step-oracle optima, soundness regressions, and one proven
 unsolvable must all be reproduced exactly.
 

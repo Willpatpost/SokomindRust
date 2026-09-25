@@ -19,16 +19,13 @@ services:
       target: server
     restart: unless-stopped
     environment:
-      # The server percent-encodes the password into the connection URL,
-      # so any characters are safe here.
+      # Passed to the driver as-is, so any characters are safe. Other
+      # settings: README's Configuration table.
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      SOLVE_CONCURRENCY: "1"
       # nginx is the API's only peer and overwrites X-Forwarded-For with its
       # client, so trust Docker's bridge range. If your networks come from
       # another pool (docker network inspect), list that instead.
       TRUSTED_PROXIES: "172.16.0.0/12"
-      # SOLVE_RATE_PER_MINUTE: "20"
-      # PROGRESS_RETENTION_DAYS: "365"
     depends_on:
       db:
         condition: service_healthy
