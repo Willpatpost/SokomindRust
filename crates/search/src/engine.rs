@@ -1,12 +1,11 @@
 use crate::{
     Status,
-    arena::{Arena, Node},
+    arena::{Arena, NIL, Node},
     deadlock::Deadlock,
     heuristic::Heuristic,
     reach::Reach,
 };
-use sokomind_core::{ACTIONS, Board, NONE, OPPOSITE, State};
-use std::cmp::Reverse;
+use sokomind_core::{ACTIONS, Board, MAX_ROUTE, NONE, OPPOSITE, State};
 
 /// What separates the modes. Everything else, from child order to pruning
 /// and limit handling, is shared.
@@ -61,10 +60,9 @@ pub struct Engine {
     pub(crate) arena: Arena,
     status: Status,
     expanded: u32,
-    generated: u32,
     incumbent: Option<u32>,
-    /// Dual repair only pays on large label groups; otherwise children
-    /// re-solve their own changed group.
+    /// Dual repair only pays on large label groups; otherwise every child
+    /// gets a full estimate.
     incremental: bool,
     /// Cost of a node whose expansion a limit cut short. Its unpushed
     /// successors have f >= g + 1, which the exact frontier must include.
@@ -81,7 +79,7 @@ impl Engine {
     ) -> Result<Self, String> {
         board.canonicalize(&mut start);
         let cells = board.tiles.len();
-        let arena = Arena::new(cells, board.goals.len(), max_states, memory_mib)?;
+        let arena = Arena::new(cells, board.labels.len(), max_states, memory_mib)?;
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
         let h = heuristic.estimate(&start);
@@ -96,24 +94,25 @@ impl Engine {
             deadlock,
             status: Status::Running,
             expanded: 0,
-            generated: 1,
             incumbent: None,
             incremental,
             interrupted_g: None,
         };
-        search.arena.push(Node {
-            state: start,
-            g: 0,
-            parent: u32::MAX,
-            box_from: NONE,
-            direction: 0,
-        });
-        let slot = search.arena.slot(&start, search.board.labels.len());
-        search.arena.bind(slot, 0);
+        let (slot, _) = search.arena.find(&start);
+        let root = search.arena.insert(
+            Node {
+                state: start,
+                g: 0,
+                parent: NIL,
+                box_from: NONE,
+                direction: 0,
+            },
+            slot,
+        );
         if let Some(h) = h {
             search
                 .arena
-                .push_entry(Reverse((h as u64 * policy.weight as u64, h, 0)));
+                .enqueue(h as u64 * policy.weight as u64, h, root);
         } else {
             search.status = Status::Exhausted;
         }
@@ -129,12 +128,18 @@ impl Engine {
         self.expanded
     }
     pub fn generated(&self) -> u32 {
-        self.generated
+        self.arena.len() as u32
     }
     pub fn reserved_bytes(&self) -> usize {
         self.arena.reserved_bytes()
     }
+    /// Ends a running search from outside: `reason` is a limit or
+    /// `Cancelled`, never a terminal verdict the search did not reach.
     pub fn stop(&mut self, reason: Status) {
+        debug_assert!(!matches!(
+            reason,
+            Status::Running | Status::Solved | Status::Exhausted
+        ));
         if self.status == Status::Running {
             self.status = reason;
         }
@@ -144,13 +149,15 @@ impl Engine {
         self.interrupted_g = Some(g);
         self.status = self.arena.limit_status();
     }
-    /// Work is sliced by expansions so a worker can yield, report, or cancel.
-    pub fn advance(&mut self, expansions: u32) {
+    /// Work is sliced by queue pops so a worker can yield, report, or cancel.
+    /// Stale, solved and dominated pops count toward `pops` without
+    /// expanding anything.
+    pub fn advance(&mut self, pops: u32) {
         if self.status != Status::Running {
             return;
         }
-        for _ in 0..expansions {
-            let Some(Reverse((_, _, index))) = self.arena.pop_entry() else {
+        for _ in 0..pops {
+            let Some(index) = self.arena.dequeue() else {
                 // The queue emptied: every state was popped, dominated, or
                 // pruned by an admissible rule. Under the exact policy that
                 // makes the incumbent optimal.
@@ -162,11 +169,8 @@ impl Engine {
                 return;
             };
             let node = self.arena.node(index);
-            if self
-                .arena
-                .entry(self.arena.slot(&node.state, self.board.labels.len()))
-                != index
-            {
+            // A cheaper duplicate has since taken over this state's slot.
+            if self.arena.find(&node.state).1 != Some(index) {
                 continue;
             }
             if self.board.solved(&node.state) {
@@ -186,11 +190,6 @@ impl Engine {
             self.reach.fill(&self.board, &node.state);
             self.deadlock
                 .refresh(&node.state.boxes[..self.board.labels.len()]);
-            if !self.board.solved(&node.state)
-                && !self.reach.has_legal_push(&self.board, &node.state)
-            {
-                continue;
-            }
             let parent_assignment = if self.incremental {
                 self.heuristic.assignment(&node.state)
             } else {
@@ -212,26 +211,17 @@ impl Engine {
                     if self.best_moves().is_some_and(|best| g >= best) {
                         continue;
                     }
+                    if self.deadlock.is_dead_after_push(&self.board, from, to) {
+                        continue;
+                    }
                     let mut next = node.state;
                     next.player = from;
                     next.boxes[i] = to;
-                    // Deadlock indices follow the parent order `refresh` saw,
-                    // so check before canonicalize reorders a label group.
-                    if self.deadlock.is_dead_after_push(
-                        &self.board,
-                        &next.boxes[..self.board.labels.len()],
-                        i,
-                        from,
-                        to,
-                    ) {
-                        continue;
-                    }
                     self.board.canonicalize(&mut next);
-                    let slot = self.arena.slot(&next, self.board.labels.len());
-                    let previous = self.arena.entry(slot);
-                    if previous != u32::MAX
-                        && (!self.policy.reopen_closed || self.arena.node(previous).g <= g)
-                    {
+                    let (slot, previous) = self.arena.find(&next);
+                    if previous.is_some_and(|previous| {
+                        !self.policy.reopen_closed || self.arena.node(previous).g <= g
+                    }) {
                         continue;
                     }
                     let estimate = match &parent_assignment {
@@ -260,22 +250,14 @@ impl Engine {
                     if self.arena.is_full() {
                         // Keep a solution discovered at the exact limit.
                         if goal {
-                            let id = self.arena.push(child);
-                            self.arena.bind(slot, id);
-                            self.generated += 1;
-                            self.incumbent = Some(id);
+                            self.incumbent = Some(self.arena.insert(child, slot));
                         }
                         self.stop_at_limit(node.g);
                         return;
                     }
-                    let id = self.arena.push(child);
-                    self.arena.bind(slot, id);
-                    self.generated += 1;
-                    self.arena.push_entry(Reverse((
-                        g as u64 + self.policy.weight as u64 * h as u64,
-                        h,
-                        id,
-                    )));
+                    let id = self.arena.insert(child, slot);
+                    self.arena
+                        .enqueue(g as u64 + self.policy.weight as u64 * h as u64, h, id);
                     // Keep a solution even if a limit occurs before its pop.
                     if goal {
                         self.incumbent = Some(id);
@@ -288,40 +270,47 @@ impl Engine {
             }
         }
     }
-    /// Reconstruct walks only once per reported incumbent, then independently replay.
+    /// Rebuilds the incumbent's full route and replays it from the start.
+    /// Costs O(route) plus one flood per push, so call it once per improved
+    /// incumbent.
     pub fn solution(&mut self) -> Result<Option<String>, String> {
-        let Some(mut id) = self.incumbent else {
+        let Some(id) = self.incumbent else {
             return Ok(None);
         };
-        let expected = self.arena.node(id).g;
-        if expected as usize > sokomind_core::MAX_ROUTE {
-            return Err("Solution exceeds the 100000-move replay limit".into());
+        let mut node = self.arena.node(id);
+        let expected = node.g as usize;
+        if expected > MAX_ROUTE {
+            return Err(format!(
+                "Solution exceeds the {MAX_ROUTE}-move replay limit"
+            ));
         }
-        let mut chain = Vec::with_capacity((expected as usize).min(self.arena.len()));
-        while self.arena.node(id).parent != u32::MAX {
-            chain.push(id);
-            id = self.arena.node(id).parent;
-        }
-        let mut route = Vec::with_capacity(expected as usize);
-        for id in chain.into_iter().rev() {
-            let node = self.arena.node(id);
-            let parent = self.arena.node(node.parent).state;
+        // Direction indices, back to front: each push, then the walk before it.
+        let mut route = Vec::with_capacity(expected);
+        while node.parent != NIL {
+            let parent = self.arena.node(node.parent);
+            route.push(node.direction);
             let stand =
                 self.board.neighbors[node.box_from as usize][OPPOSITE[node.direction as usize]];
-            self.reach.fill_to(&self.board, &parent, stand);
-            self.reach.append_path(&self.board, stand, &mut route);
-            route.push(ACTIONS[node.direction as usize]);
+            self.reach.fill(&self.board, &parent.state);
+            self.reach
+                .append_walk_reversed(&self.board, stand, &mut route);
+            node = parent;
         }
+        route.reverse();
         let mut replay = self.start;
-        for &action in &route {
-            let direction = ACTIONS.iter().position(|&a| a == action).unwrap();
-            if self.board.step(&mut replay, direction).is_none() {
+        for &direction in &route {
+            if self.board.step(&mut replay, direction as usize).is_none() {
                 return Err("Internal route replay failed".into());
             }
         }
-        if !self.board.solved(&replay) || route.len() != expected as usize {
+        if !self.board.solved(&replay) || route.len() != expected {
             return Err("Internal solution counters failed".into());
         }
-        Ok(Some(String::from_utf8(route).unwrap()))
+        Ok(Some(
+            route
+                .iter()
+                .map(|&direction| ACTIONS[direction as usize] as char)
+                .collect(),
+        ))
     }
 }

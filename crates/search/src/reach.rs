@@ -1,4 +1,4 @@
-use sokomind_core::{ACTIONS, Board, Cell, NONE, OPPOSITE, State};
+use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
 
 /// Keeper-reachability flood with epoch stamps: fills cost only the cells
 /// they actually visit, and never reset their buffers between calls.
@@ -53,28 +53,6 @@ impl Reach {
             }
         }
     }
-    /// Floods only until `target` is reached. Every cell on the target's
-    /// path was finalized before the target, so append_path stays valid.
-    pub fn fill_to(&mut self, board: &Board, state: &State, target: Cell) {
-        self.begin(board, state);
-        let mut head = 0;
-        while head < self.queue.len() {
-            let cell = self.queue[head];
-            head += 1;
-            if cell == target {
-                break;
-            }
-            for d in 0..4 {
-                let next = board.neighbors[cell as usize][d];
-                if next != NONE && self.stamps[next as usize] != self.epoch {
-                    self.stamps[next as usize] = self.epoch;
-                    self.distances[next as usize] = self.distances[cell as usize] + 1;
-                    self.parent_direction[next as usize] = d as u8;
-                    self.queue.push(next);
-                }
-            }
-        }
-    }
     pub fn distance(&self, cell: Cell) -> u16 {
         if self.stamps[cell as usize] == self.epoch {
             self.distances[cell as usize]
@@ -85,31 +63,13 @@ impl Reach {
     pub fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
     }
-    /// Whether any push is currently legal. An unsolved state without one can
-    /// never change: walking moves no boxes, so its subtree is dead.
-    pub fn has_legal_push(&self, board: &Board, state: &State) -> bool {
-        for &from in &state.boxes[..board.labels.len()] {
-            for d in 0..4 {
-                let to = board.neighbors[from as usize][d];
-                let stand = board.neighbors[from as usize][OPPOSITE[d]];
-                if to != NONE
-                    && stand != NONE
-                    && !self.blocked(to)
-                    && self.distance(stand) != NONE
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    pub fn append_path(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
-        let start = route.len();
+    /// Appends the walk from the player to `cell`, which the last `fill`
+    /// reached, as direction indices from its last step back to its first.
+    pub fn append_walk_reversed(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
         while self.distance(cell) != 0 {
-            let d = self.parent_direction[cell as usize] as usize;
-            route.push(ACTIONS[d]);
-            cell = board.neighbors[cell as usize][OPPOSITE[d]];
+            let d = self.parent_direction[cell as usize];
+            route.push(d);
+            cell = board.neighbors[cell as usize][OPPOSITE[d as usize]];
         }
-        route[start..].reverse();
     }
 }

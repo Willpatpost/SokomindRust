@@ -1,17 +1,17 @@
-//! Incremental, platform-independent push A*. All hot-path storage is reserved once.
+//! Incremental, platform-independent push A*. The arena, queue, table and
+//! flood buffers are reserved once.
 mod arena;
-mod certificate;
 mod deadlock;
 mod engine;
 mod exact;
 mod heuristic;
+mod proof;
 mod reach;
 
-pub use certificate::Proof;
-pub use deadlock::Deadlock;
 use engine::{Engine, Policy};
 pub use exact::ExactSearch;
 pub use heuristic::Heuristic;
+pub use proof::Proof;
 use sokomind_core::{Board, State};
 use std::ops::{Deref, DerefMut};
 

@@ -2,6 +2,9 @@ use crate::Status;
 use sokomind_core::{Cell, MAX_ROUTE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
+/// No node: an empty table slot, or the root's parent.
+pub(crate) const NIL: u32 = u32::MAX;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     pub state: State,
@@ -10,7 +13,8 @@ pub(crate) struct Node {
     pub box_from: Cell,
     pub direction: u8,
 }
-pub(crate) type Entry = Reverse<(u64, u32, u32)>;
+/// Queue entry `(f, h, id)`: lowest f first, then lowest h, then oldest.
+type Entry = Reverse<(u64, u32, u32)>;
 
 fn hash(state: &State, boxes: usize) -> usize {
     let mut h = (state.player as u64).wrapping_add(0x9e3779b97f4a7c15);
@@ -28,6 +32,8 @@ pub(crate) struct Arena {
     nodes: Vec<Node>,
     heap: BinaryHeap<Entry>,
     table: Vec<u32>,
+    /// Boxes per state, the prefix of `State::boxes` that is hashed.
+    boxes: usize,
     node_limit: usize,
     reserved_bytes: usize,
     scaled_down: bool,
@@ -35,15 +41,16 @@ pub(crate) struct Arena {
 impl Arena {
     pub(crate) fn new(
         cells: usize,
-        goals: usize,
+        boxes: usize,
         max_states: usize,
         memory_mib: usize,
     ) -> Result<Self, String> {
         if !(1..=1_000_000).contains(&max_states) || !(4..=256).contains(&memory_mib) {
             return Err("Use 1..1000000 states and 4..256 MiB".into());
         }
-        // Includes reachability buffers, reverse distances, and route scratch.
-        let fixed_bytes = cells * (9 + goals * 2) + 2 * MAX_ROUTE + 64 * 1024;
+        // Includes reachability buffers, reverse distances (one goal per
+        // box), and route scratch.
+        let fixed_bytes = cells * (9 + boxes * 2) + 2 * MAX_ROUTE + 64 * 1024;
         let budget = memory_mib * 1024 * 1024;
         // One spare node keeps a solution found at the exact limit reachable.
         let bytes_for = |count: usize| {
@@ -78,8 +85,9 @@ impl Arena {
         table
             .try_reserve_exact(table_size)
             .map_err(|_| "Cannot reserve state table")?;
-        table.resize(table_size, u32::MAX);
+        table.resize(table_size, NIL);
         Ok(Self {
+            boxes,
             reserved_bytes: bytes_for(limit),
             scaled_down: limit < max_states,
             node_limit: limit,
@@ -104,40 +112,45 @@ impl Arena {
     pub(crate) fn is_full(&self) -> bool {
         self.nodes.len() >= self.node_limit
     }
-    /// Callers must bind the node's table slot. Only one node may be pushed
-    /// past the limit, into the spare slot: a solution discovered at the exact
-    /// moment the arena filled.
-    pub(crate) fn push(&mut self, node: Node) -> u32 {
+    /// The state's node, if any, and the table slot that holds it or would
+    /// hold a new node for it.
+    pub(crate) fn find(&self, state: &State) -> (usize, Option<u32>) {
+        let mask = self.table.len() - 1;
+        let mut slot = hash(state, self.boxes) & mask;
+        loop {
+            let id = self.table[slot];
+            if id == NIL {
+                return (slot, None);
+            }
+            if self.nodes[id as usize].state == *state {
+                return (slot, Some(id));
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    /// Appends `node` and binds `slot`, which [`Arena::find`] returned for its
+    /// state with no insert since, replacing any older node there. Only one
+    /// node may go past the limit, into the spare slot: a solution discovered
+    /// at the exact moment the arena filled.
+    pub(crate) fn insert(&mut self, node: Node, slot: usize) -> u32 {
         debug_assert!(self.nodes.len() <= self.node_limit);
         let id = self.nodes.len() as u32;
         self.nodes.push(node);
+        self.table[slot] = id;
         id
     }
     pub(crate) fn node(&self, id: u32) -> Node {
         self.nodes[id as usize]
     }
-    pub(crate) fn slot(&self, state: &State, boxes: usize) -> usize {
-        let mask = self.table.len() - 1;
-        let mut slot = hash(state, boxes) & mask;
-        while self.table[slot] != u32::MAX && self.nodes[self.table[slot] as usize].state != *state
-        {
-            slot = (slot + 1) & mask;
-        }
-        slot
+    pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
+        self.heap.push(Reverse((f, h, id)));
     }
-    pub(crate) fn entry(&self, slot: usize) -> u32 {
-        self.table[slot]
+    /// The node of the lowest queued entry, which may be stale.
+    pub(crate) fn dequeue(&mut self) -> Option<u32> {
+        self.heap.pop().map(|Reverse((_, _, id))| id)
     }
-    pub(crate) fn bind(&mut self, slot: usize, id: u32) {
-        self.table[slot] = id;
-    }
-    pub(crate) fn push_entry(&mut self, entry: Entry) {
-        self.heap.push(entry);
-    }
-    pub(crate) fn pop_entry(&mut self) -> Option<Entry> {
-        self.heap.pop()
-    }
-    pub(crate) fn peek_priority(&self) -> Option<u64> {
-        self.heap.peek().map(|Reverse((priority, _, _))| *priority)
+    /// Lowest queued f, stale entries included.
+    pub(crate) fn min_f(&self) -> Option<u64> {
+        self.heap.peek().map(|Reverse((f, _, _))| *f)
     }
 }
