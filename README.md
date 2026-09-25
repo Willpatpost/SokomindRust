@@ -149,14 +149,17 @@ extensionless paths return the app shell with `no-cache`, `/assets/` files carry
 hang on a dead content hash after a rebuild. Configure the database with either
 `DATABASE_URL` or `DATABASE_PASSWORD` (plus optional `DATABASE_USER`, `DATABASE_HOST`,
 `DATABASE_PORT`, `DATABASE_NAME`); the server percent-encodes the components, so any
-password characters are safe in compose. At startup the API retries only transient
-database failures, for about 30 seconds, logging each attempt; authentication
-failures (SQLSTATE 28P01/28000), a missing database (3D000), and other
-non-transient errors fail immediately. `PROGRESS_RETENTION_DAYS` unset or 0 keeps
-progress forever; 1..36500 deletes records whose best route was stored more than
-that many days ago (equal or worse saves do not refresh it), after migrations at
-startup and then hourly, logging the count when nonzero. Any other value warns and
-keeps everything.
+password characters are safe in compose. A remote database can require TLS (for
+example `?sslmode=require` in `DATABASE_URL`): the server deliberately keeps sqlx's
+`tls-rustls-ring` feature, which trusts the bundled webpki roots rather than the
+system store, so the server image needs no CA certificates. At startup the API
+retries only transient database failures, for about 30 seconds, logging each
+attempt; authentication failures (SQLSTATE 28P01/28000), a missing database (3D000),
+and other non-transient errors fail immediately. `PROGRESS_RETENTION_DAYS` unset or
+0 keeps progress forever; 1..36500 deletes records whose best route was stored more
+than that many days ago (equal or worse saves do not refresh it), after migrations
+at startup and then hourly, logging the count when nonzero. Any other value warns
+and keeps everything.
 
 `TRUSTED_PROXIES` lists the proxies (comma-separated IPv4/IPv6 addresses or CIDRs)
 whose `X-Forwarded-For` the API believes. Unset or empty trusts none: the socket

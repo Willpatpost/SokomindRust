@@ -17,9 +17,7 @@ serde_json = "1"
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
 
 [profile.wasm-release]
 inherits = "release"
-opt-level = 3
 lto = true

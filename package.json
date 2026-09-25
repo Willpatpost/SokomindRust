@@ -12,7 +12,8 @@
     "check": "tsc -p web/tsconfig.json --noEmit",
     "check:rust": "node scripts/rust.mjs check --workspace",
     "test:core": "node scripts/rust.mjs test -p sokomind-core -p sokomind-search -p sokomind-server",
-    "build": "npm run wasm && npm run check && vite build --config web/vite.config.ts",
+    "build": "npm run wasm && npm run build:web",
+    "build:web": "tsc -p web && vite build web",
     "preview": "vite preview --config web/vite.config.ts --host 127.0.0.1"
   },
   "devDependencies": { "typescript": "~5.9.3", "vite": "8.3.1", "@types/node": "^24.0.0" }
