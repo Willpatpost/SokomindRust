@@ -9,11 +9,13 @@ export function write(key: string, value: unknown): boolean {
 }
 export function session(): SavedSession | null {
   const v = read('session') as Partial<SavedSession> | null;
-  return v && typeof v.id === 'string' && typeof v.rows === 'string' && typeof v.actions === 'string' ? v as SavedSession : null;
+  return v && typeof v.id === 'string' && typeof v.rows === 'string' && typeof v.actions === 'string'
+    ? v as SavedSession : null;
 }
 export function best(id: string, rows: string): Best | null {
   const v = read('best.' + id) as Partial<Best> | null;
-  return v && v.rows === rows && typeof v.route === 'string' && Number.isInteger(v.moves) && Number.isInteger(v.pushes) ? v as Best : null;
+  return v && v.rows === rows && typeof v.route === 'string' && Number.isInteger(v.moves) && Number.isInteger(v.pushes)
+    ? v as Best : null;
 }
 // getRandomValues works over plain HTTP; randomUUID needs a secure context.
 function randomId(): string {

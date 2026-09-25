@@ -92,8 +92,8 @@ export class BoardView {
     c.beginPath();
     c.arc(x + tile * .6, y + tile * .44, tile * .06, 0, Math.PI * 2);
     c.fill();
-    const label =
-      `${width} by ${height} puzzle, ${labels.length} boxes. ${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD.`;
+    const label = `${width} by ${height} puzzle, ${labels.length} boxes. `
+      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD.`;
     if (this.canvas.getAttribute('aria-label') !== label) this.canvas.setAttribute('aria-label', label);
   }
 }
