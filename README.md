@@ -117,6 +117,10 @@ npm run test:core
 npm run build
 ```
 
+`test:core` includes the reference solver's frozen fixtures: 42 boards whose
+independent step-oracle optima, soundness regressions, and one proven
+unsolvable must all be reproduced exactly.
+
 `SokomindSolver/` was read as the behavior reference and left unchanged. Puzzle
 data retains the original MIT license. The MVP deliberately omits React, PWA,
 music, accounts, cloud jobs, elaborate editor tooling, and extensive test/CI setup.

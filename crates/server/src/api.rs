@@ -1,3 +1,4 @@
+use crate::limit::SaveLimiter;
 use axum::{
     Json,
     extract::State,
@@ -14,6 +15,7 @@ pub struct App {
     pub db: Option<PgPool>,
     pub catalog: Arc<Vec<Puzzle>>,
     pub slots: Arc<Semaphore>,
+    pub saves: Arc<SaveLimiter>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Puzzle {

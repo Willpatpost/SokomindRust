@@ -1,12 +1,17 @@
 use crate::api::{App, Error};
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game};
 use sqlx::Row;
+use std::net::{IpAddr, SocketAddr};
+
+/// Twenty times the longest route the catalog can need, bounding stored
+/// rows to ~10 KB; anything longer is wandering, not a best route.
+const MAX_SAVED_ROUTE: usize = 10_000;
 
 fn profile(headers: &HeaderMap) -> Result<&str, Error> {
     let value = headers
@@ -17,6 +22,15 @@ fn profile(headers: &HeaderMap) -> Result<&str, Error> {
         return Err(Error::bad("Profile must be 32 hexadecimal characters"));
     }
     Ok(value)
+}
+/// First X-Forwarded-For entry behind a proxy, else the socket address.
+fn client_ip(headers: &HeaderMap, remote: SocketAddr) -> IpAddr {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .and_then(|first| first.trim().parse().ok())
+        .unwrap_or_else(|| remote.ip())
 }
 #[derive(Serialize)]
 pub struct Record {
@@ -71,11 +85,21 @@ pub async fn get(
 }
 pub async fn save(
     State(app): State<App>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<Save>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let profile = profile(&headers)?;
+    if !app.saves.allow(client_ip(&headers, remote)) {
+        return Err(Error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many saves; try again shortly".into(),
+        ));
+    }
+    if body.route.len() > MAX_SAVED_ROUTE {
+        return Err(Error::bad("Route exceeds 10000 moves"));
+    }
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
     let puzzle = app
         .catalog

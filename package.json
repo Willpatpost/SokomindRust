@@ -11,7 +11,7 @@
     "server": "node scripts/rust.mjs run -p sokomind-server --release",
     "check": "tsc -p web/tsconfig.json --noEmit",
     "check:rust": "node scripts/rust.mjs check --workspace",
-    "test:core": "node scripts/rust.mjs test -p sokomind-core -p sokomind-search",
+    "test:core": "node scripts/rust.mjs test -p sokomind-core -p sokomind-search -p sokomind-server",
     "build": "npm run wasm && npm run check && vite build --config web/vite.config.ts",
     "preview": "vite preview --config web/vite.config.ts --host 127.0.0.1"
   },
