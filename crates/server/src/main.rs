@@ -1,29 +1,25 @@
 mod api;
 mod client;
 mod limit;
-mod listen;
 mod progress;
 mod solve;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Request},
-    http::{HeaderValue, StatusCode, Uri, header},
-    middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::{any, get, post},
+    extract::DefaultBodyLimit,
+    http::StatusCode,
+    routing::{get, post},
 };
 use client::TrustedProxies;
 use limit::RateLimiter;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{
     env,
+    net::SocketAddr,
     ops::RangeInclusive,
-    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::Semaphore;
-use tower_http::services::ServeDir;
+use tokio::{net::TcpListener, sync::Semaphore};
 
 const BODY_LIMIT: usize = 128 * 1024;
 const DB_POOL_SIZE: u32 = 5;
@@ -43,7 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = TrustedProxies::parse(&env::var("TRUSTED_PROXIES").unwrap_or_default())?;
     let concurrency = env_setting("SOLVE_CONCURRENCY", 1..=8, 1);
     let solve_rate = env_setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
-    let max_connections = env_setting("MAX_CONNECTIONS", 1..=65_536, 256);
     let retention = retention_days();
     let db = match database_url()? {
         Some(url) => {
@@ -74,12 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
         solves: Arc::new(RateLimiter::new(solve_rate as u32, RATE_WINDOW)),
     };
-    let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "web/dist".into());
-    let index = Path::new(&static_dir).join("index.html");
-    let serve_dir = ServeDir::new(&static_dir).fallback(Router::new().fallback(move |uri: Uri| {
-        let index = index.clone();
-        async move { spa_fallback(uri, index).await }
-    }));
+    // API only: nginx serves the web app and adds the security and cache
+    // headers. Any unrouted path, under /api or not, is a JSON 404.
     let app = Router::new()
         .route("/api/health", get(api::health))
         .route("/api/puzzles", get(api::catalog))
@@ -89,31 +80,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/progress/{id}",
             get(progress::get).post(progress::save),
         )
-        .route("/api", any(api_not_found))
-        .route("/api/", any(api_not_found))
-        .route("/api/{*path}", any(api_not_found))
         .method_not_allowed_fallback(method_not_allowed)
-        .fallback_service(serve_dir)
-        .layer(middleware::from_fn(static_cache))
+        .fallback(api_not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(middleware::from_fn(security_headers))
         .with_state(state);
     let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
-    let listener = listen::Capped::bind(&bind, max_connections).await?;
-    if Path::new(&static_dir).is_dir() {
-        eprintln!("Serving web UI from {static_dir}");
-    } else {
-        eprintln!(
-            "{static_dir} not found; serving the API only. Set STATIC_DIR or build the web UI (npm run build) to serve it here."
-        );
-    }
+    let listener = TcpListener::bind(&bind).await?;
     eprintln!("Sokomind API listening at http://{bind}");
     // axum's serve() gives hyper no timer, so hyper's 30 s header read
-    // timeout never arms; slow clients are bounded by the listener's idle
-    // timeout and connection cap, and by nginx when it fronts the server.
+    // timeout never arms; nginx, the required edge, bounds slow clients and
+    // connection counts.
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<listen::Peer>(),
+        app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown())
     .await?;
@@ -203,58 +182,6 @@ async fn expire_progress(db: PgPool, days: i32) {
             Err(error) => eprintln!("Progress retention sweep failed: {error}"),
         }
     }
-}
-
-/// nosniff and a same-origin referrer unless a handler chose its own, so
-/// the single binary sends them without nginx in front.
-async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers
-        .entry(header::X_CONTENT_TYPE_OPTIONS)
-        .or_insert(HeaderValue::from_static("nosniff"));
-    headers
-        .entry(header::REFERRER_POLICY)
-        .or_insert(HeaderValue::from_static("same-origin"));
-    response
-}
-
-/// Missing assets must 404: serving the app shell with a 200 would make a
-/// stale page hang on a dead content hash after a rebuild.
-async fn spa_fallback(uri: Uri, index: PathBuf) -> Response {
-    if Path::new(uri.path()).extension().is_some() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    match tokio::fs::read(&index).await {
-        Ok(body) => {
-            let mut response = body.into_response();
-            let headers = response.headers_mut();
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-            response
-        }
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-/// Vite content-hashes everything under /assets/, so those responses are
-/// immutable; the shell must always be revalidated after a rebuild.
-async fn static_cache(uri: Uri, request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    if response.status().is_success() && !response.headers().contains_key(header::CACHE_CONTROL) {
-        let path = uri.path();
-        let value = if path.starts_with("/assets/") {
-            "public, max-age=31536000, immutable"
-        } else if path == "/" || path == "/index.html" {
-            "no-cache"
-        } else {
-            return response;
-        };
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
-    }
-    response
 }
 
 async fn api_not_found() -> api::Error {

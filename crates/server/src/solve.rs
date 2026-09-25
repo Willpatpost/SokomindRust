@@ -1,5 +1,4 @@
 use crate::api::{ApiJson, App, Error};
-use crate::listen::Peer;
 use axum::{
     Json,
     extract::{ConnectInfo, State},
@@ -9,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game, MAX_ROUTE};
 use sokomind_search::{Mode, Proof, Search, Status};
 use std::{
+    net::SocketAddr,
     ops::RangeInclusive,
     sync::{
         Arc,
@@ -97,7 +97,7 @@ impl Drop for CancelOnDrop {
 
 pub async fn solve(
     State(app): State<App>,
-    ConnectInfo(Peer(peer)): ConnectInfo<Peer>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<Request>,
 ) -> Result<Json<ResultBody>, Error> {

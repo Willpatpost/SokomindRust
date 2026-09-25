@@ -29,12 +29,13 @@ services:
       TRUSTED_PROXIES: "172.16.0.0/12"
       # SOLVE_RATE_PER_MINUTE: "20"
       # PROGRESS_RETENTION_DAYS: "365"
-      # MAX_CONNECTIONS: "256"
     depends_on:
       db:
         condition: service_healthy
     init: true
     stop_grace_period: 35s
+  # The required edge: nginx serves the web app and proxies /api to the API,
+  # which serves nothing else and is never published.
   web:
     build:
       context: .

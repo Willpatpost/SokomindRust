@@ -1,5 +1,4 @@
 use crate::api::{ApiJson, ApiPath, App, Error};
-use crate::listen::Peer;
 use axum::{
     Json,
     extract::{ConnectInfo, State},
@@ -8,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game};
 use sqlx::Row;
+use std::net::SocketAddr;
 
 /// Twenty times the longest route the catalog can need, bounding stored
 /// rows to ~10 KB; anything longer is wandering, not a best route.
@@ -116,7 +116,7 @@ pub async fn get(
 }
 pub async fn save(
     State(app): State<App>,
-    ConnectInfo(Peer(peer)): ConnectInfo<Peer>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<Save>,
