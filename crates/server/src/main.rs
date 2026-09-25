@@ -285,4 +285,60 @@ mod tests {
             assert_eq!(retention(days), expected, "{value:?}");
         }
     }
+
+    #[tokio::test]
+    async fn router_fallbacks_and_health_without_database() {
+        use axum::{body::Body, extract::connect_info::MockConnectInfo, http::Request};
+        use serde_json::{Value, json};
+        use tower::ServiceExt;
+
+        let state = api::App {
+            db: None,
+            catalog: Arc::new(api::load_catalog().unwrap()),
+            slots: Arc::new(Semaphore::new(1)),
+            proxies: Arc::new(TrustedProxies::default()),
+            saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
+            solves: Arc::new(RateLimiter::new(20, RATE_WINDOW)),
+        };
+        let app = router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+        let not_found = json!({ "error": "Unknown API endpoint" });
+        let cases = [
+            ("GET", "/api", StatusCode::NOT_FOUND, not_found.clone()),
+            ("GET", "/api/", StatusCode::NOT_FOUND, not_found.clone()),
+            ("GET", "/api/x", StatusCode::NOT_FOUND, not_found.clone()),
+            (
+                "GET",
+                "/api/puzzles",
+                StatusCode::NOT_FOUND,
+                not_found.clone(),
+            ),
+            ("GET", "/api/progress", StatusCode::NOT_FOUND, not_found),
+            (
+                "GET",
+                "/api/solve",
+                StatusCode::METHOD_NOT_ALLOWED,
+                json!({ "error": "Method not allowed" }),
+            ),
+            (
+                "GET",
+                "/api/health",
+                StatusCode::OK,
+                json!({ "status": "ok", "persistence": false }),
+            ),
+        ];
+        for (method, path, status, body) in cases {
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), status, "{method} {path}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(json, body, "{method} {path}");
+        }
+    }
 }

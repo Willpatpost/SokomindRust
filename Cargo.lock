@@ -1239,6 +1239,7 @@ dependencies = [
  "sokomind-search",
  "sqlx",
  "tokio",
+ "tower",
 ]
 
 [[package]]

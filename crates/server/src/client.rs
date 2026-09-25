@@ -34,12 +34,12 @@ impl TrustedProxies {
         if !self.contains(client) {
             return client;
         }
-        let hops: Vec<&str> = headers
+        let hops = headers
             .get_all("x-forwarded-for")
             .iter()
-            .flat_map(|line| line.to_str().unwrap_or("").split(','))
-            .collect();
-        for hop in hops.into_iter().rev() {
+            .rev()
+            .flat_map(|line| line.to_str().unwrap_or("").rsplit(','));
+        for hop in hops {
             let Ok(ip) = hop.trim().parse::<IpAddr>() else {
                 break;
             };
