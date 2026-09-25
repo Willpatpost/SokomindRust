@@ -6,7 +6,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sokomind_core::Game;
-use sqlx::Row;
 use std::net::SocketAddr;
 
 /// Twenty times the longest route the catalog can need, bounding stored
@@ -23,7 +22,7 @@ fn profile(headers: &HeaderMap) -> Result<&str, Error> {
     }
     Ok(value)
 }
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct Record {
     puzzle_id: String,
     moves: i32,
@@ -59,7 +58,7 @@ pub async fn get(
     // A catalog layout change retires old records: they cannot be beaten by
     // fresh saves and their routes no longer replay.
     let fingerprint = &app.puzzle(&id)?.fingerprint;
-    let row = sqlx::query(FETCH)
+    let record = sqlx::query_as::<_, Record>(FETCH)
         .bind(profile)
         .bind(&id)
         .bind(fingerprint)
@@ -67,12 +66,7 @@ pub async fn get(
         .await
         .map_err(Error::database)?
         .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "No saved route"))?;
-    Ok(Json(Record {
-        puzzle_id: row.get("puzzle_id"),
-        moves: row.get("moves"),
-        pushes: row.get("pushes"),
-        route: row.get("route"),
-    }))
+    Ok(Json(record))
 }
 pub async fn save(
     State(app): State<App>,
@@ -93,20 +87,16 @@ pub async fn save(
         return Err(Error::too_many("Too many saves; try again shortly"));
     }
     let route = body.route;
-    let replay_route = route.clone();
     // Replay is pure CPU: keep it off the async runtime, like the solver.
-    let verified = tokio::task::spawn_blocking(move || {
+    let (moves, pushes, fingerprint, route) = tokio::task::spawn_blocking(move || {
         let mut game = Game::new(board);
         // Never trust client counters, box coordinates, solved flags, or optimality claims.
-        game.replay(&replay_route)?;
+        game.replay(&route)?;
         if !game.solved() {
             return Err("Route does not solve the puzzle".to_string());
         }
-        Ok((
-            game.moves() as i32,
-            game.pushes as i32,
-            game.board.fingerprint.clone(),
-        ))
+        let (moves, pushes) = (game.moves() as i32, game.pushes as i32);
+        Ok((moves, pushes, game.board.fingerprint, route))
     })
     .await
     .map_err(Error::internal)?
@@ -114,9 +104,9 @@ pub async fn save(
     let result = sqlx::query(UPSERT)
         .bind(profile)
         .bind(id)
-        .bind(verified.2)
-        .bind(verified.0)
-        .bind(verified.1)
+        .bind(fingerprint)
+        .bind(moves)
+        .bind(pushes)
         .bind(route)
         .execute(db)
         .await
@@ -124,4 +114,50 @@ pub async fn save(
     Ok(Json(
         serde_json::json!({ "saved": true, "improved": result.rows_affected() > 0 }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn profile_needs_32_hex_characters() {
+        const HEX: &[u8] = b"0123456789abcdefABCDEF0123456789";
+        const MISSING: &str = "Missing x-profile-id";
+        const MALFORMED: &str = "Profile must be 32 hexadecimal characters";
+        let cases: [(Option<&[u8]>, Result<&str, &str>); 7] = [
+            (None, Err(MISSING)),
+            (Some(HEX), Ok("0123456789abcdefABCDEF0123456789")),
+            (Some(&HEX[1..]), Err(MALFORMED)),
+            (
+                Some(b"0123456789abcdef0123456789abcdefa".as_slice()),
+                Err(MALFORMED),
+            ),
+            (
+                Some(b"0123456789abcdef0123456789abcdeg".as_slice()),
+                Err(MALFORMED),
+            ),
+            (Some(b"".as_slice()), Err(MALFORMED)),
+            // Not visible ASCII, so to_str() fails: treated as missing.
+            (
+                Some(b"0123456789abcdef0123456789abcde\xe9".as_slice()),
+                Err(MISSING),
+            ),
+        ];
+        for (value, expected) in cases {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert("x-profile-id", HeaderValue::from_bytes(value).unwrap());
+            }
+            match (profile(&headers), expected) {
+                (Ok(got), Ok(want)) => assert_eq!(got, want),
+                (Err(error), Err(want)) => {
+                    assert_eq!(error.0, StatusCode::BAD_REQUEST);
+                    assert_eq!(error.1, want);
+                }
+                _ => panic!("unexpected result for {value:?}"),
+            }
+        }
+    }
 }
