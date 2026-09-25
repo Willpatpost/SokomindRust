@@ -387,7 +387,7 @@ mod tests {
         let boxes = board.labels.len();
         let mut state = board.initial;
         for step in 0..steps {
-            if step % 25 == 0 {
+            if step.is_multiple_of(25) {
                 state = board.initial;
             }
             let parent_h = heuristic.estimate(&state).unwrap();
