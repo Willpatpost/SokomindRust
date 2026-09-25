@@ -2,114 +2,119 @@ import './style.css';
 import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
 import catalog from '../../data/puzzles.json';
-import { BoardView } from './board';
+import { BoardView, type Snapshot } from './board';
 import * as storage from './storage';
-import type { SearchUpdate, SolveRequest, WorkerReply } from './protocol';
+import { MAX_ROUTE, MAX_STATES, errorMessage, type Proof, type SearchStatus, type SearchUpdate, type SolveRequest, type WorkerReply } from './protocol';
 
 interface Puzzle { id: string; title: string; difficulty: string; rows: string[]; hint?: string }
+// One search. While busy it holds its worker or request and timers; afterwards
+// it keeps the route found from `prefix` for Play and Copy until the position changes.
+interface Run { prefix: string; busy: boolean; route?: string; worker?: Worker; abort?: AbortController; timer?: number; watchdog?: number }
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
 const select = (id: string) => $<HTMLSelectElement>(id);
 // role=status re-announces every write, so identical text is left alone.
-const message = (value: string) => { const el = $('message'); if (el.textContent !== value) el.textContent = value; };
+function setText(id: string, value: string) { const el = $(id); if (el.textContent !== value) el.textContent = value; }
+const message = (value: string) => setText('message', value);
+const setStatus = (value: string) => setText('search-status', value);
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
+const customPuzzle = (text: string): Puzzle => ({ id: 'custom', title: 'Your puzzle', difficulty: 'custom', rows: text.split('\n') });
 const board = new BoardView($<HTMLCanvasElement>('board'));
 let game: WasmGame;
-let current: Puzzle;
+let current: Puzzle & { text: string };
 let tiles: Uint8Array;
 let labels: Uint8Array;
-let snapshot: Uint32Array;
-let worker: Worker | undefined;
-let requestAbort: AbortController | undefined;
-let busy = false;
-let generation = 0;
-let runPrefix = '';
-let route: string | undefined;
-let timer: ReturnType<typeof setInterval> | undefined;
-let watchdog: ReturnType<typeof setTimeout> | undefined;
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
-let playback: { actions: string; index: number; timer: ReturnType<typeof setInterval> } | undefined;
-let pausedRoute: { actions: string; index: number } | undefined;
+let state: Snapshot;
+let run: Run | undefined;
+// A route playing on the board; paused, it keeps its place for Resume.
+let playback: { route: string; index: number; timer: number; paused: boolean } | undefined;
+let saveTimer: number | undefined;
 let persistence = false;
 const profile = storage.profile();
 
 function updateButtons() {
-  button('solve').disabled = busy || !game || snapshot[3] === 1;
-  button('cancel').disabled = !busy && !playback && !pausedRoute;
-  button('play').disabled = busy || (!route && !playback && !pausedRoute);
-  button('copy').disabled = !route;
-  button('undo').disabled = !game || snapshot[1] === 0;
+  const busy = run?.busy === true;
+  button('solve').disabled = busy || !game || state.solved;
+  button('cancel').disabled = !busy && !playback;
+  button('play').disabled = busy || (!run?.route && !playback);
+  setText('play', !playback ? 'Play route' : playback.paused ? 'Resume' : 'Pause');
+  button('copy').disabled = !run?.route;
+  button('undo').disabled = !game || state.moves === 0;
 }
 function endRun() {
-  busy = false; worker?.terminate(); worker = undefined;
-  requestAbort = undefined; clearInterval(timer); clearTimeout(watchdog);
+  if (run) {
+    run.busy = false; run.worker?.terminate(); run.abort?.abort();
+    run.worker = undefined; run.abort = undefined; clearInterval(run.timer); clearTimeout(run.watchdog);
+  }
   updateButtons();
 }
 function stopPlayback() {
   if (playback) clearInterval(playback.timer);
-  playback = undefined; button('play').textContent = 'Play route';
+  playback = undefined;
 }
 // Playback leaves the robot away from where the route starts, so a finished,
 // blocked, or stopped playback drops the route instead of offering a replay.
-function endPlayback() { stopPlayback(); pausedRoute = undefined; route = undefined; updateButtons(); }
-function animate(actions: string, start = 0) {
+function endPlayback() { stopPlayback(); if (run) run.route = undefined; updateButtons(); }
+function animate(route: string, index = 0) {
   stopPlayback();
-  pausedRoute = undefined;
-  button('play').textContent = 'Pause';
-  playback = { actions, index: start, timer: setInterval(() => {
+  playback = { route, index, paused: false, timer: setInterval(() => {
     if (!playback) return;
-    if (playback.index >= playback.actions.length) { endPlayback(); return; }
-    if (!game.step('UDLR'.indexOf(playback.actions[playback.index++]))) { endPlayback(); message('Replay was blocked.'); return; }
+    if (playback.index >= playback.route.length) { endPlayback(); return; }
+    if (!game.step('UDLR'.indexOf(playback.route[playback.index++]))) { endPlayback(); message('Replay was blocked.'); return; }
     changed();
   }, 70) };
   updateButtons();
 }
 function invalidate() {
-  generation++; requestAbort?.abort(); endRun(); stopPlayback(); pausedRoute = undefined; route = undefined; updateButtons();
+  endRun(); run = undefined; stopPlayback(); updateButtons();
   setStatus('Ready when you are.');
 }
-// role=status re-announces on every text change, so only write real changes.
-function setStatus(text: string) { const el = $('search-status'); if (el.textContent !== text) el.textContent = text; }
+// Snapshot ABI: player, moves, pushes, solved, then box cells.
+function snapshot(from: WasmGame): Snapshot {
+  const s = from.snapshot();
+  return { player: s[0], moves: s[1], pushes: s[2], solved: s[3] === 1, boxes: s.subarray(4) };
+}
 function render() {
-  snapshot = game.snapshot();
-  const onGoal = new Uint8Array(labels.length);
-  for (let i = 0; i < labels.length; i++) onGoal[i] = game.on_goal(i) ? 1 : 0;
-  board.draw(game.width(), game.height(), tiles, labels, snapshot, onGoal);
-  $('moves').textContent = String(snapshot[1]); $('pushes').textContent = String(snapshot[2]);
+  state = snapshot(game);
+  board.draw(game.width(), game.height(), tiles, labels, state, Array.from(labels, (_, i) => game.on_goal(i)));
+  setText('moves', String(state.moves)); setText('pushes', String(state.pushes));
   updateButtons();
 }
-function saveSession() {
+function saveSession(actions?: string) {
   if (!game) return;
-  if (!storage.write('session', { id: current.id, rows: current.rows.join('\n'), actions: game.actions() })) {
-    $('storage').textContent = 'Browser storage is unavailable. This session has not been saved.';
+  if (!storage.write('session', { id: current.id, rows: current.text, actions: actions ?? game.actions() })) {
+    setText('storage', 'Browser storage is unavailable. This session has not been saved.');
   }
 }
-function updateBest() {
-  const best = readBest();
+function showBest(best: storage.Best | null) {
   button('best').disabled = !best;
-  $('best-score').textContent = best ? `Best: ${best.moves} moves · ${best.pushes} pushes` : '';
+  setText('best-score', best ? `Best: ${best.moves} moves · ${best.pushes} pushes` : '');
 }
-function verify(fullRoute: string): Uint32Array {
-  const check = new WasmGame(current.rows.join('\n'));
-  try { check.replay(fullRoute); const state = check.snapshot(); if (!state[3]) throw new Error('Route does not solve this puzzle'); return state; }
+// Stored routes are untrusted: replay one from the start on a scratch game.
+function verify(route: string): Snapshot {
+  const check = new WasmGame(current.text);
+  try { check.replay(route); const result = snapshot(check); if (!result.solved) throw new Error('Route does not solve this puzzle'); return result; }
   finally { check.free(); }
 }
 function readBest(): storage.Best | null {
-  const best = storage.best(current.id, current.rows.join('\n'));
+  const best = storage.best(current.id, current.text);
   if (!best) return null;
   try {
-    const state = verify(best.route);
-    return state[1] === best.moves && state[2] === best.pushes ? best : null;
+    const result = verify(best.route);
+    return result.moves === best.moves && result.pushes === best.pushes ? best : null;
   } catch { return null; }
 }
-function keepBest(fullRoute: string) {
-  const state = verify(fullRoute);
+// `route` solves from the start and its counters come from a Rust replay.
+function keepBest(route: string, moves: number, pushes: number) {
   const old = readBest();
-  if (!old || state[1] < old.moves || (state[1] === old.moves && state[2] < old.pushes)) {
-    if (!storage.write('best.' + current.id, { rows: current.rows.join('\n'), route: fullRoute, moves: state[1], pushes: state[2] })) {
-      $('storage').textContent = 'Could not save the best route in this browser.';
-    }
+  let best = old;
+  if (!old || moves < old.moves || (moves === old.moves && pushes < old.pushes)) {
+    const next = { rows: current.text, route, moves, pushes };
+    if (storage.write('best.' + current.id, next)) best = next;
+    else setText('storage', 'Could not save the best route in this browser.');
   }
-  updateBest();
+  showBest(best);
 }
 // API errors carry {error}; a proxy's own error page has none.
 async function errorText(response: Response): Promise<string | undefined> {
@@ -123,15 +128,15 @@ async function syncBest(fullRoute: string) {
     const response = await fetch(`/api/progress/${encodeURIComponent(current.id)}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-profile-id': profile }, body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(5000) });
     if (!response.ok) {
       // A rejected save (bad input, rate limit) is final; 5xx means the server could not save.
-      $('storage').textContent = response.status === 429 ? 'Server save rate-limited; try again shortly. Local progress is kept.'
-        : response.status < 500 ? `Server save rejected: ${(await errorText(response)) ?? `HTTP ${response.status}`}` : failed;
+      setText('storage', response.status === 429 ? 'Server save rate-limited; try again shortly. Local progress is kept.'
+        : response.status < 500 ? `Server save rejected: ${(await errorText(response)) ?? `HTTP ${response.status}`}` : failed);
       return;
     }
     const result = await response.json();
-    $('storage').textContent = result.improved
+    setText('storage', result.improved
       ? 'Verified best route saved in PostgreSQL for this browser profile.'
-      : 'Server already stored an equal or better route for this puzzle.';
-  } catch { $('storage').textContent = failed; }
+      : 'Server already stored an equal or better route for this puzzle.');
+  } catch { setText('storage', failed); }
 }
 async function pullBest() {
   if (!persistence || !profile || current.id === 'custom') return;
@@ -140,88 +145,95 @@ async function pullBest() {
     const response = await fetch(`/api/progress/${encodeURIComponent(id)}`, { headers: { 'x-profile-id': profile }, signal: AbortSignal.timeout(5000) });
     if (!response.ok) return;
     const result = await response.json();
-    if (current.id === id && typeof result.route === 'string') keepBest(result.route);
+    if (current.id !== id || typeof result.route !== 'string') return;
+    const checked = verify(result.route);
+    keepBest(result.route, checked.moves, checked.pushes);
   } catch { /* An optional read failure does not interrupt play. */ }
 }
 function changed() {
-  render(); clearTimeout(saveTimer); saveTimer = setTimeout(saveSession, 350);
-  message(snapshot[3] ? `Solved in ${snapshot[1]} moves and ${snapshot[2]} pushes.` : 'Arrow keys or WASD to move. Z to undo.');
-  if (snapshot[3]) { keepBest(game.actions()); void syncBest(game.actions()); saveSession(); }
+  render(); clearTimeout(saveTimer);
+  if (!state.solved) { message(MOVE_HINT); saveTimer = setTimeout(() => saveSession(), 350); return; }
+  message(`Solved in ${state.moves} moves and ${state.pushes} pushes.`);
+  const actions = game.actions();
+  saveSession(actions); keepBest(actions, state.moves, state.pushes); void syncBest(actions);
 }
 function load(puzzle: Puzzle, actions = '') {
-  const next = new WasmGame(puzzle.rows.join('\n'));
+  const text = puzzle.rows.join('\n');
+  const next = new WasmGame(text);
   try { if (actions) next.replay(actions); }
   catch (error) { next.free(); throw error; }
   if (game) invalidate();
-  game?.free(); game = next; current = puzzle;
+  game?.free(); game = next; current = { ...puzzle, text };
   tiles = game.tiles(); labels = game.labels();
   select('puzzles').value = puzzle.id;
-  $('title').textContent = puzzle.title; $('difficulty').textContent = puzzle.difficulty;
-  $('hint').textContent = puzzle.hint || 'Match every box to its goal.';
-  $<HTMLTextAreaElement>('rows').value = puzzle.rows.join('\n');
-  render(); updateBest();
-  message(actions ? 'Session restored by replaying your moves.' : 'Arrow keys or WASD to move. Z to undo.');
+  setText('title', puzzle.title); setText('difficulty', puzzle.difficulty);
+  setText('hint', puzzle.hint || 'Match every box to its goal.');
+  $<HTMLTextAreaElement>('rows').value = text;
+  render(); showBest(readBest());
+  message(actions ? 'Session restored by replaying your moves.' : MOVE_HINT);
   saveSession(); void pullBest();
 }
 function move(direction: number) {
   if (!game) return;
-  if (busy || route || playback || pausedRoute) invalidate();
+  if (run?.busy || run?.route || playback) invalidate();
   if (game.step(direction)) changed();
-  else if (game.moves() >= 100000) message('Session move limit reached (100000). Undo or restart to continue.');
+  else if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
 }
-function applyUpdate(update: SearchUpdate) {
+// Routes arrive already replayed by Rust: the worker's solution() or the server.
+function applyUpdate(thisRun: Run, update: SearchUpdate) {
   if (update.route !== undefined) {
-    if (runPrefix.length + update.route.length > 100000) {
-      throw new Error('Position and route together exceed the 100000-move replay limit');
+    // A route valid on its own can still overflow the replay limit after the prefix.
+    if (thisRun.prefix.length + update.route.length > MAX_ROUTE) {
+      throw new Error(`Position and route together exceed the ${MAX_ROUTE}-move replay limit`);
     }
-    verify(runPrefix + update.route);
-    if (game.actions() !== runPrefix) throw new Error('Puzzle changed while solving');
-    route = update.route;
+    thisRun.route = update.route;
   }
-  const m = update.metrics;
-  $('expanded').textContent = m[0].toLocaleString(); $('generated').textContent = m[1].toLocaleString();
-  $('reserved').textContent = `${(m[2] / 1048576).toFixed(1)} MiB`;
-  const hasRoute = route !== undefined;
-  const proofKind = m[4];
-  const note = proofKind === 2 ? ' · proven move-optimal from this position'
-    : proofKind === 3 ? ' · proven unsolvable'
+  const { expanded, generated, reservedBytes, lowerBound, proof, status } = update.metrics;
+  setText('expanded', expanded.toLocaleString()); setText('generated', generated.toLocaleString());
+  setText('reserved', `${(reservedBytes / 1048576).toFixed(1)} MiB`);
+  const route = thisRun.route;
+  const note = proof.kind === 'optimal' ? ' · proven move-optimal from this position'
+    : proof.kind === 'unsolvable' ? ' · proven unsolvable'
     // Worker routes arrive throttled, so the gap is measured on the route shown.
-    : hasRoute && m[5] !== 0xffffffff ? ` · within ${route!.length - m[5]} of optimal`
+    : route !== undefined && lowerBound !== undefined ? ` · within ${route.length - lowerBound} of optimal`
     : ' · optimality unproven';
-  const result = hasRoute ? `${route!.length} remaining moves${note}. ` : '';
-  const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proofKind === 3 ? 'No solution exists from this position.' : 'Search ended without finding a route (not a proof — use Optimal to prove unsolvability).', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
-  setStatus(result + (status[update.status] || update.status));
+  const result = route !== undefined ? `${route.length} remaining moves${note}. ` : '';
+  const verdict: Record<SearchStatus, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proof.kind === 'unsolvable' ? 'No solution exists from this position.' : 'Search ended without finding a route (not a proof — use Optimal to prove unsolvability).', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
+  setStatus(result + (verdict[status] ?? status));
   // The run timer owns the elapsed display; the final value lands once, here.
-  if (update.type === 'done') { endRun(); $('elapsed').textContent = `${(update.elapsedMs / 1000).toFixed(1)} s`; }
+  if (update.type === 'done') { endRun(); setText('elapsed', seconds(update.elapsedMs)); }
   else updateButtons();
 }
-function fail(error: unknown) { setStatus(error instanceof Error ? error.message : String(error)); endRun(); }
+function fail(error: unknown) { setStatus(errorMessage(error)); endRun(); }
 async function solve() {
-  if (busy) return;
-  invalidate(); busy = true; runPrefix = game.actions(); updateButtons();
-  const id = generation;
-  const request: SolveRequest = { rows: current.rows.join('\n'), actions: runPrefix, mode: select('mode').value,
-    timeMs: Number(select('seconds').value) * 1000, memoryMiB: Number(select('memory').value), maxStates: 500_000 };
-  $('expanded').textContent = '—'; $('generated').textContent = '—';
-  $('reserved').textContent = '—'; $('elapsed').textContent = '—';
+  if (run?.busy) return;
+  invalidate();
+  const thisRun: Run = { prefix: game.actions(), busy: true };
+  run = thisRun; updateButtons();
+  const request: SolveRequest = { rows: current.text, actions: thisRun.prefix, mode: select('mode').value,
+    timeMs: Number(select('seconds').value) * 1000, memoryMiB: Number(select('memory').value), maxStates: MAX_STATES };
+  setText('expanded', '—'); setText('generated', '—');
+  setText('reserved', '—'); setText('elapsed', '—');
   setStatus('Preparing search…');
   const started = performance.now();
-  timer = setInterval(() => { $('elapsed').textContent = `${((performance.now() - started) / 1000).toFixed(1)} s`; }, 150);
+  thisRun.timer = setInterval(() => setText('elapsed', seconds(performance.now() - started)), 150);
   if (select('engine').value === 'browser') {
-    worker = new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' });
+    thisRun.worker = worker;
     worker.onmessage = ({ data }: MessageEvent<WorkerReply>) => {
-      if (id !== generation) return;
-      try { if (data.type === 'error') fail(data.message); else applyUpdate(data); } catch (error) { fail(error); }
+      if (thisRun !== run) return;
+      try { if (data.type === 'error') fail(data.message); else applyUpdate(thisRun, data); } catch (error) { fail(error); }
     };
-    worker.onerror = (event) => { if (id === generation) fail(event.message || 'Worker failed to start'); };
+    worker.onerror = (event) => { if (thisRun === run) fail(event.message || 'Worker failed to start'); };
     worker.postMessage({ type: 'solve', request });
     // Includes startup allowance; termination releases the whole WASM arena.
-    watchdog = setTimeout(() => { if (id === generation && busy) { setStatus(route ? 'Stopped at deadline. Verified route retained.' : 'Worker deadline reached.'); endRun(); } }, request.timeMs + 2000);
+    thisRun.watchdog = setTimeout(() => { if (thisRun === run && thisRun.busy) { setStatus(thisRun.route ? 'Stopped at deadline. Verified route retained.' : 'Worker deadline reached.'); endRun(); } }, request.timeMs + 2000);
   } else {
-    requestAbort = new AbortController();
-    watchdog = setTimeout(() => requestAbort?.abort(), request.timeMs + 5000);
+    const abort = new AbortController();
+    thisRun.abort = abort;
+    thisRun.watchdog = setTimeout(() => abort.abort(), request.timeMs + 5000);
     try {
-      const response = await fetch('/api/solve', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: requestAbort.signal,
+      const response = await fetch('/api/solve', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: abort.signal,
         body: JSON.stringify({ rows: current.rows, actions: request.actions, mode: request.mode, time_ms: request.timeMs, max_states: request.maxStates, memory_mib: request.memoryMiB }) });
       if (!response.ok) {
         const error = (await errorText(response)) ?? `Server returned HTTP ${response.status}`;
@@ -229,13 +241,14 @@ async function solve() {
         throw new Error(response.status === 429 && !/browser/i.test(error) ? `${error}. The browser solver still works: set Run on to This browser.` : error);
       }
       const r = await response.json();
-      if (id !== generation) return;
-      const proofKinds: Record<string, number> = { bounded: 1, optimal: 2, unsolvable: 3 };
-      applyUpdate({ type: 'done', status: r.status, route: r.route ?? undefined, elapsedMs: r.elapsed_ms,
-        metrics: new Uint32Array([r.expanded, r.generated, r.reserved_bytes, r.moves ?? 0xffffffff,
-          r.proof ? proofKinds[r.proof.kind] ?? 0 : 0, r.proof?.lower_bound ?? 0xffffffff]) });
+      if (thisRun !== run) return;
+      const p = r.proof;
+      const proof: Proof = !p ? { kind: 'none' } : p.kind === 'optimal' ? { kind: 'optimal', moves: p.upper_bound }
+        : p.kind === 'bounded' ? { kind: 'bounded', lower: p.lower_bound, upper: p.upper_bound } : { kind: 'unsolvable' };
+      applyUpdate(thisRun, { type: 'done', route: r.route ?? undefined, elapsedMs: r.elapsed_ms,
+        metrics: { expanded: r.expanded, generated: r.generated, reservedBytes: r.reserved_bytes, best: r.moves ?? undefined, lowerBound: p?.lower_bound, proof, status: r.status } });
     } catch (error) {
-      if (id === generation) fail(error instanceof DOMException && error.name === 'AbortError'
+      if (thisRun === run) fail(error instanceof DOMException && error.name === 'AbortError'
         ? `Server search exceeded its ${request.timeMs / 1000} s budget.`
         : error);
     }
@@ -243,12 +256,17 @@ async function solve() {
 }
 
 async function start() {
+  const mode = select('mode');
+  const syncModeHelp = () => setText('mode-help', mode.selectedOptions[0]?.dataset.help ?? '');
+  mode.onchange = syncModeHelp;
+  // The browser can restore the select's value on reload; match the help text.
+  syncModeHelp();
   await init({ module_or_path: wasmUrl });
   const selector = select('puzzles');
   for (const puzzle of catalog) selector.add(new Option(`${puzzle.title} · ${puzzle.difficulty}`, puzzle.id));
   selector.add(new Option('Custom puzzle', 'custom'));
   const saved = storage.session();
-  const savedPuzzle = saved?.id === 'custom' ? { id: 'custom', title: 'Your puzzle', difficulty: 'custom', rows: saved.rows.split('\n') } : catalog.find(p => p.id === saved?.id);
+  const savedPuzzle = saved?.id === 'custom' ? customPuzzle(saved.rows) : catalog.find(p => p.id === saved?.id);
   const canRestore = savedPuzzle && savedPuzzle.rows.join('\n') === saved?.rows;
   // A stale saved layout falls back to the saved puzzle itself, not puzzle one.
   const target = savedPuzzle ?? catalog[0];
@@ -268,20 +286,19 @@ async function start() {
   button('reset').onclick = () => { invalidate(); game.reset(); changed(); };
   button('best').onclick = () => {
     const best = readBest(); if (!best) return;
-    try { verify(best.route); invalidate(); game.reset(); render(); animate(best.route); } catch (error) { message(String(error)); }
+    invalidate(); game.reset(); render(); animate(best.route);
   };
   button('load-custom').onclick = () => {
-    try { load({ id: 'custom', title: 'Your puzzle', difficulty: 'custom', rows: $<HTMLTextAreaElement>('rows').value.replace(/\r/g, '').replace(/^\n|\n$/g, '').split('\n') }); }
-    catch (error) { message(String(error)); }
+    try { load(customPuzzle($<HTMLTextAreaElement>('rows').value.replace(/\r/g, '').replace(/^\n|\n$/g, ''))); }
+    catch (error) { message(errorMessage(error)); }
   };
   button('load-route').onclick = () => {
     const actions = $<HTMLTextAreaElement>('route-input').value.toUpperCase().replace(/\s/g, '');
     if (!actions) { message('Route is empty.'); return; }
-    if (actions.length > 100000) { message('Route exceeds 100000 moves.'); return; }
     try {
       // Rust validates the whole replay atomically before replacing the current state.
       game.replay(actions); invalidate(); changed();
-    } catch (error) { message(String(error)); }
+    } catch (error) { message(errorMessage(error)); }
   };
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]')) control.onclick = () => move(Number(control.dataset.direction));
   // Swipe on the board moves the robot; taps stay with the on-screen buttons.
@@ -318,41 +335,36 @@ async function start() {
   });
   button('solve').onclick = () => { void solve(); };
   button('cancel').onclick = () => {
-    if (playback || pausedRoute) { endPlayback(); message('Playback stopped.'); return; }
-    if (worker) {
+    if (playback) { endPlayback(); message('Playback stopped.'); return; }
+    const thisRun = run;
+    if (!thisRun?.busy) return;
+    if (thisRun.worker) {
       // The grace period covers rebuilding the final best route, which the worker sends last.
-      worker.postMessage({ type: 'cancel' }); clearTimeout(watchdog);
-      watchdog = setTimeout(() => { setStatus(route ? 'Stopped. Verified route retained.' : 'Stopped.'); endRun(); }, 1000);
-    } else { generation++; requestAbort?.abort(); setStatus('Stopped waiting for the native search.'); endRun(); }
+      thisRun.worker.postMessage({ type: 'cancel' }); clearTimeout(thisRun.watchdog);
+      thisRun.watchdog = setTimeout(() => { setStatus(thisRun.route ? 'Stopped. Verified route retained.' : 'Stopped.'); endRun(); }, 1000);
+    } else { endRun(); run = undefined; setStatus('Stopped waiting for the native search.'); }
   };
   button('play').onclick = () => {
-    if (playback) {
-      pausedRoute = { actions: playback.actions, index: playback.index };
-      stopPlayback(); button('play').textContent = 'Resume'; updateButtons();
-    } else if (pausedRoute) {
-      animate(pausedRoute.actions, pausedRoute.index);
-    } else if (route) {
-      animate(route);
-    }
+    if (playback && !playback.paused) { clearInterval(playback.timer); playback.paused = true; updateButtons(); }
+    else if (playback) animate(playback.route, playback.index);
+    else if (run?.route) animate(run.route);
   };
   button('copy').onclick = async () => {
-    try { await navigator.clipboard.writeText(runPrefix + (route || '')); message('Full route copied as U/D/L/R.'); }
+    if (!run?.route) return;
+    try { await navigator.clipboard.writeText(run.prefix + run.route); message('Full route copied as U/D/L/R.'); }
     catch { message('Clipboard is unavailable in this browser.'); }
   };
-  const modeHelp: Record<string, string> = { fast: 'Prioritizes a quick first route. It may use extra moves and never proves optimality.', quality: 'Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality.', optimal: 'Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal.' };
-  const syncModeHelp = () => { $('mode-help').textContent = modeHelp[select('mode').value] ?? ''; };
-  select('mode').onchange = syncModeHelp;
-  // The browser can restore the select's value on reload; match the help text.
-  syncModeHelp();
   addEventListener('resize', () => render());
-  addEventListener('pagehide', saveSession);
+  addEventListener('pagehide', () => saveSession());
+  // Mobile browsers often skip pagehide, so hiding the page flushes the pending save too.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveSession(); });
   try {
     const response = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
     if (response.ok) {
       const health = await response.json(); persistence = health.persistence === true;
-      $('connection').textContent = persistence ? 'PostgreSQL connected' : 'Native solver connected';
+      setText('connection', persistence ? 'PostgreSQL connected' : 'Native solver connected');
       if (persistence) void pullBest();
     }
   } catch { /* Static hosting needs no backend. */ }
 }
-start().catch(error => message(`Could not start WebAssembly: ${String(error)}. Run npm run wasm and reload.`));
+start().catch(error => message(`Could not start WebAssembly: ${errorMessage(error)}. Run npm run wasm and reload.`));

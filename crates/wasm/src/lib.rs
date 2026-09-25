@@ -1,4 +1,4 @@
-use sokomind_core::{Board, Game};
+use sokomind_core::{Board, Game, MAX_ROUTE};
 use sokomind_search::{Mode, Proof, Search, Status};
 use wasm_bindgen::prelude::*;
 
@@ -84,6 +84,13 @@ impl WasmSearch {
         let board = Board::parse(rows).map_err(|e| JsError::new(&e))?;
         let mut game = Game::new(board);
         game.replay(actions).map_err(|e| JsError::new(&e))?;
+        // A full-length unsolved position can only be extended past the
+        // limit; refuse before spending the search budget on it.
+        if actions.len() >= MAX_ROUTE && !game.solved() {
+            return Err(JsError::new(&format!(
+                "Position and route together exceed the {MAX_ROUTE}-move replay limit"
+            )));
+        }
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
         let start = game.state();
         let search = Search::new(
@@ -96,8 +103,10 @@ impl WasmSearch {
         .map_err(|e| JsError::new(&e))?;
         Ok(Self { search })
     }
-    pub fn advance(&mut self, expansions: u32) {
-        self.search.advance(expansions.min(256));
+    /// Runs up to `pops` queue pops; true while the search is still running.
+    pub fn advance(&mut self, pops: u32) -> bool {
+        self.search.advance(pops);
+        self.search.status() == Status::Running
     }
     pub fn stop(&mut self, timeout: bool) {
         self.search.stop(if timeout {
@@ -109,21 +118,15 @@ impl WasmSearch {
     pub fn status(&self) -> String {
         self.search.status().as_str().into()
     }
-    /// expanded, generated, accounted reserved bytes, best moves (u32::MAX if
-    /// none), proof kind (0 none, 1 bounded, 2 optimal, 3 unsolvable), and the
-    /// certified lower bound (u32::MAX if none).
+    /// expanded, generated, accounted reserved bytes, best moves, proof kind
+    /// (0 none, 1 bounded, 2 optimal, 3 unsolvable) and the live certified
+    /// lower bound; u32::MAX marks a missing best or bound.
     pub fn metrics(&self) -> Vec<u32> {
-        let proof = self.search.proof();
-        let kind = match proof {
-            Some(Proof::Optimal { .. }) => 2,
-            Some(Proof::Bounded { .. }) => 1,
-            Some(Proof::Unsolvable) => 3,
+        let kind = match self.search.proof() {
             None => 0,
-        };
-        let lower = match proof {
-            Some(Proof::Bounded { lower_bound, .. }) => lower_bound,
-            Some(Proof::Optimal { moves }) => moves,
-            _ => self.search.lower_bound().unwrap_or(u32::MAX),
+            Some(Proof::Bounded { .. }) => 1,
+            Some(Proof::Optimal { .. }) => 2,
+            Some(Proof::Unsolvable) => 3,
         };
         vec![
             self.search.expanded(),
@@ -131,7 +134,7 @@ impl WasmSearch {
             self.search.reserved_bytes() as u32,
             self.search.best_moves().unwrap_or(u32::MAX),
             kind,
-            lower,
+            self.search.lower_bound().unwrap_or(u32::MAX),
         ]
     }
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {
