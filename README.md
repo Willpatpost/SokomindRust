@@ -60,7 +60,7 @@ best play to the end re-uploads its local best.
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free exact and bounded engines over a shared arena, transposition table, reachability, assignment, and sound deadlock pruning; proof certificates |
+| `crates/search` | Dependency-free push A*: one policy-driven engine over a reserved arena and transposition table, reachability, label assignment heuristic, and sound deadlock pruning; exact proofs |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX, bounded native CPU jobs, SQLx/PostgreSQL route verification |
 | `web/src` | Vite/TypeScript, HTML/CSS, canvas renderer, cancellable module worker |
@@ -77,21 +77,26 @@ stream requiring WebSockets.
 The search uses dense u16 cells, precomputed neighbors, fixed inline box arrays,
 equal-label canonicalization, an arena-index transposition table, reusable flood
 buffers, reverse-push distances, and a minimum-cost assignment per box label
-(dual-repaired from the parent for label groups of 8 or more boxes).
+(only the pushed box's label group is re-scored per child: a lookup for one box,
+a re-solve for two, and a one-row dual repair of the parent's duals for groups
+of 3 or more; pushes onto a cell with no reachable goal of the box's label are
+dropped before the estimate).
 Each edge is one push plus a shortest walk to its support cell. Keeper position
 remains part of state identity. Walks are reconstructed only for reported routes.
 
-Fast and Quality run one bounded engine: weighted A* that returns its first
-route, with Quality continuing to preserve the shortest verified incumbent.
-Neither ever proves anything. Optimal runs a separate exact kernel: admissible
-A* with reopenings, the only source of certificates. It reports `optimal` when a
-goal pops or the frontier empties with a verified route, and `unsolvable` only
-when the frontier empties without one. When a limit or cancellation stops it
-with a route, it reports `optimal` if the frontier's lower bound has reached
-the route's length, otherwise `bounded` (verified route plus a certified lower
-bound and gap). A run stopped before any route carries no certificate.
-Both engines share the reference's sound post-push deadlock pruning: fully
-blocked 2x2 wall/box squares and frozen-component fixpoints, which only
+All three modes run one engine; a `Policy` sets the queue weight and the goal
+and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
+route and never re-expands a closed node. Quality (`g + 3h`) keeps improving the
+shortest verified incumbent until its queue empties or a limit hits. Neither
+ever proves anything. Optimal wraps the same engine as `ExactSearch`:
+admissible A* (weight 1) with reopenings, the only source of proofs. It reports
+`optimal` when a goal pops or the frontier empties with a verified route, and
+`unsolvable` only when the frontier empties without one. When a limit or
+cancellation stops it with a route, it reports `optimal` if the frontier's
+lower bound has reached the route's length, otherwise `bounded` (verified route
+plus a sound lower bound and gap). A run stopped before any route carries no
+proof. Every mode shares the reference's sound post-push deadlock pruning:
+fully blocked 2x2 wall/box squares and frozen-component fixpoints, which only
 remove states from which no solution exists.
 The objective is total remaining moves, not pushes. These are MVP algorithms:
 the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
@@ -101,9 +106,10 @@ is not claimed.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 500,000 states,
 64 MiB accounted search storage, and one concurrent CPU job by default (see
-`SOLVE_CONCURRENCY` under Configuration). The search memory metric covers major
-reserved structures, not process RSS, allocator overhead, WASM runtime, or
-frontend memory. Deadline checks occur between bounded expansion batches;
+`SOLVE_CONCURRENCY` under Configuration). The search memory metric is computed
+from reserved buffer sizes (arena, queue, table, and per-cell flood, deadlock,
+dead-cell, and distance buffers), not process RSS, allocator overhead, WASM
+runtime, or frontend memory. Deadline checks occur between bounded expansion batches;
 setup/reconstruction can add latency.
 
 ## HTTP
@@ -192,9 +198,10 @@ npm run test:rust
 npm run build
 ```
 
-`test:rust` includes the reference solver's frozen fixtures: 42 boards whose
-independent step-oracle optima, soundness regressions, and one proven
-unsolvable must all be reproduced exactly.
+`test:rust` includes the one search test binary, `crates/search/tests/search.rs`,
+with the reference solver's frozen fixtures (`fixtures::<name>`): 42 boards
+whose independent step-oracle optima, soundness regressions, and one proven
+unsolvable the exact engine must all reproduce exactly.
 
 `SokomindSolver/` was read as the behavior reference and left unchanged. Puzzle
 data retains the original MIT license. The MVP deliberately omits React, PWA,
