@@ -11,11 +11,16 @@ use axum::{
 };
 use client::TrustedProxies;
 use limit::RateLimiter;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 use std::{
     env,
+    fmt::Display,
     net::SocketAddr,
     ops::RangeInclusive,
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -35,14 +40,23 @@ const MAX_RETENTION_DAYS: i32 = 36_500;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configuration errors fail before the database wait, not after it.
+    // Configuration, catalog and bind errors fail before the database wait,
+    // not after it.
     let proxies = TrustedProxies::parse(&env::var("TRUSTED_PROXIES").unwrap_or_default())?;
     let concurrency = env_setting("SOLVE_CONCURRENCY", 1..=8, 1);
     let solve_rate = env_setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
-    let retention = retention_days();
-    let db = match database_url()? {
-        Some(url) => {
-            let pool = connect(&url).await?;
+    let retention = retention(env_setting(
+        "PROGRESS_RETENTION_DAYS",
+        0..=MAX_RETENTION_DAYS,
+        0,
+    ));
+    let options = database_options()?;
+    let catalog = api::load_catalog()?;
+    let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let listener = TcpListener::bind(&bind).await?;
+    let db = match options {
+        Some(options) => {
+            let pool = connect(options).await?;
             sqlx::migrate!("../../migrations").run(&pool).await?;
             if let Some(days) = retention {
                 tokio::spawn(expire_progress(pool.clone(), days));
@@ -56,26 +70,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
-    let catalog: Vec<api::Puzzle> =
-        serde_json::from_str(include_str!("../../../data/puzzles.json"))?;
-    for puzzle in &catalog {
-        sokomind_core::Board::parse(&puzzle.rows.join("\n"))?;
-    }
     let state = api::App {
         db,
         catalog: Arc::new(catalog),
         slots: Arc::new(Semaphore::new(concurrency)),
         proxies: Arc::new(proxies),
         saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
-        solves: Arc::new(RateLimiter::new(solve_rate as u32, RATE_WINDOW)),
+        solves: Arc::new(RateLimiter::new(solve_rate, RATE_WINDOW)),
     };
-    // API only: nginx serves the web app and adds the security and cache
-    // headers. Any unrouted path, under /api or not, is a JSON 404.
-    let app = Router::new()
+    eprintln!("Sokomind API listening at http://{bind}");
+    // axum's serve() gives hyper no timer, so hyper's 30 s header read
+    // timeout never arms; nginx, the required edge, bounds slow clients and
+    // connection counts.
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
+    Ok(())
+}
+
+/// API only: nginx serves the web app and adds the security and cache
+/// headers. Any unrouted path, under /api or not, is a JSON 404.
+fn router(state: api::App) -> Router {
+    Router::new()
         .route("/api/health", get(api::health))
-        .route("/api/puzzles", get(api::catalog))
         .route("/api/solve", post(solve::solve))
-        .route("/api/progress", get(progress::list))
         .route(
             "/api/progress/{id}",
             get(progress::get).post(progress::save),
@@ -83,53 +104,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(api_not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .with_state(state);
-    let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
-    let listener = TcpListener::bind(&bind).await?;
-    eprintln!("Sokomind API listening at http://{bind}");
-    // axum's serve() gives hyper no timer, so hyper's 30 s header read
-    // timeout never arms; nginx, the required edge, bounds slow clients and
-    // connection counts.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown())
-    .await?;
-    Ok(())
+        .with_state(state)
 }
 
-/// Unset or empty means `default`; out-of-range values are clamped and
-/// anything else falls back to `default`, with a warning either way.
-fn env_setting(name: &str, range: RangeInclusive<usize>, default: usize) -> usize {
-    let value = env::var(name).unwrap_or_default();
-    if value.is_empty() {
-        return default;
+/// Reads `name` from the environment; see [`parse_setting`].
+fn env_setting<T: FromStr + PartialOrd + Copy + Display>(
+    name: &str,
+    range: RangeInclusive<T>,
+    default: T,
+) -> T {
+    let (value, warning) = parse_setting(name, &env::var(name).unwrap_or_default(), range, default);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
     }
-    match value.parse::<usize>() {
-        Ok(n) if range.contains(&n) => n,
+    value
+}
+
+/// Empty means `default`; out-of-range values are clamped and anything
+/// else falls back to `default`, with a warning either way.
+fn parse_setting<T: FromStr + PartialOrd + Copy + Display>(
+    name: &str,
+    value: &str,
+    range: RangeInclusive<T>,
+    default: T,
+) -> (T, Option<String>) {
+    if value.is_empty() {
+        return (default, None);
+    }
+    let (start, end) = (*range.start(), *range.end());
+    match value.parse::<T>() {
+        Ok(n) if range.contains(&n) => (n, None),
         Ok(n) => {
-            let (start, end) = range.into_inner();
-            let clamped = n.clamp(start, end);
-            eprintln!("{name}={n} is outside {start}..{end}; using {clamped}");
-            clamped
+            let clamped = if n < start { start } else { end };
+            let warning = format!("{name}={n} is outside {start}..{end}; using {clamped}");
+            (clamped, Some(warning))
         }
         Err(_) => {
-            eprintln!("{name}={value:?} is not a number; using {default}");
-            default
+            let warning = format!("{name}={value:?} is not a number; using {default}");
+            (default, Some(warning))
         }
     }
+}
+
+/// PROGRESS_RETENTION_DAYS: 0, the default, keeps progress forever.
+fn retention(days: i32) -> Option<i32> {
+    (days > 0).then_some(days)
 }
 
 /// Retries only while the database is unreachable, for about
 /// DB_RETRY_WINDOW; bad credentials or a missing database fail at once.
-async fn connect(url: &str) -> Result<PgPool, Box<dyn std::error::Error>> {
+async fn connect(options: PgConnectOptions) -> Result<PgPool, Box<dyn std::error::Error>> {
     let deadline = Instant::now() + DB_RETRY_WINDOW;
     loop {
         let error = match PgPoolOptions::new()
             .max_connections(DB_POOL_SIZE)
             .acquire_timeout(DB_ACQUIRE_TIMEOUT)
-            .connect(url)
+            .connect_with(options.clone())
             .await
         {
             Ok(pool) => return Ok(pool),
@@ -140,24 +170,6 @@ async fn connect(url: &str) -> Result<PgPool, Box<dyn std::error::Error>> {
         }
         eprintln!("PostgreSQL is not reachable yet ({error}); retrying");
         tokio::time::sleep(DB_RETRY_PAUSE).await;
-    }
-}
-
-/// PROGRESS_RETENTION_DAYS: unset or 0 keeps progress forever.
-fn retention_days() -> Option<i32> {
-    let value = env::var("PROGRESS_RETENTION_DAYS").unwrap_or_default();
-    if value.is_empty() {
-        return None;
-    }
-    match value.parse::<i32>() {
-        Ok(0) => None,
-        Ok(days) if (1..=MAX_RETENTION_DAYS).contains(&days) => Some(days),
-        _ => {
-            eprintln!(
-                "PROGRESS_RETENTION_DAYS={value:?} is not a number of days in 0..{MAX_RETENTION_DAYS}; progress is kept forever"
-            );
-            None
-        }
     }
 }
 
@@ -189,45 +201,37 @@ async fn api_not_found() -> api::Error {
 }
 
 async fn method_not_allowed() -> api::Error {
-    api::Error(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed".into())
+    api::Error::new(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed")
 }
 
-/// DATABASE_PASSWORD composes the URL here so deployments can pass a raw
-/// password: components are percent-encoded, which URL text cannot do for
-/// itself.
-fn database_url() -> Result<Option<String>, Box<dyn std::error::Error>> {
+/// DATABASE_URL wins. Otherwise DATABASE_PASSWORD enables persistence and
+/// the other DATABASE_* parts default to the compose service; the parts
+/// are passed as they are, so a raw password needs no URL encoding.
+fn database_options() -> Result<Option<PgConnectOptions>, Box<dyn std::error::Error>> {
     if let Ok(url) = env::var("DATABASE_URL") {
-        return Ok(Some(url));
+        return Ok(Some(url.parse()?));
     }
-    match env::var("DATABASE_PASSWORD") {
-        Ok(password) => {
-            let user = env::var("DATABASE_USER").unwrap_or_else(|_| "sokomind".into());
-            let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "db".into());
-            let port = env::var("DATABASE_PORT").unwrap_or_else(|_| "5432".into());
-            let name = env::var("DATABASE_NAME").unwrap_or_else(|_| "sokomind".into());
-            Ok(Some(format!(
-                "postgres://{}:{}@{}:{}/{}",
-                percent_encode(&user),
-                percent_encode(&password),
-                host,
-                port,
-                percent_encode(&name)
-            )))
-        }
-        Err(_) => Ok(None),
-    }
-}
-fn percent_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
+    let Ok(password) = env::var("DATABASE_PASSWORD") else {
+        return Ok(None);
+    };
+    let part = |name: &str, default: &str| -> String {
+        env::var(name)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default.into())
+    };
+    let port = part("DATABASE_PORT", "5432");
+    let port: u16 = port
+        .parse()
+        .map_err(|_| format!("DATABASE_PORT={port:?} is not a port number"))?;
+    Ok(Some(
+        PgConnectOptions::new()
+            .host(&part("DATABASE_HOST", "db"))
+            .port(port)
+            .username(&part("DATABASE_USER", "sokomind"))
+            .password(&password)
+            .database(&part("DATABASE_NAME", "sokomind")),
+    ))
 }
 
 async fn shutdown() {
@@ -241,5 +245,44 @@ async fn shutdown() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_default_clamp_and_reject() {
+        let cases = [
+            ("", 1, None),
+            ("4", 4, None),
+            ("8", 8, None),
+            ("0", 1, Some("N=0 is outside 1..8; using 1")),
+            ("99", 8, Some("N=99 is outside 1..8; using 8")),
+            ("-1", 1, Some("N=\"-1\" is not a number; using 1")),
+            ("two", 1, Some("N=\"two\" is not a number; using 1")),
+        ];
+        for (value, expected, warning) in cases {
+            let (n, message) = parse_setting::<usize>("N", value, 1..=8, 1);
+            assert_eq!((n, message.as_deref()), (expected, warning), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn retention_zero_keeps_forever_and_large_values_clamp() {
+        let cases = [
+            ("", None),
+            ("0", None),
+            ("-5", None),
+            ("30", Some(30)),
+            ("36500", Some(36_500)),
+            ("99999", Some(36_500)),
+            ("soon", None),
+        ];
+        for (value, expected) in cases {
+            let (days, _) = parse_setting("D", value, 0..=MAX_RETENTION_DAYS, 0);
+            assert_eq!(retention(days), expected, "{value:?}");
+        }
     }
 }

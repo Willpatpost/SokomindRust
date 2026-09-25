@@ -6,9 +6,10 @@ use axum::{
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
+use sokomind_core::Board;
 use sqlx::PgPool;
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 /// Under the frontend's 1.5 s health timeout even when the database hangs.
@@ -20,34 +21,42 @@ const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub struct App {
     pub db: Option<PgPool>,
-    pub catalog: Arc<Vec<Puzzle>>,
+    pub catalog: Arc<HashMap<String, Board>>,
     pub slots: Arc<Semaphore>,
     pub proxies: Arc<TrustedProxies>,
     pub saves: Arc<RateLimiter>,
     pub solves: Arc<RateLimiter>,
 }
-#[derive(Serialize, Deserialize)]
-pub struct Puzzle {
-    pub id: String,
-    pub title: String,
-    pub difficulty: String,
-    pub boxes: u32,
-    pub rows: Vec<String>,
-    pub hint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub collection: Option<String>,
-    #[serde(
-        rename = "generationMode",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub generation_mode: Option<String>,
-    #[serde(
-        rename = "topologyFamily",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub topology_family: Option<String>,
+impl App {
+    pub fn db(&self) -> Result<&PgPool, Error> {
+        self.db.as_ref().ok_or_else(Error::unavailable)
+    }
+    pub fn puzzle(&self, id: &str) -> Result<&Board, Error> {
+        self.catalog
+            .get(id)
+            .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "Unknown catalog puzzle"))
+    }
+}
+/// The fields of a `data/puzzles.json` entry the server needs; serde
+/// ignores the rest.
+#[derive(Deserialize)]
+struct Puzzle {
+    id: String,
+    rows: Vec<String>,
+}
+/// Parses the embedded catalog once, keyed by puzzle id.
+pub fn load_catalog() -> Result<HashMap<String, Board>, String> {
+    let puzzles: Vec<Puzzle> = serde_json::from_str(include_str!("../../../data/puzzles.json"))
+        .map_err(|error| format!("puzzle catalog: {error}"))?;
+    let mut catalog = HashMap::with_capacity(puzzles.len());
+    for Puzzle { id, rows } in puzzles {
+        let board =
+            Board::parse(&rows.join("\n")).map_err(|error| format!("puzzle {id}: {error}"))?;
+        if catalog.insert(id.clone(), board).is_some() {
+            return Err(format!("puzzle {id} appears twice in the catalog"));
+        }
+    }
+    Ok(catalog)
 }
 /// JSON body extractor that keeps the API's `{error}` response shape for
 /// malformed payloads instead of axum's plain-text rejections.
@@ -61,10 +70,10 @@ where
     async fn from_request(request: Request, state: &S) -> Result<Self, Error> {
         match tokio::time::timeout(BODY_TIMEOUT, Json::<T>::from_request(request, state)).await {
             Ok(Ok(Json(value))) => Ok(ApiJson(value)),
-            Ok(Err(rejection)) => Err(Error(rejection.status(), rejection.body_text())),
-            Err(_) => Err(Error(
+            Ok(Err(rejection)) => Err(Error::new(rejection.status(), rejection.body_text())),
+            Err(_) => Err(Error::new(
                 StatusCode::REQUEST_TIMEOUT,
-                "Request body timed out".into(),
+                "Request body timed out",
             )),
         }
     }
@@ -80,22 +89,28 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
         match Path::<T>::from_request_parts(parts, state).await {
             Ok(Path(value)) => Ok(ApiPath(value)),
-            Err(rejection) => Err(Error(rejection.status(), rejection.body_text())),
+            Err(rejection) => Err(Error::new(rejection.status(), rejection.body_text())),
         }
     }
 }
 pub struct Error(pub StatusCode, pub String);
 impl Error {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self(status, message.into())
+    }
     pub fn bad(message: impl Into<String>) -> Self {
-        Self(StatusCode::BAD_REQUEST, message.into())
+        Self::new(StatusCode::BAD_REQUEST, message)
+    }
+    pub fn too_many(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, message)
     }
     pub fn not_found() -> Self {
-        Self(StatusCode::NOT_FOUND, "Unknown API endpoint".into())
+        Self::new(StatusCode::NOT_FOUND, "Unknown API endpoint")
     }
     pub fn unavailable() -> Self {
-        Self(
+        Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "PostgreSQL persistence is unavailable".into(),
+            "PostgreSQL persistence is unavailable",
         )
     }
     /// An unreachable database is the same 503 as an unconfigured one;
@@ -110,10 +125,7 @@ impl Error {
     }
     pub fn internal(message: impl std::fmt::Display) -> Self {
         eprintln!("request failed: {message}");
-        Self(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Server operation failed".into(),
-        )
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "Server operation failed")
     }
 }
 /// Failures that mean the database cannot be reached right now (refused,
@@ -145,9 +157,6 @@ pub async fn health(State(app): State<App>) -> Json<serde_json::Value> {
         false
     };
     Json(serde_json::json!({ "status": "ok", "persistence": persistence }))
-}
-pub async fn catalog(State(app): State<App>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(&*app.catalog).expect("catalog serialization"))
 }
 
 #[cfg(test)]
@@ -192,6 +201,13 @@ mod tests {
         let unprocessable = Some(StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(extract(json, r#"{"route":1}"#).await.err(), unprocessable);
         assert_eq!(extract(json, "{}").await.err(), unprocessable);
+    }
+
+    #[test]
+    fn every_embedded_puzzle_parses() {
+        let catalog = load_catalog().unwrap();
+        assert!(!catalog.is_empty());
+        assert!(catalog.values().all(|board| !board.fingerprint.is_empty()));
     }
 
     #[test]

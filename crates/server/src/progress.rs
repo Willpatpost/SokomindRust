@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
-use sokomind_core::{Board, Game};
+use sokomind_core::Game;
 use sqlx::Row;
 use std::net::SocketAddr;
 
@@ -28,8 +28,7 @@ pub struct Record {
     puzzle_id: String,
     moves: i32,
     pushes: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    route: Option<String>,
+    route: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,9 +36,6 @@ pub struct Save {
     route: String,
 }
 
-const LIST: &str = "
-SELECT puzzle_id, moves, pushes, fingerprint FROM progress
-WHERE profile = $1 ORDER BY puzzle_id";
 const FETCH: &str = "
 SELECT puzzle_id, moves, pushes, route FROM progress
 WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3";
@@ -53,65 +49,29 @@ SET moves = EXCLUDED.moves,
     updated_at = now()
 WHERE (EXCLUDED.moves, EXCLUDED.pushes) < (progress.moves, progress.pushes)";
 
-fn current_fingerprint(app: &App, id: &str) -> Option<String> {
-    app.catalog
-        .iter()
-        .find(|puzzle| puzzle.id == id)
-        .and_then(|puzzle| Board::parse(&puzzle.rows.join("\n")).ok())
-        .map(|board| board.fingerprint)
-}
-
-pub async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Vec<Record>>, Error> {
-    let profile = profile(&headers)?;
-    let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let rows = sqlx::query(LIST)
-        .bind(profile)
-        .fetch_all(db)
-        .await
-        .map_err(Error::database)?;
-    // A catalog layout change retires old records: they cannot be beaten by
-    // fresh saves and their routes no longer replay.
-    let records = rows
-        .into_iter()
-        .filter(|row| {
-            current_fingerprint(&app, &row.get::<String, _>("puzzle_id"))
-                .is_some_and(|current| current == row.get::<String, _>("fingerprint"))
-        })
-        .map(|row| Record {
-            puzzle_id: row.get("puzzle_id"),
-            moves: row.get("moves"),
-            pushes: row.get("pushes"),
-            route: None,
-        })
-        .collect();
-    Ok(Json(records))
-}
 pub async fn get(
     State(app): State<App>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<Record>, Error> {
     let profile = profile(&headers)?;
-    let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let Some(fingerprint) = current_fingerprint(&app, &id) else {
-        return Err(Error(
-            StatusCode::NOT_FOUND,
-            "Unknown catalog puzzle".into(),
-        ));
-    };
+    let db = app.db()?;
+    // A catalog layout change retires old records: they cannot be beaten by
+    // fresh saves and their routes no longer replay.
+    let fingerprint = &app.puzzle(&id)?.fingerprint;
     let row = sqlx::query(FETCH)
         .bind(profile)
         .bind(&id)
-        .bind(&fingerprint)
+        .bind(fingerprint)
         .fetch_optional(db)
         .await
         .map_err(Error::database)?
-        .ok_or_else(|| Error(StatusCode::NOT_FOUND, "No saved route".into()))?;
+        .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "No saved route"))?;
     Ok(Json(Record {
         puzzle_id: row.get("puzzle_id"),
         moves: row.get("moves"),
         pushes: row.get("pushes"),
-        route: Some(row.get("route")),
+        route: row.get("route"),
     }))
 }
 pub async fn save(
@@ -123,29 +83,20 @@ pub async fn save(
 ) -> Result<Json<serde_json::Value>, Error> {
     let profile = profile(&headers)?;
     if body.route.len() > MAX_SAVED_ROUTE {
-        return Err(Error::bad("Route exceeds 10000 moves"));
+        return Err(Error::bad(format!("Route exceeds {MAX_SAVED_ROUTE} moves")));
     }
-    let Some(puzzle) = app.catalog.iter().find(|p| p.id == id) else {
-        return Err(Error(
-            StatusCode::NOT_FOUND,
-            "Unknown catalog puzzle".into(),
-        ));
-    };
-    let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
+    let board = app.puzzle(&id)?.clone();
+    let db = app.db()?;
     // Charged after the cheap checks: the budget guards replays and writes,
     // so malformed or misaddressed saves should not spend it.
     if !app.saves.allow(app.proxies.client(&headers, peer.ip())) {
-        return Err(Error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many saves; try again shortly".into(),
-        ));
+        return Err(Error::too_many("Too many saves; try again shortly"));
     }
-    let rows = puzzle.rows.join("\n");
     let route = body.route;
     let replay_route = route.clone();
     // Replay is pure CPU: keep it off the async runtime, like the solver.
     let verified = tokio::task::spawn_blocking(move || {
-        let mut game = Game::new(Board::parse(&rows)?);
+        let mut game = Game::new(board);
         // Never trust client counters, box coordinates, solved flags, or optimality claims.
         game.replay(&replay_route)?;
         if !game.solved() {

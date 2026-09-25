@@ -20,8 +20,23 @@ use std::{
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
 const MAX_STATES: RangeInclusive<usize> = 1..=500_000;
 const MEMORY_MIB: RangeInclusive<usize> = 4..=64;
-const LIMITS: &str = "Server limits: 10..30000 ms, 1..500000 states, 4..64 MiB";
-const ROUTE_LIMIT: &str = "Position and route together exceed the 100000-move replay limit";
+
+fn limits() -> Error {
+    Error::bad(format!(
+        "Server limits: {}..{} ms, {}..{} states, {}..{} MiB",
+        TIME_MS.start(),
+        TIME_MS.end(),
+        MAX_STATES.start(),
+        MAX_STATES.end(),
+        MEMORY_MIB.start(),
+        MEMORY_MIB.end()
+    ))
+}
+fn route_limit() -> Error {
+    Error::bad(format!(
+        "Position and route together exceed the {MAX_ROUTE}-move replay limit"
+    ))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,23 +120,21 @@ pub async fn solve(
         || !MAX_STATES.contains(&request.max_states)
         || !MEMORY_MIB.contains(&request.memory_mib)
     {
-        return Err(Error::bad(LIMITS));
+        return Err(limits());
     }
     let mode = Mode::parse(&request.mode).map_err(Error::bad)?;
     // The busy slot only stops concurrent solves; this stops one client
     // from taking every slot the moment it frees.
     if !app.solves.allow(app.proxies.client(&headers, peer.ip())) {
-        return Err(Error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many solve requests; try again shortly".into(),
+        return Err(Error::too_many(
+            "Too many solve requests; try again shortly",
         ));
     }
-    let permit = app.slots.clone().try_acquire_owned().map_err(|_| {
-        Error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Solver busy; try the browser solver or retry later".into(),
-        )
-    })?;
+    let permit = app
+        .slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| Error::too_many("Solver busy; try the browser solver or retry later"))?;
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancel.clone());
     // CPU search never occupies an async Tokio worker; no unbounded job queue.
@@ -134,7 +147,7 @@ pub async fn solve(
         // A full-length unsolved position can only be extended past the
         // limit; refuse before spending the search budget on it.
         if request.actions.len() >= MAX_ROUTE && !game.solved() {
-            return Err(Error::bad(ROUTE_LIMIT));
+            return Err(route_limit());
         }
         let initial_moves = game.moves();
         let initial_pushes = game.pushes;
@@ -146,9 +159,9 @@ pub async fn solve(
             request.memory_mib,
         )
         .map_err(|_| {
-            Error(
+            Error::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Search allocation failed; lower the memory budget".into(),
+                "Search allocation failed; lower the memory budget",
             )
         })?;
         while search.status() == Status::Running {
@@ -166,7 +179,7 @@ pub async fn solve(
             .best_moves()
             .is_some_and(|moves| request.actions.len() + moves as usize > MAX_ROUTE)
         {
-            return Err(Error::bad(ROUTE_LIMIT));
+            return Err(route_limit());
         }
         let route = search.solution().map_err(Error::internal)?;
         let (moves, pushes) = if let Some(route) = &route {
