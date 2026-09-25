@@ -26,14 +26,15 @@ let route: string | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let watchdog: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
-let playback: ReturnType<typeof setInterval> | undefined;
+let playback: { actions: string; index: number; timer: ReturnType<typeof setInterval> } | undefined;
+let pausedRoute: { actions: string; index: number } | undefined;
 let persistence = false;
 const profile = storage.profile();
 
 function updateButtons() {
   button('solve').disabled = busy || !game || snapshot[3] === 1;
-  button('cancel').disabled = !busy;
-  button('play').disabled = !route || busy;
+  button('cancel').disabled = !busy && !playback;
+  button('play').disabled = busy || (!route && !playback && !pausedRoute);
   button('copy').disabled = !route;
   button('undo').disabled = !game || snapshot[1] === 0;
 }
@@ -42,14 +43,32 @@ function endRun() {
   requestAbort = undefined; clearInterval(timer); clearTimeout(watchdog);
   updateButtons();
 }
-function stopPlayback() { clearInterval(playback); playback = undefined; button('play').textContent = 'Play route'; }
-function invalidate() {
-  generation++; requestAbort?.abort(); endRun(); stopPlayback(); route = undefined; updateButtons();
-  $('search-status').textContent = 'Ready when you are.';
+function stopPlayback() {
+  if (playback) clearInterval(playback.timer);
+  playback = undefined; button('play').textContent = 'Play route';
 }
+function animate(actions: string, start = 0) {
+  stopPlayback();
+  pausedRoute = undefined;
+  button('play').textContent = 'Pause';
+  playback = { actions, index: start, timer: setInterval(() => {
+    if (!playback) return;
+    if (playback.index >= playback.actions.length) { stopPlayback(); route = undefined; updateButtons(); return; }
+    if (!game.step('UDLR'.indexOf(playback.actions[playback.index++]))) { stopPlayback(); message('Replay was blocked.'); return; }
+    changed();
+  }, 70) };
+}
+function invalidate() {
+  generation++; requestAbort?.abort(); endRun(); stopPlayback(); pausedRoute = undefined; route = undefined; updateButtons();
+  setStatus('Ready when you are.');
+}
+// role=status re-announces on every text change, so only write real changes.
+function setStatus(text: string) { const el = $('search-status'); if (el.textContent !== text) el.textContent = text; }
 function render() {
   snapshot = game.snapshot();
-  board.draw(game.width(), game.height(), tiles, labels, snapshot);
+  const onGoal = new Uint8Array(labels.length);
+  for (let i = 0; i < labels.length; i++) onGoal[i] = game.on_goal(i) ? 1 : 0;
+  board.draw(game.width(), game.height(), tiles, labels, snapshot, onGoal);
   $('moves').textContent = String(snapshot[1]); $('pushes').textContent = String(snapshot[2]);
   updateButtons();
 }
@@ -92,7 +111,10 @@ async function syncBest(fullRoute: string) {
   try {
     const response = await fetch(`/api/progress/${encodeURIComponent(current.id)}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-profile-id': profile }, body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    $('storage').textContent = 'Verified best route saved in PostgreSQL for this browser profile.';
+    const result = await response.json();
+    $('storage').textContent = result.improved
+      ? 'Verified best route saved in PostgreSQL for this browser profile.'
+      : 'Server already stored an equal or better route for this puzzle.';
   } catch { $('storage').textContent = 'Server save failed. Local progress is still available if browser storage is enabled.'; }
 }
 async function pullBest() {
@@ -129,9 +151,13 @@ function move(direction: number) {
   if (!game) return;
   if (busy || route || playback) invalidate();
   if (game.step(direction)) changed();
+  else if (game.moves() >= 100000) message('Session move limit reached (100000). Undo or restart to continue.');
 }
 function applyUpdate(update: SearchUpdate) {
   if (update.route !== undefined) {
+    if (runPrefix.length + update.route.length > 100000) {
+      throw new Error('Position and route together exceed the 100000-move replay limit');
+    }
     verify(runPrefix + update.route);
     if (game.actions() !== runPrefix) throw new Error('Puzzle changed while solving');
     route = update.route;
@@ -139,7 +165,6 @@ function applyUpdate(update: SearchUpdate) {
   const m = update.metrics;
   $('expanded').textContent = m[0].toLocaleString(); $('generated').textContent = m[1].toLocaleString();
   $('reserved').textContent = `${(m[2] / 1048576).toFixed(1)} MiB`;
-  $('elapsed').textContent = `${(update.elapsedMs / 1000).toFixed(1)} s`;
   const hasRoute = route !== undefined;
   const proofKind = m[4];
   const note = proofKind === 2 ? ' · proven move-optimal from this position'
@@ -148,17 +173,21 @@ function applyUpdate(update: SearchUpdate) {
     : ' · optimality unproven';
   const result = hasRoute ? `${route!.length} remaining moves${note}. ` : '';
   const status: Record<string, string> = { running: 'Searching…', solved: 'Search complete.', exhausted: proofKind === 3 ? 'No solution exists from this position.' : 'No solution from this position.', state_limit: 'State limit reached.', memory_limit: 'Memory limit reached.', time_limit: 'Time budget reached.', cancelled: 'Stopped.' };
-  $('search-status').textContent = result + (status[update.status] || update.status);
-  if (update.type === 'done') endRun(); else updateButtons();
+  setStatus(result + (status[update.status] || update.status));
+  // The run timer owns the elapsed display; the final value lands once, here.
+  if (update.type === 'done') { endRun(); $('elapsed').textContent = `${(update.elapsedMs / 1000).toFixed(1)} s`; }
+  else updateButtons();
 }
-function fail(error: unknown) { $('search-status').textContent = String(error); endRun(); }
+function fail(error: unknown) { setStatus(String(error)); endRun(); }
 async function solve() {
   if (busy) return;
   invalidate(); busy = true; runPrefix = game.actions(); updateButtons();
   const id = generation;
   const request: SolveRequest = { rows: current.rows.join('\n'), actions: runPrefix, mode: select('mode').value,
     timeMs: Number(select('seconds').value) * 1000, memoryMiB: Number(select('memory').value), maxStates: 500_000 };
-  $('search-status').textContent = 'Preparing search…';
+  $('expanded').textContent = '—'; $('generated').textContent = '—';
+  $('reserved').textContent = '—'; $('elapsed').textContent = '—';
+  setStatus('Preparing search…');
   const started = performance.now();
   timer = setInterval(() => { $('elapsed').textContent = `${((performance.now() - started) / 1000).toFixed(1)} s`; }, 150);
   if (select('engine').value === 'browser') {
@@ -170,7 +199,7 @@ async function solve() {
     worker.onerror = (event) => { if (id === generation) fail(event.message || 'Worker failed to start'); };
     worker.postMessage({ type: 'solve', request });
     // Includes startup allowance; termination releases the whole WASM arena.
-    watchdog = setTimeout(() => { if (id === generation && busy) { $('search-status').textContent = route ? 'Stopped at deadline. Verified route retained.' : 'Worker deadline reached.'; endRun(); } }, request.timeMs + 2000);
+    watchdog = setTimeout(() => { if (id === generation && busy) { setStatus(route ? 'Stopped at deadline. Verified route retained.' : 'Worker deadline reached.'); endRun(); } }, request.timeMs + 2000);
   } else {
     requestAbort = new AbortController();
     watchdog = setTimeout(() => requestAbort?.abort(), request.timeMs + 5000);
@@ -184,16 +213,12 @@ async function solve() {
       applyUpdate({ type: 'done', status: r.status, route: r.route ?? undefined, elapsedMs: r.elapsed_ms,
         metrics: new Uint32Array([r.expanded, r.generated, r.reserved_bytes, r.moves ?? 0xffffffff,
           r.proof ? proofKinds[r.proof.kind] ?? 0 : 0, r.proof?.lower_bound ?? 0xffffffff]) });
-    } catch (error) { if (id === generation) fail(error); }
+    } catch (error) {
+      if (id === generation) fail(error instanceof DOMException && error.name === 'AbortError'
+        ? `Server search exceeded its ${request.timeMs / 1000} s budget.`
+        : error);
+    }
   }
-}
-function animate(actions: string) {
-  stopPlayback(); let index = 0; button('play').textContent = 'Pause';
-  playback = setInterval(() => {
-    if (index >= actions.length) { stopPlayback(); route = undefined; updateButtons(); return; }
-    if (!game.step('UDLR'.indexOf(actions[index++]))) { stopPlayback(); message('Replay was blocked.'); return; }
-    changed();
-  }, 70);
 }
 
 async function start() {
@@ -204,11 +229,18 @@ async function start() {
   const saved = storage.session();
   const savedPuzzle = saved?.id === 'custom' ? { id: 'custom', title: 'Your puzzle', difficulty: 'custom', rows: saved.rows.split('\n') } : catalog.find(p => p.id === saved?.id);
   const canRestore = savedPuzzle && savedPuzzle.rows.join('\n') === saved?.rows;
-  try { load(canRestore ? savedPuzzle : catalog[0], canRestore ? saved.actions : ''); }
-  catch { load(catalog[0]); message('Saved session was invalid. Started a fresh puzzle.'); }
+  // A stale saved layout falls back to the saved puzzle itself, not puzzle one.
+  const target = savedPuzzle ?? catalog[0];
+  try { load(target, canRestore ? saved.actions : ''); }
+  catch {
+    try { load(target); }
+    catch { load(catalog[0]); message('Saved session was invalid. Started a fresh puzzle.'); }
+  }
   selector.onchange = () => {
     if (selector.value === 'custom') { selector.value = current.id; $<HTMLTextAreaElement>('rows').closest('details')!.open = true; return; }
     const puzzle = catalog.find(p => p.id === selector.value); if (puzzle) load(puzzle);
+    // Arrow keys must move the robot, not walk the dropdown after a change.
+    selector.blur();
   };
   button('next').onclick = () => { const index = catalog.findIndex(p => p.id === current.id); load(catalog[(index + 1) % catalog.length]); };
   button('undo').onclick = () => { invalidate(); if (game.undo()) changed(); };
@@ -222,13 +254,31 @@ async function start() {
     catch (error) { message(String(error)); }
   };
   button('load-route').onclick = () => {
+    const actions = $<HTMLTextAreaElement>('route-input').value.toUpperCase().replace(/\s/g, '');
+    if (!actions) { message('Route is empty.'); return; }
+    if (actions.length > 100000) { message('Route exceeds 100000 moves.'); return; }
     try {
-      const actions = $<HTMLTextAreaElement>('route-input').value.toUpperCase().replace(/\s/g, '');
       // Rust validates the whole replay atomically before replacing the current state.
       game.replay(actions); invalidate(); changed();
     } catch (error) { message(String(error)); }
   };
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]')) control.onclick = () => move(Number(control.dataset.direction));
+  // Swipe on the board moves the robot; taps stay with the on-screen buttons.
+  const canvas = $<HTMLCanvasElement>('board');
+  let touchStart: { x: number; y: number } | undefined;
+  canvas.addEventListener('touchstart', event => {
+    const touch = event.touches[0];
+    touchStart = { x: touch.clientX, y: touch.clientY };
+  }, { passive: true });
+  canvas.addEventListener('touchend', event => {
+    if (!touchStart) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - touchStart.x;
+    const dy = touch.clientY - touchStart.y;
+    touchStart = undefined;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0));
+  }, { passive: true });
   document.addEventListener('keydown', event => {
     if (event.ctrlKey || event.metaKey || event.altKey || (event.target as HTMLElement).matches('input,textarea,select')) return;
     const key = event.key.toLowerCase();
@@ -238,19 +288,31 @@ async function start() {
   });
   button('solve').onclick = () => { void solve(); };
   button('cancel').onclick = () => {
+    if (playback) { stopPlayback(); pausedRoute = undefined; message('Playback stopped.'); updateButtons(); return; }
     if (worker) {
       worker.postMessage({ type: 'cancel' }); clearTimeout(watchdog);
-      watchdog = setTimeout(() => { $('search-status').textContent = route ? 'Stopped. Verified route retained.' : 'Stopped.'; endRun(); }, 250);
-    } else { generation++; requestAbort?.abort(); $('search-status').textContent = 'Stopped waiting for the native search.'; endRun(); }
+      watchdog = setTimeout(() => { setStatus(route ? 'Stopped. Verified route retained.' : 'Stopped.'); endRun(); }, 250);
+    } else { generation++; requestAbort?.abort(); setStatus('Stopped waiting for the native search.'); endRun(); }
   };
-  button('play').onclick = () => { if (playback) { stopPlayback(); route = undefined; updateButtons(); } else if (route) animate(route); };
+  button('play').onclick = () => {
+    if (playback) {
+      pausedRoute = { actions: playback.actions, index: playback.index };
+      stopPlayback(); button('play').textContent = 'Resume'; updateButtons();
+    } else if (pausedRoute) {
+      animate(pausedRoute.actions, pausedRoute.index);
+    } else if (route) {
+      animate(route);
+    }
+  };
   button('copy').onclick = async () => {
     try { await navigator.clipboard.writeText(runPrefix + (route || '')); message('Full route copied as U/D/L/R.'); }
     catch { message('Clipboard is unavailable in this browser.'); }
   };
-  select('mode').onchange = () => {
-    $('mode-help').textContent = ({ fast: 'Prioritizes a quick first route. It may use extra moves.', quality: 'Keeps the best verified route and searches for shorter routes until the budget ends.', optimal: 'Exact A* minimizes total moves. A limited search makes no optimality claim.' } as Record<string, string>)[select('mode').value];
-  };
+  const modeHelp: Record<string, string> = { fast: 'Prioritizes a quick first route. It may use extra moves.', quality: 'Keeps the best verified route and searches for shorter routes until the budget ends.', optimal: 'Exact A* minimizes total moves. A limited search makes no optimality claim.' };
+  const syncModeHelp = () => { $('mode-help').textContent = modeHelp[select('mode').value] ?? ''; };
+  select('mode').onchange = syncModeHelp;
+  // The browser can restore the select's value on reload; match the help text.
+  syncModeHelp();
   addEventListener('resize', () => render());
   addEventListener('pagehide', saveSession);
   try {

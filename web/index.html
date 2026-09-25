@@ -30,7 +30,7 @@
           <p class="fine">Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed MVP search limits.</p>
         </section>
         <details class="card"><summary>Import / edit a puzzle</summary><p class="muted">O wall · R robot · X box · S goal. Other uppercase boxes match lowercase goals. Spaces are floor.</p><label for="rows">Puzzle rows</label><textarea id="rows" spellcheck="false" rows="9" maxlength="8192"></textarea><button id="load-custom">Play these rows</button></details>
-        <details class="card"><summary>Import a route</summary><p class="muted">Apply U/D/L/R moves from the start of this puzzle. You can undo to study any position.</p><label for="route-input">Move sequence</label><textarea id="route-input" spellcheck="false" rows="3" maxlength="100000" placeholder="UDLR…"></textarea><button id="load-route">Apply route</button></details>
+        <details class="card"><summary>Import a route</summary><p class="muted">Apply U/D/L/R moves from the start of this puzzle. You can undo to study any position.</p><label for="route-input">Move sequence</label><textarea id="route-input" spellcheck="false" rows="3" placeholder="UDLR…"></textarea><button id="load-route">Apply route</button></details>
         <section class="rules"><h2>How to play</h2><p>Push every box onto its matching goal. You can push one box at a time, but you cannot pull. Use arrow keys, WASD, or the buttons.</p><p id="storage" class="fine">Progress stays in this browser. PostgreSQL sync is available when the server is connected.</p></section>
       </aside>
     </main>

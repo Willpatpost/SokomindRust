@@ -41,8 +41,20 @@ impl WasmGame {
     pub fn actions(&self) -> String {
         self.game.actions().to_owned()
     }
+    pub fn moves(&self) -> u32 {
+        self.game.moves()
+    }
     pub fn replay(&mut self, route: &str) -> Result<(), JsError> {
         self.game.replay(route).map_err(|e| JsError::new(&e))
+    }
+    /// Whether box `index` sits on its matching goal. The renderer styles
+    /// solved boxes from this, so no game rule lives in JavaScript.
+    pub fn on_goal(&self, index: usize) -> bool {
+        if index >= self.game.board.labels.len() {
+            return false;
+        }
+        let cell = self.game.state.boxes[index] as usize;
+        self.game.board.tiles[cell] == self.game.board.labels[index]
     }
 }
 

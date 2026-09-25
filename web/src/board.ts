@@ -5,10 +5,12 @@ export class BoardView {
     if (!ctx) throw new Error('Canvas is unavailable');
     this.ctx = ctx;
   }
-  draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Uint32Array) {
+  draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Uint32Array, onGoal: Uint8Array) {
     const available = this.canvas.parentElement!.clientWidth - 38;
-    const tile = Math.max(8, Math.min(48, available / width, 540 / height));
     const ratio = Math.min(devicePixelRatio || 1, 2);
+    // Canvas dimensions are capped well under the browser limit: oversized
+    // custom boards scroll instead of rendering blank.
+    const tile = Math.max(4, Math.min(48, available / width, 540 / height, 14000 / (width * ratio), 14000 / (height * ratio)));
     this.canvas.width = Math.round(width * tile * ratio);
     this.canvas.height = Math.round(height * tile * ratio);
     this.canvas.style.width = `${width * tile}px`;
@@ -30,7 +32,7 @@ export class BoardView {
     }
     for (let i = 0; i < labels.length; i++) {
       const cell = state[i + 4]; const [x, y] = xy(cell);
-      c.fillStyle = tiles[cell] === labels[i] ? '#86cfa4' : '#ddb87c';
+      c.fillStyle = onGoal[i] ? '#86cfa4' : '#ddb87c';
       c.fillRect(x + tile * .13, y + tile * .13, tile * .74, tile * .74);
       c.strokeStyle = '#15282b'; c.lineWidth = 1; c.strokeRect(x + tile * .21, y + tile * .21, tile * .58, tile * .58);
       c.fillStyle = '#273335'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = `750 ${tile * .39}px system-ui`;
