@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: sokomind
       POSTGRES_DB: sokomind
@@ -16,8 +17,11 @@ services:
     build:
       context: .
       target: server
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://sokomind:${POSTGRES_PASSWORD}@db:5432/sokomind
+      # The server percent-encodes the password into the connection URL,
+      # so any characters are safe here.
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       SOLVE_CONCURRENCY: "1"
     depends_on:
       db:
@@ -28,6 +32,7 @@ services:
     build:
       context: .
       target: web
+    restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
     depends_on:

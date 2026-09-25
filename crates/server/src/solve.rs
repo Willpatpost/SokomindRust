@@ -1,4 +1,4 @@
-use crate::api::{App, Error};
+use crate::api::{App, ApiJson, Error};
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game};
@@ -85,7 +85,7 @@ impl Drop for CancelOnDrop {
 
 pub async fn solve(
     State(app): State<App>,
-    Json(request): Json<Request>,
+    ApiJson(request): ApiJson<Request>,
 ) -> Result<Json<ResultBody>, Error> {
     if !(10..=30_000).contains(&request.time_ms)
         || !(1..=500_000).contains(&request.max_states)
@@ -120,7 +120,12 @@ pub async fn solve(
             request.max_states,
             request.memory_mib,
         )
-        .map_err(Error::bad)?;
+        .map_err(|_| {
+            Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Search allocation failed; lower the memory budget".into(),
+            )
+        })?;
         while search.status() == Status::Running {
             if cancel.load(Ordering::Relaxed) {
                 search.stop(Status::Cancelled);
@@ -132,6 +137,11 @@ pub async fn solve(
         }
         let route = search.solution().map_err(Error::internal)?;
         let (moves, pushes) = if let Some(route) = &route {
+            if request.actions.len() + route.len() > sokomind_core::MAX_ROUTE {
+                return Err(Error::bad(
+                    "Position and route together exceed the 100000-move replay limit",
+                ));
+            }
             game.replay(&(request.actions + route))
                 .map_err(Error::internal)?;
             if !game.solved() {

@@ -107,7 +107,23 @@ Progress endpoints require `x-profile-id`, a browser-generated random 32-hex tok
 This is an anonymous local profile capability, not an account/login system. Losing
 browser storage loses the profile token. Custom puzzles stay local. No database
 credentials or SQL cross into the frontend. Native solve overload returns 429;
-persistence without a database returns 503.
+persistence without a database returns 503. Saves are rate-limited per client IP
+(60 per minute) and routes are capped at 10,000 moves.
+
+Stored progress is keyed by layout fingerprint (`puzzle-v1:{fnv1a}`, identical to
+the reference): a changed catalog layout starts fresh records instead of returning
+routes that no longer replay.
+
+The server also serves the web UI when `STATIC_DIR` (default `web/dist`) exists:
+extensionless paths return the app shell with `no-cache`, `/assets/` files carry
+`immutable` cache headers, and missing assets return 404 so a stale page cannot
+hang on a dead content hash after a rebuild. Configure the database with either
+`DATABASE_URL` or `DATABASE_PASSWORD` (plus optional `DATABASE_USER`, `DATABASE_HOST`,
+`DATABASE_PORT`, `DATABASE_NAME`); the server percent-encodes the components, so any
+password characters are safe in compose. The API retries the database connection for
+30 seconds at startup. Behind the TLS reverse proxy the README of the reference
+deployment style suggests, enable nginx's `real_ip` module (see the commented block
+in `deploy/nginx.conf`) so per-IP rate limiting sees real clients.
 
 ## Small validation surface
 
@@ -124,3 +140,9 @@ unsolvable must all be reproduced exactly.
 `SokomindSolver/` was read as the behavior reference and left unchanged. Puzzle
 data retains the original MIT license. The MVP deliberately omits React, PWA,
 music, accounts, cloud jobs, elaborate editor tooling, and extensive test/CI setup.
+
+Deliberate deviations from the reference: strict board parsing (no carriage
+returns, no empty rows; one trailing newline tolerated); touch input is swipe plus
+on-screen buttons (the reference also has tap-to-move); `Cargo.lock` contains
+rsa and sqlx's other optional drivers because Cargo locks all-target resolution
+even when they are never compiled, so `cargo audit` may false-positive on rsa.

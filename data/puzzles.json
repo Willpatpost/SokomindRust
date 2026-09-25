@@ -11,7 +11,8 @@
       "O A O",
       "O a O",
       "OOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "tiny",
@@ -26,7 +27,8 @@
       "OO A O",
       "OSa  O",
       "OOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "tutorial-push",
@@ -40,7 +42,8 @@
       "O   O",
       "O R O",
       "OOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "tutorial-around",
@@ -54,7 +57,8 @@
       "OOOOX O",
       "O   S O",
       "OOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "beginner-three",
@@ -69,7 +73,8 @@
       "O SSSO O",
       "O      O",
       "OOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "beginner-detour",
@@ -84,7 +89,8 @@
       "OS   X O",
       "OS     O",
       "OOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "beginner-typed-line",
@@ -99,7 +105,8 @@
       "O A B C O",
       "O   R   O",
       "OOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "box-5x5-a",
@@ -113,7 +120,8 @@
       "O XRO",
       "O  SO",
       "OOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "medium",
@@ -129,7 +137,8 @@
       "OSCXDSO",
       "OcS SdO",
       "OOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "garden-2",
@@ -147,7 +156,8 @@
       "O OO O OO O",
       "O         O",
       "OOOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "workshop-1",
@@ -164,7 +174,8 @@
       "OS    O",
       "OS    O",
       "OOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "classic-1",
@@ -181,7 +192,8 @@
       "O  R  O",
       "O SSS O",
       "OOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "theme-kitchen",
@@ -198,7 +210,8 @@
       "O  O  X O",
       "O SSS   O",
       "OOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "large",
@@ -217,7 +230,8 @@
       "OO BXO O O",
       "OO   O   O",
       "OOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "adv-gallery",
@@ -236,7 +250,8 @@
       "O        O",
       "O   SS   O",
       "OOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "theme-parking",
@@ -254,7 +269,8 @@
       "O a b c   O",
       "O      SSOO",
       "OOOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "open-field",
@@ -283,7 +299,8 @@
       "O   X              O",
       "OS                 O",
       "OOOOOOOOOOOOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "huge",
@@ -307,7 +324,8 @@
       "O B X X X X A O",
       "O Sc       dS O",
       "OOOOOOOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "expert-maze",
@@ -327,7 +345,8 @@
       "O  X    OO O",
       "O SSS X    O",
       "OOOOOOOOOOOO"
-    ]
+    ],
+    "collection": "Sokomind Originals"
   },
   {
     "id": "gen-v2-310116-594a231c",

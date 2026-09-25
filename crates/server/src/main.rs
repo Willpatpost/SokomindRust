@@ -18,30 +18,57 @@ use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = if let Ok(url) = env::var("DATABASE_URL") {
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .acquire_timeout(Duration::from_secs(3))
-            .connect(&url)
-            .await?;
-        sqlx::migrate!("../../migrations").run(&pool).await?;
-        Some(pool)
-    } else {
-        eprintln!(
-            "DATABASE_URL is unset; game and solver work, server progress persistence is disabled."
-        );
-        None
+    let db = match database_url()? {
+        Some(url) => {
+            let mut pool = None;
+            // Direct runs can race the database startup; retry briefly so
+            // compose's restart policy is a backstop, not the only defense.
+            for attempt in 0..30 {
+                match PgPoolOptions::new()
+                    .max_connections(5)
+                    .acquire_timeout(Duration::from_secs(3))
+                    .connect(&url)
+                    .await
+                {
+                    Ok(connected) => {
+                        pool = Some(connected);
+                        break;
+                    }
+                    Err(error) if attempt == 29 => return Err(error.into()),
+                    Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+                }
+            }
+            let pool = pool.expect("the retry loop returns or connects");
+            sqlx::migrate!("../../migrations").run(&pool).await?;
+            Some(pool)
+        }
+        None => {
+            eprintln!(
+                "DATABASE_URL and DATABASE_PASSWORD are unset; game and solver work, server progress persistence is disabled."
+            );
+            None
+        }
     };
     let catalog: Vec<api::Puzzle> =
         serde_json::from_str(include_str!("../../../data/puzzles.json"))?;
     for puzzle in &catalog {
         sokomind_core::Board::parse(&puzzle.rows.join("\n"))?;
     }
-    let concurrency = env::var("SOLVE_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1)
-        .clamp(1, 8);
+    let concurrency = match env::var("SOLVE_CONCURRENCY") {
+        Ok(value) => match value.parse::<usize>() {
+            Ok(n) if (1..=8).contains(&n) => n,
+            Ok(n) => {
+                let clamped = n.clamp(1, 8);
+                eprintln!("SOLVE_CONCURRENCY={n} is outside 1..8; using {clamped}");
+                clamped
+            }
+            Err(_) => {
+                eprintln!("SOLVE_CONCURRENCY={value:?} is not a number; using 1");
+                1
+            }
+        },
+        Err(_) => 1,
+    };
     let state = api::App {
         db,
         catalog: Arc::new(catalog),
@@ -67,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api", any(api_not_found))
         .route("/api/", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
+        .method_not_allowed_fallback(method_not_allowed)
         .fallback_service(serve_dir)
         .layer(middleware::from_fn(static_cache))
         .layer(DefaultBodyLimit::max(128 * 1024))
@@ -77,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Serving web UI from {static_dir}");
     } else {
         eprintln!(
-            "{static_dir} not found; run `npm run build` to serve the web UI from this server"
+            "{static_dir} not found; serving the API only. Set STATIC_DIR or build the web UI (npm run build) to serve it here."
         );
     }
     eprintln!("Sokomind API listening at http://{bind}");
@@ -130,6 +158,48 @@ async fn static_cache(uri: Uri, request: Request, next: Next) -> Response {
 
 async fn api_not_found() -> api::Error {
     api::Error::not_found()
+}
+
+async fn method_not_allowed() -> api::Error {
+    api::Error(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed".into())
+}
+
+/// DATABASE_PASSWORD composes the URL here so deployments can pass a raw
+/// password: components are percent-encoded, which URL text cannot do for
+/// itself.
+fn database_url() -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if let Ok(url) = env::var("DATABASE_URL") {
+        return Ok(Some(url));
+    }
+    match env::var("DATABASE_PASSWORD") {
+        Ok(password) => {
+            let user = env::var("DATABASE_USER").unwrap_or_else(|_| "sokomind".into());
+            let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "db".into());
+            let port = env::var("DATABASE_PORT").unwrap_or_else(|_| "5432".into());
+            let name = env::var("DATABASE_NAME").unwrap_or_else(|_| "sokomind".into());
+            Ok(Some(format!(
+                "postgres://{}:{}@{}:{}/{}",
+                percent_encode(&user),
+                percent_encode(&password),
+                host,
+                port,
+                percent_encode(&name)
+            )))
+        }
+        Err(_) => Ok(None),
+    }
+}
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 async fn shutdown() {

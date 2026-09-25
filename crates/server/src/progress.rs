@@ -1,4 +1,4 @@
-use crate::api::{App, Error};
+use crate::api::{ApiJson, App, Error};
 use axum::{
     Json,
     extract::{ConnectInfo, Path, State},
@@ -46,26 +46,51 @@ pub struct Save {
     route: String,
 }
 
+const UPSERT: &str = "
+INSERT INTO progress (profile, puzzle_id, fingerprint, moves, pushes, route)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (profile, puzzle_id, fingerprint) DO UPDATE
+SET moves = EXCLUDED.moves,
+    pushes = EXCLUDED.pushes,
+    route = EXCLUDED.route,
+    updated_at = now()
+WHERE (EXCLUDED.moves, EXCLUDED.pushes) < (progress.moves, progress.pushes)";
+
+fn current_fingerprint(app: &App, id: &str) -> Option<String> {
+    app.catalog
+        .iter()
+        .find(|puzzle| puzzle.id == id)
+        .map(|puzzle| Board::parse(&puzzle.rows.join("\n")).ok())
+        .flatten()
+        .map(|board| board.fingerprint)
+}
+
 pub async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Vec<Record>>, Error> {
     let profile = profile(&headers)?;
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
     let rows = sqlx::query(
-        "SELECT puzzle_id, moves, pushes FROM progress WHERE profile = $1 ORDER BY puzzle_id",
+        "SELECT puzzle_id, moves, pushes, fingerprint FROM progress WHERE profile = $1 ORDER BY puzzle_id",
     )
     .bind(profile)
     .fetch_all(db)
     .await
     .map_err(Error::internal)?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| Record {
-                puzzle_id: r.get("puzzle_id"),
-                moves: r.get("moves"),
-                pushes: r.get("pushes"),
-                route: None,
-            })
-            .collect(),
-    ))
+    // A catalog layout change retires old records: they cannot be beaten by
+    // fresh saves and their routes no longer replay.
+    let records = rows
+        .into_iter()
+        .filter(|row| {
+            current_fingerprint(&app, &row.get::<String, _>("puzzle_id"))
+                .is_some_and(|current| current == row.get::<String, _>("fingerprint"))
+        })
+        .map(|row| Record {
+            puzzle_id: row.get("puzzle_id"),
+            moves: row.get("moves"),
+            pushes: row.get("pushes"),
+            route: None,
+        })
+        .collect();
+    Ok(Json(records))
 }
 pub async fn get(
     State(app): State<App>,
@@ -74,7 +99,11 @@ pub async fn get(
 ) -> Result<Json<Record>, Error> {
     let profile = profile(&headers)?;
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let row = sqlx::query("SELECT puzzle_id, moves, pushes, route FROM progress WHERE profile = $1 AND puzzle_id = $2").bind(profile).bind(id).fetch_optional(db).await.map_err(Error::internal)?
+    let Some(fingerprint) = current_fingerprint(&app, &id) else {
+        return Err(Error(StatusCode::NOT_FOUND, "Unknown catalog puzzle".into()));
+    };
+    let row = sqlx::query("SELECT puzzle_id, moves, pushes, route FROM progress WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3")
+        .bind(profile).bind(&id).bind(&fingerprint).fetch_optional(db).await.map_err(Error::internal)?
         .ok_or_else(|| Error(StatusCode::NOT_FOUND, "No saved route".into()))?;
     Ok(Json(Record {
         puzzle_id: row.get("puzzle_id"),
@@ -88,7 +117,7 @@ pub async fn save(
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<Save>,
+    ApiJson(body): ApiJson<Save>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let profile = profile(&headers)?;
     if !app.saves.allow(client_ip(&headers, remote)) {
@@ -101,19 +130,39 @@ pub async fn save(
         return Err(Error::bad("Route exceeds 10000 moves"));
     }
     let db = app.db.as_ref().ok_or_else(Error::unavailable)?;
-    let puzzle = app
-        .catalog
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| Error(StatusCode::NOT_FOUND, "Unknown catalog puzzle".into()))?;
-    let mut game = Game::new(Board::parse(&puzzle.rows.join("\n")).map_err(Error::internal)?);
-    // Never trust client counters, box coordinates, solved flags, or optimality claims.
-    game.replay(&body.route).map_err(Error::bad)?;
-    if !game.solved() {
-        return Err(Error::bad("Route does not solve the puzzle"));
-    }
-    let result = sqlx::query("INSERT INTO progress (profile, puzzle_id, moves, pushes, route) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (profile,puzzle_id) DO UPDATE SET moves=EXCLUDED.moves, pushes=EXCLUDED.pushes, route=EXCLUDED.route, updated_at=now() WHERE (EXCLUDED.moves,EXCLUDED.pushes) < (progress.moves,progress.pushes)")
-        .bind(profile).bind(id).bind(game.moves() as i32).bind(game.pushes as i32).bind(body.route).execute(db).await.map_err(Error::internal)?;
+    let Some(puzzle) = app.catalog.iter().find(|p| p.id == id) else {
+        return Err(Error(StatusCode::NOT_FOUND, "Unknown catalog puzzle".into()));
+    };
+    let rows = puzzle.rows.join("\n");
+    let route = body.route;
+    let replay_route = route.clone();
+    // Replay is pure CPU: keep it off the async runtime, like the solver.
+    let verified = tokio::task::spawn_blocking(move || {
+        let mut game = Game::new(Board::parse(&rows)?);
+        // Never trust client counters, box coordinates, solved flags, or optimality claims.
+        game.replay(&replay_route)?;
+        if !game.solved() {
+            return Err("Route does not solve the puzzle".to_string());
+        }
+        Ok((
+            game.moves() as i32,
+            game.pushes as i32,
+            game.board.fingerprint.clone(),
+        ))
+    })
+    .await
+    .map_err(Error::internal)?
+    .map_err(Error::bad)?;
+    let result = sqlx::query(UPSERT)
+        .bind(profile)
+        .bind(id)
+        .bind(verified.2)
+        .bind(verified.0)
+        .bind(verified.1)
+        .bind(route)
+        .execute(db)
+        .await
+        .map_err(Error::internal)?;
     Ok(Json(
         serde_json::json!({ "saved": true, "improved": result.rows_affected() > 0 }),
     ))
