@@ -42,6 +42,8 @@ impl Deadlock {
     /// Whether pushing box `index` from `from` to `to` creates a deadlock.
     /// A newly created deadlock always involves the moved box, so only the
     /// four squares at `to` and the moved box's component are analyzed.
+    /// `boxes` and `index` must use the order given to `refresh` (the parent's
+    /// order), so call this before canonicalizing the child.
     pub fn is_dead_after_push(
         &self,
         board: &Board,

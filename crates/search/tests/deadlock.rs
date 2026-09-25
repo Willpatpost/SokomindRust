@@ -81,3 +81,23 @@ fn wall_pair_2x2_deadlock() {
     deadlock.refresh(&trapped);
     assert!(deadlock.is_dead_state(&board, &trapped[..board.labels.len()]));
 }
+
+/// Pushing the upper X down lands it after the other X in row-major order,
+/// so the canonical child swaps their slots.
+const CROSSING_PAIR: &str = "OOOOOO\nOOOROO\nOO XOO\nOOX SO\nOOSOOO\nOOOOOO";
+
+#[test]
+fn push_past_a_same_label_box_keeps_parent_order() {
+    let board = Board::parse(CROSSING_PAIR).unwrap();
+    let upper = at(&board, 2, 3);
+    let lower = at(&board, 3, 2);
+    let below = at(&board, 3, 3);
+    assert_eq!(board.initial.boxes[..2], [upper, lower]);
+    let mut deadlock = Deadlock::new(&board);
+    deadlock.refresh(&[upper, lower]);
+    // The first push of the 4-move solution, checked in parent order.
+    assert!(!deadlock.is_dead_after_push(&board, &[below, lower], 0, upper, below));
+    let mut child = state(upper, &[below, lower]);
+    board.canonicalize(&mut child);
+    assert_eq!(child.boxes[..2], [lower, below]);
+}

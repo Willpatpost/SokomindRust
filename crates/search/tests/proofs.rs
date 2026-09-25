@@ -6,6 +6,18 @@ const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
 /// The box is frozen against the top-right wall and can never reach its goal.
 const CORNERED: &str = "OOOOO\nOR XO\nOS  O\nOOOOO";
+/// Each optimal route pushes a box past a same-label box, which reorders the
+/// canonical group. Deadlock checks that mixed that order with the parent's
+/// box index pruned these routes into false `Unsolvable` or `Optimal` proofs.
+const REORDERED: [(&str, u32); 5] = [
+    ("OOOOOO\nOOOROO\nOO XOO\nOOX SO\nOOSOOO\nOOOOOO", 4),
+    ("OOOOOO\nO  R O\nO  X O\nO X SO\nO SOOO\nOOOOOO", 4),
+    ("OOOOO\nO OSO\nOSX O\nO X O\nOR OO\nOOOOO", 11),
+    ("OOOOOO\nO R  O\nOSXX O\nO  A O\nOOOaSO\nOOOOOO", 20),
+    ("OOOOOO\nOOO  O\nOS X O\nOOXR O\nO   SO\nOOOOOO", 15),
+];
+/// Optimum 9; the same bug proved 17, and limits certified 15..=17.
+const CROSSING: &str = "OOOOOOO\nOOOR OO\nOO X  O\nOSX   O\nOOSOOOO\nOOOOOOO";
 
 // Independent primitive-move BFS oracle (not a second push-search implementation).
 fn bfs(board: &Board) -> Option<u32> {
@@ -135,6 +147,58 @@ fn solutions_survive_exact_limit_boundaries() {
             let mut game = Game::new(board.clone());
             game.replay(&route).unwrap();
             assert!(game.solved(), "at {max_states} states");
+        }
+    }
+}
+
+#[test]
+fn same_label_reordering_keeps_proofs_sound() {
+    for (rows, moves) in REORDERED {
+        let board = Board::parse(rows).unwrap();
+        assert_eq!(bfs(&board), Some(moves), "{rows:?}");
+        for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
+            let mut search = run(&board, mode);
+            assert_eq!(search.status(), Status::Solved, "{rows:?} {mode:?}");
+            let best = search.best_moves().unwrap();
+            if mode == Mode::Optimal {
+                assert_eq!(search.proof(), Some(Proof::Optimal { moves }), "{rows:?}");
+            } else {
+                assert!(best >= moves, "{rows:?} {mode:?}");
+            }
+            let route = search.solution().unwrap().unwrap();
+            assert_eq!(route.len(), best as usize, "{rows:?} {mode:?}");
+            let mut game = Game::new(board.clone());
+            game.replay(&route).unwrap();
+            assert!(game.solved(), "{rows:?} {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn limited_optimal_bounds_never_pass_the_optimum() {
+    let board = Board::parse(CROSSING).unwrap();
+    let optimum = bfs(&board).unwrap();
+    for max_states in 1..=40 {
+        let mut search =
+            Search::new(board.clone(), board.initial, Mode::Optimal, max_states, 8).unwrap();
+        while search.status() == Status::Running {
+            search.advance(16);
+        }
+        assert!(
+            search.lower_bound().is_none_or(|bound| bound <= optimum),
+            "at {max_states} states"
+        );
+        match search.proof() {
+            Some(Proof::Optimal { moves }) => assert_eq!(moves, optimum, "at {max_states} states"),
+            Some(Proof::Bounded {
+                lower_bound,
+                upper_bound,
+            }) => assert!(
+                lower_bound <= optimum && optimum <= upper_bound,
+                "at {max_states} states"
+            ),
+            Some(Proof::Unsolvable) => panic!("false unsolvable at {max_states} states"),
+            None => assert_eq!(search.best_moves(), None, "at {max_states} states"),
         }
     }
 }

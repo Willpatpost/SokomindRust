@@ -201,7 +201,8 @@ impl ExactSearch {
                     let mut next = node.state;
                     next.player = from;
                     next.boxes[i] = to;
-                    self.board.canonicalize(&mut next);
+                    // Deadlock indices follow the parent order `refresh` saw,
+                    // so check before canonicalize reorders a label group.
                     if self.deadlock.is_dead_after_push(
                         &self.board,
                         &next.boxes[..self.board.labels.len()],
@@ -211,6 +212,7 @@ impl ExactSearch {
                     ) {
                         continue;
                     }
+                    self.board.canonicalize(&mut next);
                     let slot = self.arena.slot(&next, self.board.labels.len());
                     let previous = self.arena.entry(slot);
                     if previous != u32::MAX && self.arena.node(previous).g <= g {
