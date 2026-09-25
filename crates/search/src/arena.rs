@@ -1,5 +1,5 @@
 use crate::Status;
-use sokomind_core::{Cell, State, MAX_ROUTE};
+use sokomind_core::{Cell, MAX_ROUTE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
 #[derive(Clone, Copy)]
@@ -104,15 +104,11 @@ impl Arena {
     pub(crate) fn is_full(&self) -> bool {
         self.nodes.len() >= self.node_limit
     }
+    /// Callers must bind the node's table slot. Only one node may be pushed
+    /// past the limit, into the spare slot: a solution discovered at the exact
+    /// moment the arena filled.
     pub(crate) fn push(&mut self, node: Node) -> u32 {
-        let id = self.nodes.len() as u32;
-        self.nodes.push(node);
-        id
-    }
-    /// Push the one node allowed past the limit: a solution discovered at the
-    /// exact moment the arena filled. Callers must bind its table slot.
-    pub(crate) fn push_final(&mut self, node: Node) -> u32 {
-        debug_assert_eq!(self.nodes.len(), self.node_limit);
+        debug_assert!(self.nodes.len() <= self.node_limit);
         let id = self.nodes.len() as u32;
         self.nodes.push(node);
         id
