@@ -18,10 +18,15 @@ pub(crate) struct Policy {
     stop_on_goal_pop: bool,
     /// Stop as soon as a solved child is generated.
     stop_on_goal_push: bool,
-    /// Let a cheaper path re-add a state already in the table. The engine
-    /// keeps no closed bit, so `false` would also refuse cheaper paths to
-    /// states still open; every mode reopens today.
+    /// Let a cheaper path re-add a state whose node was already expanded
+    /// ([`Node::CLOSED`]). A cheaper path to a state still open always
+    /// replaces it.
     reopen_closed: bool,
+    /// Also skip a popped node when `g + h >= best`, with the h it was
+    /// queued with; every child would fail the child-level prune anyway.
+    /// Exact leaves it off: there a goal pops before any such node, and the
+    /// check stays out of the kernel that proves.
+    prune_popped_estimate: bool,
 }
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
@@ -30,13 +35,16 @@ impl Policy {
         stop_on_goal_pop: true,
         stop_on_goal_push: false,
         reopen_closed: true,
+        prune_popped_estimate: false,
     };
-    /// First route wins.
+    /// First route wins. Without reopening, weighted A* keeps its
+    /// suboptimality bound under a consistent h, and never proves anyway.
     pub(crate) const FAST: Self = Self {
         weight: 5,
         stop_on_goal_pop: true,
         stop_on_goal_push: true,
-        reopen_closed: true,
+        reopen_closed: false,
+        prune_popped_estimate: true,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -44,6 +52,7 @@ impl Policy {
         stop_on_goal_pop: false,
         stop_on_goal_push: false,
         reopen_closed: true,
+        prune_popped_estimate: true,
     };
 }
 
@@ -100,6 +109,8 @@ impl Engine {
                 g: 0,
                 parent: NIL,
                 direction: 0,
+                flags: 0,
+                h: h.map_or(u16::MAX, Node::store_h),
             },
             slot,
         );
@@ -177,10 +188,15 @@ impl Engine {
                 }
                 continue;
             }
-            if self.best_moves().is_some_and(|best| node.g >= best) {
+            if self.best_moves().is_some_and(|best| {
+                node.g >= best
+                    || (self.policy.prune_popped_estimate
+                        && node.g as u64 + parent_h as u64 >= best as u64)
+            }) {
                 continue;
             }
             self.expanded += 1;
+            self.arena.close(index);
             self.reach.fill(&self.board, &node.state);
             self.deadlock
                 .refresh(&node.state.boxes[..self.board.labels.len()]);
@@ -214,20 +230,25 @@ impl Engine {
                     next.boxes[i] = to;
                     self.board.canonicalize(&mut next);
                     let (slot, previous) = self.arena.find(&next);
+                    let previous = previous.map(|previous| self.arena.node(previous));
                     if previous.is_some_and(|previous| {
-                        !self.policy.reopen_closed || self.arena.node(previous).g <= g
+                        previous.g <= g || (!self.policy.reopen_closed && previous.is_closed())
                     }) {
                         continue;
                     }
-                    // Solves the parent's group lazily, only once a child
+                    // A cheaper duplicate reuses the stored estimate; otherwise
+                    // the parent's group is solved lazily, only once a child
                     // gets this far.
-                    let Some(h) = self.heuristic.child_estimate(
-                        parent_h,
-                        &mut parent_group,
-                        &node.state,
-                        i,
-                        to,
-                    ) else {
+                    let known = previous.and_then(|previous| previous.known_h());
+                    let Some(h) = known.or_else(|| {
+                        self.heuristic.child_estimate(
+                            parent_h,
+                            &mut parent_group,
+                            &node.state,
+                            i,
+                            to,
+                        )
+                    }) else {
                         continue;
                     };
                     if self
@@ -244,6 +265,8 @@ impl Engine {
                         g,
                         parent: index,
                         direction: d as u8,
+                        flags: 0,
+                        h: Node::store_h(h),
                     };
                     if self.arena.is_full() {
                         // Keep a solution discovered at the exact limit.

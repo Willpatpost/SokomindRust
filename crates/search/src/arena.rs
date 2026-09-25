@@ -13,6 +13,27 @@ pub(crate) struct Node {
     /// Direction of the push that made this node (unused at the root); the
     /// pushed box started at `state.player`.
     pub direction: u8,
+    /// [`Node::CLOSED`] once the node has been expanded.
+    pub flags: u8,
+    /// The state's estimate, or `u16::MAX` when it is unknown or too large
+    /// and must be recomputed. Estimates depend only on the canonical
+    /// state, so a cheaper duplicate reuses it. `flags` took the old padding
+    /// byte; `h` grows `size_of::<Node>()` from 76 to 80 bytes.
+    pub h: u16,
+}
+impl Node {
+    pub(crate) const CLOSED: u8 = 1;
+    /// The estimate as stored in [`Node::h`].
+    pub(crate) fn store_h(h: u32) -> u16 {
+        u16::try_from(h).unwrap_or(u16::MAX)
+    }
+    /// The stored estimate, if it fit.
+    pub(crate) fn known_h(&self) -> Option<u32> {
+        (self.h < u16::MAX).then_some(u32::from(self.h))
+    }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.flags & Self::CLOSED != 0
+    }
 }
 /// Queue entry `(f, h, id)`: lowest f first, then lowest h, then oldest.
 type Entry = Reverse<(u64, u32, u32)>;
@@ -146,6 +167,10 @@ impl Arena {
     }
     pub(crate) fn node(&self, id: u32) -> Node {
         self.nodes[id as usize]
+    }
+    /// Marks the node expanded.
+    pub(crate) fn close(&mut self, id: u32) {
+        self.nodes[id as usize].flags |= Node::CLOSED;
     }
     pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
         self.heap.push(Reverse((f, h, id)));
