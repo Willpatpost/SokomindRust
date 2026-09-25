@@ -15,27 +15,27 @@ impl WasmGame {
         })
     }
     pub fn width(&self) -> u32 {
-        self.game.board.width as u32
+        self.game.board().width as u32
     }
     pub fn height(&self) -> u32 {
-        self.game.board.height as u32
+        self.game.board().height as u32
     }
     pub fn tiles(&self) -> Vec<u8> {
-        self.game.board.tiles.clone()
+        self.game.board().tiles.clone()
     }
     pub fn labels(&self) -> Vec<u8> {
-        self.game.board.labels.clone()
+        self.game.board().labels.clone()
     }
     /// Snapshot ABI: player, moves, pushes, solved, then box cells. Labels are static.
     pub fn snapshot(&self) -> Vec<u32> {
         let game = &self.game;
         let state = game.state();
-        let boxes = &state.boxes[..game.board.labels.len()];
+        let boxes = &state.boxes[..game.board().labels.len()];
         let mut out = Vec::with_capacity(4 + boxes.len());
         out.extend([
             u32::from(state.player),
             game.moves(),
-            game.pushes,
+            game.pushes(),
             u32::from(game.solved()),
         ]);
         out.extend(boxes.iter().map(|&cell| u32::from(cell)));
@@ -62,7 +62,7 @@ impl WasmGame {
     /// Whether box `index` sits on its matching goal. The renderer styles
     /// solved boxes from this, so no game rule lives in JavaScript.
     pub fn on_goal(&self, index: usize) -> bool {
-        let board = &self.game.board;
+        let board = self.game.board();
         index < board.labels.len() && board.on_goal(index, self.game.state().boxes[index])
     }
 }
@@ -92,15 +92,9 @@ impl WasmSearch {
             )));
         }
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
-        let start = game.state();
-        let search = Search::new(
-            game.board,
-            start,
-            mode,
-            max_states as usize,
-            memory_mib as usize,
-        )
-        .map_err(|e| JsError::new(&e))?;
+        let (board, start) = game.into_parts();
+        let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)
+            .map_err(|e| JsError::new(&e))?;
         Ok(Self { search })
     }
     /// Runs up to `pops` queue pops; true while the search is still running.

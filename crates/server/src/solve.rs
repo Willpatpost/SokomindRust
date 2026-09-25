@@ -150,9 +150,9 @@ pub async fn solve(
             return Err(route_limit());
         }
         let initial_moves = game.moves();
-        let initial_pushes = game.pushes;
+        let initial_pushes = game.pushes();
         let mut search = Search::new(
-            game.board.clone(),
+            game.board().clone(),
             game.state(),
             mode,
             request.max_states,
@@ -190,7 +190,7 @@ pub async fn solve(
             }
             (
                 Some(game.moves() - initial_moves),
-                Some(game.pushes - initial_pushes),
+                Some(game.pushes() - initial_pushes),
             )
         } else {
             (None, None)

@@ -8,12 +8,13 @@ struct Undo {
     box_index: usize,
 }
 
+/// The fields are private: undo records box indices, so only `step`,
+/// `undo`, and `reset` may move boxes, reorder the live state, or change
+/// the counters.
 pub struct Game {
-    pub board: Board,
-    /// Private: undo records box indices, so only `step`, `undo`, and
-    /// `reset` may move boxes or reorder the live state.
+    board: Board,
     state: State,
-    pub pushes: u32,
+    pushes: u32,
     history: Vec<Undo>,
     actions: String,
 }
@@ -35,12 +36,23 @@ impl Game {
             actions: String::new(),
         }
     }
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+    /// The board and a copy of the live position, for handing a game's
+    /// position to a search.
+    pub fn into_parts(self) -> (Board, State) {
+        (self.board, self.state)
+    }
     /// A copy of the live position, in the game's own box order.
     pub fn state(&self) -> State {
         self.state
     }
     pub fn moves(&self) -> u32 {
         self.history.len() as u32
+    }
+    pub fn pushes(&self) -> u32 {
+        self.pushes
     }
     pub fn actions(&self) -> &str {
         &self.actions

@@ -13,8 +13,8 @@ fn routes_stop_at_max_route_moves() {
     let full = "LR".repeat(MAX_ROUTE / 2);
     game.replay(&full).unwrap();
     assert_eq!(game.moves() as usize, MAX_ROUTE);
-    assert_eq!(game.pushes, 0);
-    assert_eq!(game.state(), game.board.initial);
+    assert_eq!(game.pushes(), 0);
+    assert_eq!(game.state(), game.board().initial);
     // The budget, not the board, refuses the next legal step.
     assert!(!game.step(2));
     assert!(game.undo());
@@ -37,7 +37,7 @@ fn rules_undo_and_atomic_replay() {
         (
             game.state(),
             game.moves(),
-            game.pushes,
+            game.pushes(),
             game.actions().to_owned(),
         )
     };
@@ -51,7 +51,7 @@ fn rules_undo_and_atomic_replay() {
         trail.push(snapshot(&game));
     }
     assert!(game.solved());
-    assert_eq!((game.moves(), game.pushes), (4, 3));
+    assert_eq!((game.moves(), game.pushes()), (4, 3));
     // Reference sessions stop accepting moves once solved, even legal ones.
     assert!(!game.step(0));
     assert_eq!(&snapshot(&game), trail.last().unwrap());

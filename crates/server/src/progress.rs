@@ -95,8 +95,8 @@ pub async fn save(
         if !game.solved() {
             return Err("Route does not solve the puzzle".to_string());
         }
-        let (moves, pushes) = (game.moves() as i32, game.pushes as i32);
-        Ok((moves, pushes, game.board.fingerprint, route))
+        let (moves, pushes) = (game.moves() as i32, game.pushes() as i32);
+        Ok((moves, pushes, game.into_parts().0.fingerprint, route))
     })
     .await
     .map_err(Error::internal)?
