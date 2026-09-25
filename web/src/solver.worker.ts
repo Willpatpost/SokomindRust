@@ -4,6 +4,13 @@ import type { WorkerReply, WorkerRequest } from './protocol';
 let cancelled = false;
 let active = false;
 const post = (message: WorkerReply) => self.postMessage(message);
+// Browsers clamp nested setTimeout(0) to >= 4ms, which would idle a third
+// of every time budget; a MessageChannel yield is a macrotask without clamp.
+const yieldChannel = new MessageChannel();
+const yieldToEventLoop = () => new Promise<void>((resolve) => {
+  yieldChannel.port1.onmessage = () => resolve();
+  yieldChannel.port2.postMessage(0);
+});
 self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
   if (data.type === 'cancel') { cancelled = true; return; }
   if (active) return;
@@ -34,7 +41,7 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
         lastReport = elapsedMs;
       }
       if (status !== 'running') break;
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await yieldToEventLoop();
     }
   } catch (error) { post({ type: 'error', message: String(error) }); }
   finally { search?.free(); active = false; }
