@@ -8,16 +8,38 @@ const REPAIR_CROSSOVER: usize = 8;
 
 /// Per-goal reverse-push distances plus per-label assignment with duals.
 pub struct Heuristic {
-    /// Parallel to `board.goals`: push distance from the goal to each cell.
-    distances: Vec<Vec<u16>>,
+    /// Cell-major push distances: `distances[cell * goals + goal]` is the
+    /// distance from `cell` to goal column `goal`, `NONE` when unreachable.
+    distances: Vec<u16>,
+    goals: usize,
     /// Boxes are grouped by label into contiguous index ranges.
     groups: Vec<Group>,
 }
+/// A label group's boxes are indices `start..start + len`. Goal columns
+/// follow the same order, so the group's goals are the same column range.
 struct Group {
     start: usize,
     len: usize,
-    /// Column offset of this group's goals in `distances`.
-    base: usize,
+}
+
+/// Hungarian working state for one group: 1-based potentials and matching,
+/// with row and column 0 as the dummies the augment starts from.
+struct Duals {
+    u: [i32; MAX_BOXES + 1],
+    v: [i32; MAX_BOXES + 1],
+    /// Row matched to each column, 0 when the column is free.
+    p: [usize; MAX_BOXES + 1],
+    /// Previous column on the augmenting path.
+    way: [usize; MAX_BOXES + 1],
+}
+
+impl Duals {
+    const EMPTY: Self = Self {
+        u: [0; MAX_BOXES + 1],
+        v: [0; MAX_BOXES + 1],
+        p: [0; MAX_BOXES + 1],
+        way: [0; MAX_BOXES + 1],
+    };
 }
 
 /// An optimal box/goal assignment per label group, carrying the dual
@@ -46,12 +68,27 @@ enum Repair {
 
 impl Heuristic {
     pub fn new(board: &Board) -> Self {
+        let mut groups = Vec::new();
+        let mut start = 0;
+        for run in board.labels.chunk_by(|a, b| a == b) {
+            groups.push(Group {
+                start,
+                len: run.len(),
+            });
+            start += run.len();
+        }
+        // Labels are sorted and every label has as many goals as boxes, so a
+        // stable sort by label lays the goal columns out in group order.
+        let mut columns = board.goals.clone();
+        columns.sort_by_key(|&(_, label)| label);
+        let goals = columns.len();
+        let mut distances = vec![NONE; board.tiles.len() * goals];
         let mut queue = Vec::with_capacity(board.tiles.len());
-        let mut reverse = |goal: Cell| {
-            let mut dist = vec![NONE; board.tiles.len()];
+        for (column, &(goal, _)) in columns.iter().enumerate() {
+            let at = |cell: Cell| cell as usize * goals + column;
             queue.clear();
             queue.push(goal);
-            dist[goal as usize] = 0;
+            distances[at(goal)] = 0;
             let mut head = 0;
             while head < queue.len() {
                 let cell = queue[head];
@@ -62,56 +99,31 @@ impl Heuristic {
                         continue;
                     }
                     let support = board.neighbors[previous as usize][direction];
-                    if support != NONE && dist[previous as usize] == NONE {
-                        dist[previous as usize] = dist[cell as usize] + 1;
+                    if support != NONE && distances[at(previous)] == NONE {
+                        distances[at(previous)] = distances[at(cell)] + 1;
                         queue.push(previous);
                     }
                 }
             }
-            dist
-        };
-        // Distance columns are stored in group order so a group's columns are
-        // contiguous: the Hungarian inner loop stays single-indirection.
-        let mut distances = Vec::with_capacity(board.goals.len());
-        let mut groups = Vec::new();
-        let mut start = 0;
-        while start < board.labels.len() {
-            let label = board.labels[start];
-            let mut end = start + 1;
-            while end < board.labels.len() && board.labels[end] == label {
-                end += 1;
-            }
-            let base = distances.len();
-            for &(goal, goal_label) in &board.goals {
-                if goal_label == label {
-                    distances.push(reverse(goal));
-                }
-            }
-            groups.push(Group {
-                start,
-                len: end - start,
-                base,
-            });
-            start = end;
         }
         Self {
             distances,
+            goals,
             groups,
         }
     }
 
-    fn cost(&self, goal: usize, cell: Cell) -> i32 {
-        let distance = self.distances[goal][cell as usize];
-        if distance == NONE {
-            INF
-        } else {
-            distance as i32
-        }
+    /// Distances from `cell` to each of `group`'s goals, in column order.
+    fn goal_distances(&self, group: &Group, cell: Cell) -> &[u16] {
+        let at = cell as usize * self.goals + group.start;
+        &self.distances[at..at + group.len]
     }
 
     /// Whether any label group is large enough for dual repair to amortize.
     pub fn repairs_worthwhile(&self) -> bool {
-        self.groups.iter().any(|group| group.len >= REPAIR_CROSSOVER)
+        self.groups
+            .iter()
+            .any(|group| group.len >= REPAIR_CROSSOVER)
     }
 
     fn sorted_cells(&self, state: &State) -> [Cell; MAX_BOXES] {
@@ -128,7 +140,13 @@ impl Heuristic {
     pub fn estimate(&self, state: &State) -> Option<u32> {
         let mut total = 0u32;
         for group in &self.groups {
-            total += self.solve_group(group, &state.boxes[group.start..group.start + group.len], false)?.0;
+            total += self
+                .solve_group(
+                    group,
+                    &state.boxes[group.start..group.start + group.len],
+                    false,
+                )?
+                .0;
         }
         Some(total)
     }
@@ -194,106 +212,119 @@ impl Heuristic {
         let n = group.len;
         // A one-box group needs no Hungarian: one distance is the assignment.
         if n == 1 {
-            let cost = self.cost(group.base, cells[0]);
+            let cost = cost(self.goal_distances(group, cells[0])[0]);
             if cost >= INF {
                 return None;
             }
             if !duals {
                 return Some((cost as u32, None));
             }
-            let mut columns = [0i32; MAX_BOXES];
             let mut v = [0i32; MAX_BOXES];
             v[0] = cost;
             return Some((
                 cost as u32,
                 Some(GroupSolution {
                     cost: cost as u32,
-                    columns,
+                    columns: [0i32; MAX_BOXES],
                     u: [0i32; MAX_BOXES],
                     v,
                 }),
             ));
         }
-        let mut u = [0i32; MAX_BOXES + 1];
-        let mut v = [0i32; MAX_BOXES + 1];
-        let mut p = [0usize; MAX_BOXES + 1];
-        let mut way = [0usize; MAX_BOXES + 1];
+        let mut state = Duals::EMPTY;
         for row in 1..=n {
-            p[0] = row;
-            let mut minv = [INF; MAX_BOXES + 1];
-            let mut used = [false; MAX_BOXES + 1];
-            let mut j0 = 0;
-            loop {
-                used[j0] = true;
-                let i0 = p[j0];
-                let mut delta = INF;
-                let mut j1 = 0;
-                for j in 1..=n {
-                    if used[j] {
-                        continue;
-                    }
-                    let reduced =
-                        self.cost(group.base + j - 1, cells[i0 - 1]) - u[i0] - v[j];
-                    if reduced < minv[j] {
-                        minv[j] = reduced;
-                        way[j] = j0;
-                    }
-                    if minv[j] < delta {
-                        delta = minv[j];
-                        j1 = j;
-                    }
-                }
-                if delta >= INF {
-                    return None;
-                }
-                for j in 0..=n {
-                    if used[j] {
-                        u[p[j]] += delta;
-                        v[j] -= delta;
-                    } else {
-                        minv[j] -= delta;
-                    }
-                }
-                j0 = j1;
-                if p[j0] == 0 {
-                    break;
-                }
+            if !self.augment(group, cells, row, &mut state) {
+                return None;
             }
-            loop {
-                let j1 = way[j0];
-                p[j0] = p[j1];
-                j0 = j1;
-                if j0 == 0 {
-                    break;
-                }
-            }
+        }
+        let cost = self.matched_cost(group, cells, &state)?;
+        if !duals {
+            return Some((cost, None));
         }
         let mut columns = [-1i32; MAX_BOXES];
-        let mut cost = 0i32;
         for j in 1..=n {
-            let row = p[j];
-            columns[row - 1] = (j - 1) as i32;
-            cost += self.cost(group.base + j - 1, cells[row - 1]);
+            columns[state.p[j] - 1] = (j - 1) as i32;
         }
-        if cost >= INF {
-            return None;
-        }
-        if !duals {
-            return Some((cost as u32, None));
-        }
-        let mut out_u = [0i32; MAX_BOXES];
-        let mut out_v = [0i32; MAX_BOXES];
-        out_u[..n].copy_from_slice(&u[1..=n]);
-        out_v[..n].copy_from_slice(&v[1..=n]);
+        let mut u = [0i32; MAX_BOXES];
+        let mut v = [0i32; MAX_BOXES];
+        u[..n].copy_from_slice(&state.u[1..=n]);
+        v[..n].copy_from_slice(&state.v[1..=n]);
         Some((
-            cost as u32,
+            cost,
             Some(GroupSolution {
-                cost: cost as u32,
+                cost,
                 columns,
-                u: out_u,
-                v: out_v,
+                u,
+                v,
             }),
         ))
+    }
+
+    /// One Hungarian augmenting path from 1-based `row`, which must be
+    /// unmatched, over feasible potentials in `state`. Returns false when no
+    /// finite column is reachable: then no perfect matching exists.
+    fn augment(&self, group: &Group, cells: &[Cell], row: usize, state: &mut Duals) -> bool {
+        let n = group.len;
+        let Duals { u, v, p, way } = state;
+        p[0] = row;
+        let mut minv = [INF; MAX_BOXES + 1];
+        let mut used = [false; MAX_BOXES + 1];
+        let mut j0 = 0;
+        loop {
+            used[j0] = true;
+            let i0 = p[j0];
+            let distances = self.goal_distances(group, cells[i0 - 1]);
+            let mut delta = INF;
+            let mut j1 = 0;
+            for j in 1..=n {
+                if used[j] {
+                    continue;
+                }
+                let reduced = cost(distances[j - 1]) - u[i0] - v[j];
+                if reduced < minv[j] {
+                    minv[j] = reduced;
+                    way[j] = j0;
+                }
+                if minv[j] < delta {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+            if delta >= INF {
+                return false;
+            }
+            for j in 0..=n {
+                if used[j] {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+            if p[j0] == 0 {
+                break;
+            }
+        }
+        loop {
+            let j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+            if j0 == 0 {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Total cost of the complete matching in `state`, `None` when it has to
+    /// use an unreachable goal.
+    fn matched_cost(&self, group: &Group, cells: &[Cell], state: &Duals) -> Option<u32> {
+        let mut total = 0i32;
+        for j in 1..=group.len {
+            total += cost(self.goal_distances(group, cells[state.p[j] - 1])[j - 1]);
+        }
+        (total < INF).then_some(total as u32)
     }
 
     /// One-row repair of a parent's optimal assignment: remap the unchanged
@@ -363,80 +394,31 @@ impl Heuristic {
         let Some(changed) = (changed != usize::MAX).then_some(changed) else {
             return Repair::Diff;
         };
-        let mut row_potential = [0i32; MAX_BOXES + 1];
-        let mut column_potential = [0i32; MAX_BOXES + 1];
-        let mut p = [0usize; MAX_BOXES + 1];
-        for i in 0..n {
-            row_potential[i + 1] = u[i];
-        }
-        for j in 0..n {
-            column_potential[j + 1] = previous.v[j];
-        }
+        let mut state = Duals::EMPTY;
+        state.u[1..=n].copy_from_slice(&u[..n]);
+        state.v[1..=n].copy_from_slice(&previous.v[..n]);
         for r in 0..n {
             if columns[r] >= 0 {
-                p[columns[r] as usize + 1] = r + 1;
+                state.p[columns[r] as usize + 1] = r + 1;
             } else if r != changed {
                 return Repair::Diff;
             }
         }
-        p[0] = changed + 1;
-        let mut way = [0usize; MAX_BOXES + 1];
-        let mut minv = [INF; MAX_BOXES + 1];
-        let mut used = [false; MAX_BOXES + 1];
-        let mut j0 = 0usize;
-        loop {
-            used[j0] = true;
-            let i0 = p[j0];
-            let mut delta = INF;
-            let mut j1 = 0usize;
-            for j in 1..=n {
-                if used[j] {
-                    continue;
-                }
-                let reduced = self.cost(group.base + j - 1, child_cells[i0 - 1])
-                    - row_potential[i0]
-                    - column_potential[j];
-                if reduced < minv[j] {
-                    minv[j] = reduced;
-                    way[j] = j0;
-                }
-                if minv[j] < delta {
-                    delta = minv[j];
-                    j1 = j;
-                }
-            }
-            if delta >= INF {
-                return Repair::Infeasible;
-            }
-            for j in 0..=n {
-                if used[j] {
-                    row_potential[p[j]] += delta;
-                    column_potential[j] -= delta;
-                } else {
-                    minv[j] -= delta;
-                }
-            }
-            j0 = j1;
-            if p[j0] == 0 {
-                break;
-            }
-        }
-        loop {
-            let j1 = way[j0];
-            p[j0] = p[j1];
-            j0 = j1;
-            if j0 == 0 {
-                break;
-            }
-        }
-        let mut cost = 0i32;
-        for j in 1..=n {
-            let row = p[j];
-            cost += self.cost(group.base + j - 1, child_cells[row - 1]);
-        }
-        if cost >= INF {
+        if !self.augment(group, child_cells, changed + 1, &mut state) {
             return Repair::Infeasible;
         }
-        Repair::Cost(cost as u32)
+        match self.matched_cost(group, child_cells, &state) {
+            Some(cost) => Repair::Cost(cost),
+            None => Repair::Infeasible,
+        }
+    }
+}
+
+/// A push distance as a Hungarian cost, `INF` when the goal is unreachable.
+fn cost(distance: u16) -> i32 {
+    if distance == NONE {
+        INF
+    } else {
+        distance as i32
     }
 }
