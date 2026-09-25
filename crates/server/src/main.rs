@@ -42,7 +42,7 @@ const MAX_RETENTION_DAYS: i32 = 36_500;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configuration, catalog and bind errors fail before the database wait,
     // not after it.
-    let proxies = TrustedProxies::parse(&env::var("TRUSTED_PROXIES").unwrap_or_default())?;
+    let proxies = TrustedProxies::parse(&env_value("TRUSTED_PROXIES").unwrap_or_default())?;
     let concurrency = env_setting("SOLVE_CONCURRENCY", 1..=8, 1);
     let solve_rate = env_setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
     let retention = retention(env_setting(
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let options = database_options()?;
     let catalog = api::load_catalog()?;
-    let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let bind = env_value("BIND_ADDR").unwrap_or_else(|| "127.0.0.1:3000".into());
     let listener = TcpListener::bind(&bind).await?;
     let db = match options {
         Some(options) => {
@@ -107,13 +107,19 @@ fn router(state: api::App) -> Router {
         .with_state(state)
 }
 
+/// Reads `name` from the environment; an empty value counts as unset.
+fn env_value(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 /// Reads `name` from the environment; see [`parse_setting`].
 fn env_setting<T: FromStr + PartialOrd + Copy + Display>(
     name: &str,
     range: RangeInclusive<T>,
     default: T,
 ) -> T {
-    let (value, warning) = parse_setting(name, &env::var(name).unwrap_or_default(), range, default);
+    let (value, warning) =
+        parse_setting(name, &env_value(name).unwrap_or_default(), range, default);
     if let Some(warning) = warning {
         eprintln!("{warning}");
     }
@@ -208,18 +214,14 @@ async fn method_not_allowed() -> api::Error {
 /// the other DATABASE_* parts default to the compose service; the parts
 /// are passed as they are, so a raw password needs no URL encoding.
 fn database_options() -> Result<Option<PgConnectOptions>, Box<dyn std::error::Error>> {
-    if let Ok(url) = env::var("DATABASE_URL") {
+    if let Some(url) = env_value("DATABASE_URL") {
         return Ok(Some(url.parse()?));
     }
-    let Ok(password) = env::var("DATABASE_PASSWORD") else {
+    let Some(password) = env_value("DATABASE_PASSWORD") else {
         return Ok(None);
     };
-    let part = |name: &str, default: &str| -> String {
-        env::var(name)
-            .ok()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| default.into())
-    };
+    let part =
+        |name: &str, default: &str| -> String { env_value(name).unwrap_or_else(|| default.into()) };
     let port = part("DATABASE_PORT", "5432");
     let port: u16 = port
         .parse()
