@@ -194,7 +194,12 @@ impl Engine {
                         || stand == NONE
                         || self.reach.blocked(to)
                         || self.reach.distance(stand) == NONE
+                        || self.heuristic.dead(i, to)
                     {
+                        // A box pushed onto a dead cell would only fail the
+                        // estimate below, and every check in between just
+                        // skips the child, so dropping it here changes no
+                        // count or result.
                         continue;
                     }
                     let g = node.g + self.reach.distance(stand) as u32 + 1;

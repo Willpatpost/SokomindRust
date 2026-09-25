@@ -1,4 +1,4 @@
-use crate::{Status, deadlock::Deadlock, reach::Reach};
+use crate::{Status, deadlock::Deadlock, heuristic::Heuristic, reach::Reach};
 use sokomind_core::{MAX_ROUTE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
@@ -49,9 +49,12 @@ impl Arena {
         if !(1..=1_000_000).contains(&max_states) || !(4..=256).contains(&memory_mib) {
             return Err("Use 1..1000000 states and 4..256 MiB".into());
         }
-        // Flood and deadlock buffers, u16 reverse distances per goal (one
-        // goal per box), and the route plus its string.
-        let per_cell = Reach::BYTES_PER_CELL + Deadlock::BYTES_PER_CELL + boxes * 2;
+        // Flood and deadlock buffers, the dead-cell mask, u16 reverse
+        // distances per goal (one goal per box), and the route plus its string.
+        let per_cell = Reach::BYTES_PER_CELL
+            + Deadlock::BYTES_PER_CELL
+            + Heuristic::BYTES_PER_CELL
+            + boxes * 2;
         let fixed_bytes = cells * per_cell + 2 * MAX_ROUTE + 64 * 1024;
         let budget = memory_mib * 1024 * 1024;
         // One spare node keeps a solution found at the exact limit reachable.

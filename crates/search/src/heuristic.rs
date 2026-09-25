@@ -1,10 +1,14 @@
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State};
+use std::mem::size_of;
 
 const INF: i32 = 1_000_000;
 /// Group size from which a child's group cost is repaired from the parent's
 /// duals with one augment instead of re-solved. Models put the crossover at
 /// 2-4; re-measure it on real hardware.
 const REPAIR_CROSSOVER: usize = 3;
+// Each label group owns one bit of a cell's dead mask, and there are at most
+// as many groups as boxes.
+const _: () = assert!(MAX_BOXES <= u32::BITS as usize);
 
 /// Per-goal reverse-push distances plus per-label assignment with duals.
 pub(crate) struct Heuristic {
@@ -16,6 +20,9 @@ pub(crate) struct Heuristic {
     groups: Vec<Group>,
     /// The index into `groups` of each box's label group.
     group_of: [u8; MAX_BOXES],
+    /// Per cell, bit `g` set when no goal of group `g` is reachable from
+    /// the cell: a box of that label there makes every estimate `None`.
+    dead: Vec<u32>,
 }
 /// A label group's boxes are indices `start..start + len`. Goal columns
 /// follow the same order, so the group's goals are the same column range.
@@ -66,6 +73,9 @@ impl ParentGroup {
 }
 
 impl Heuristic {
+    /// The dead mask. The distance table's `boxes * 2` bytes per cell are
+    /// accounted by the arena separately.
+    pub(crate) const BYTES_PER_CELL: usize = size_of::<u32>();
     pub(crate) fn new(board: &Board) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
@@ -107,12 +117,34 @@ impl Heuristic {
                 }
             }
         }
+        let dead = (0..board.tiles.len())
+            .map(|cell| {
+                let row = &distances[cell * goals..(cell + 1) * goals];
+                groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| {
+                        row[group.start..group.start + group.len]
+                            .iter()
+                            .all(|&distance| distance == NONE)
+                    })
+                    .fold(0, |mask, (g, _)| mask | (1u32 << g))
+            })
+            .collect();
         Self {
             distances,
             goals,
             groups,
             group_of,
+            dead,
         }
+    }
+
+    /// Whether box `i` on `cell` has no reachable goal of its label. Then
+    /// the box's group has no finite matching, so `estimate` and
+    /// `child_estimate` would return `None`, and callers may prune first.
+    pub(crate) fn dead(&self, i: usize, cell: Cell) -> bool {
+        (self.dead[cell as usize] >> self.group_of[i]) & 1 != 0
     }
 
     /// Distances from `cell` to each of `group`'s goals, in column order.
@@ -289,7 +321,7 @@ fn cost(distance: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
-    use sokomind_core::{Board, NONE};
+    use sokomind_core::{Board, Cell, NONE};
 
     /// Nine interchangeable X boxes and a lone A: the widest group here.
     const WIDE: &str = concat!(
@@ -392,6 +424,34 @@ mod tests {
                 options[rng.below(options.len())]
             };
         }
+    }
+
+    /// A box on the top or bottom row can only slide along it, and one in a
+    /// corner cannot move at all, so which cells are dead depends on where
+    /// each label's goals are.
+    #[test]
+    fn dead_marks_cells_without_a_reachable_goal_of_the_label() {
+        let board = Board::parse(concat!(
+            "OOOOOOO\n",
+            "O  a  O\n",
+            "O A B O\n",
+            "O  b  O\n",
+            "O R   O\n",
+            "OOOOOOO",
+        ))
+        .unwrap();
+        assert_eq!(board.labels, [b'A', b'B']);
+        let heuristic = Heuristic::new(&board);
+        let at = |x: usize, y: usize| (y * board.width + x) as Cell;
+        let (a, b) = (0, 1);
+        // A corner is dead for every label.
+        assert!(heuristic.dead(a, at(1, 1)) && heuristic.dead(b, at(1, 1)));
+        // The top row reaches `a` by a push along it, but never `b` below.
+        assert!(!heuristic.dead(a, at(2, 1)) && heuristic.dead(b, at(2, 1)));
+        // In the middle both goals are one push away.
+        assert!(!heuristic.dead(a, at(3, 2)) && !heuristic.dead(b, at(3, 2)));
+        // Nothing pushes a box up off the bottom row, which holds no goal.
+        assert!(heuristic.dead(a, at(3, 4)) && heuristic.dead(b, at(3, 4)));
     }
 
     /// The incremental child estimate equals a fresh estimate for label
