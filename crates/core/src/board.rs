@@ -13,6 +13,10 @@ pub struct State {
 pub struct Board {
     pub width: usize,
     pub height: usize,
+    /// Raw rows exactly as received; the fingerprint must not depend on padding.
+    pub rows: Vec<String>,
+    /// `puzzle-v1:{fnv1a}` over the canonical row form, matching the reference.
+    pub fingerprint: String,
     pub neighbors: Vec<[Cell; 4]>,
     /// 0 = floor, 255 = wall, A..Z = matching goal label.
     pub tiles: Vec<u8>,
@@ -27,7 +31,19 @@ impl Board {
         if text.len() > MAX_CELLS * 2 {
             return Err("Board text is too large".into());
         }
-        let rows: Vec<_> = text.lines().collect();
+        if text.contains('\r') {
+            return Err("Board rows cannot contain carriage returns".into());
+        }
+        // A single trailing newline is a paste artifact; empty rows are not boards.
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        let rows: Vec<&str> = if text.is_empty() {
+            Vec::new()
+        } else {
+            text.split('\n').collect()
+        };
+        if rows.is_empty() || rows.iter().any(|row| row.is_empty()) {
+            return Err("Board rows cannot be empty".into());
+        }
         let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
         let height = rows.len();
         let size = width
@@ -125,6 +141,8 @@ impl Board {
         Ok(Self {
             width,
             height,
+            rows: rows.iter().map(|row| row.to_string()).collect(),
+            fingerprint: fingerprint(&boxes, &rows),
             neighbors,
             tiles,
             labels,
@@ -140,6 +158,9 @@ impl Board {
             .all(|(i, &label)| self.tiles[state.boxes[i] as usize] == label)
     }
 
+    /// Sorts interchangeable same-label boxes so states compare canonically.
+    /// Only call this on search-owned state copies: a live `Game` must keep
+    /// its box order, because undo records box indices.
     pub fn canonicalize(&self, state: &mut State) {
         let mut begin = 0;
         while begin < self.labels.len() {
@@ -174,4 +195,23 @@ impl Board {
         state.player = next;
         Some(index.unwrap_or(MAX_BOXES))
     }
+}
+
+/// Layout revision hash, byte-identical to the reference's
+/// `puzzleRevisionFingerprint`: FNV-1a over
+/// `boxes:{n}\nrows:{count}\n{length}:{row}` joined rows, as `puzzle-v1:{hex}`.
+fn fingerprint(boxes: &[(u8, Cell)], rows: &[&str]) -> String {
+    let mut canonical = format!("boxes:{}\nrows:{}\n", boxes.len(), rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            canonical.push('\n');
+        }
+        canonical.push_str(&format!("{}:{}", row.len(), row));
+    }
+    let mut hash = 0x811c_9dc5u32;
+    for byte in canonical.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    format!("puzzle-v1:{hash:08x}")
 }

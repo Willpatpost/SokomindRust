@@ -175,12 +175,12 @@ impl ExactSearch {
                     let stand = self.board.neighbors[from as usize][opposite];
                     if to == NONE
                         || stand == NONE
-                        || self.reach.occupied[to as usize]
-                        || self.reach.distances[stand as usize] == NONE
+                        || self.reach.blocked(to)
+                        || self.reach.distance(stand) == NONE
                     {
                         continue;
                     }
-                    let g = node.g + self.reach.distances[stand as usize] as u32 + 1;
+                    let g = node.g + self.reach.distance(stand) as u32 + 1;
                     if self.best_moves().is_some_and(|best| g >= best) {
                         continue;
                     }
@@ -212,6 +212,22 @@ impl ExactSearch {
                         continue;
                     }
                     if self.arena.is_full() {
+                        // Keep a solution discovered at the exact limit.
+                        if h == 0
+                            && self.board.solved(&next)
+                            && self.best_moves().is_none_or(|best| g < best)
+                        {
+                            let id = self.arena.push_final(Node {
+                                state: next,
+                                g,
+                                parent: index,
+                                box_from: from,
+                                direction: d as u8,
+                            });
+                            self.arena.bind(slot, id);
+                            self.generated += 1;
+                            self.incumbent = Some(id);
+                        }
                         self.interrupted_g = Some(node.g);
                         self.status = self.arena.limit_status();
                         return;
@@ -255,9 +271,9 @@ impl ExactSearch {
         for id in chain.into_iter().rev() {
             let node = self.arena.node(id);
             let parent = self.arena.node(node.parent).state;
-            self.reach.fill(&self.board, &parent);
             let stand =
                 self.board.neighbors[node.box_from as usize][OPPOSITE[node.direction as usize]];
+            self.reach.fill_to(&self.board, &parent, stand);
             self.reach.append_path(&self.board, stand, &mut route);
             route.push(ACTIONS[node.direction as usize]);
         }

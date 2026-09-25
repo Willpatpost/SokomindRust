@@ -42,29 +42,38 @@ impl Arena {
         if !(1..=1_000_000).contains(&max_states) || !(4..=256).contains(&memory_mib) {
             return Err("Use 1..1000000 states and 4..256 MiB".into());
         }
-        // Includes topology, reverse distances, reusable flood buffers and route scratch.
-        let fixed_bytes = cells * (32 + goals * 2) + 2 * MAX_ROUTE + 64 * 1024;
+        // Includes reachability buffers, reverse distances, and route scratch.
+        let fixed_bytes = cells * (9 + goals * 2) + 2 * MAX_ROUTE + 64 * 1024;
         let budget = memory_mib * 1024 * 1024;
+        // One spare node keeps a solution found at the exact limit reachable.
         let bytes_for = |count: usize| {
             fixed_bytes
-                + count * (size_of::<Node>() + size_of::<Entry>() + size_of::<u32>())
-                + (count * 2).next_power_of_two() * size_of::<u32>()
+                + (count + 1) * (size_of::<Node>() + size_of::<Entry>() + size_of::<u32>())
+                + ((count + 1) * 2).next_power_of_two() * size_of::<u32>()
         };
-        let mut limit = max_states;
-        while limit > 0 && bytes_for(limit) > budget {
-            limit = limit * 9 / 10;
+        // Exact largest limit that fits the budget, instead of stepping down 10%.
+        let mut low = 0;
+        let mut high = max_states;
+        while low < high {
+            let mid = low + (high - low + 1) / 2;
+            if bytes_for(mid) <= budget {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
         }
-        if limit == 0 {
+        if low == 0 {
             return Err("Memory budget is too small".into());
         }
+        let limit = low;
         let mut nodes = Vec::new();
         nodes
-            .try_reserve_exact(limit)
+            .try_reserve_exact(limit + 1)
             .map_err(|_| "Cannot reserve node arena")?;
         let mut heap = BinaryHeap::new();
-        heap.try_reserve_exact(limit)
+        heap.try_reserve_exact(limit + 1)
             .map_err(|_| "Cannot reserve search queue")?;
-        let table_size = (limit * 2).next_power_of_two();
+        let table_size = ((limit + 1) * 2).next_power_of_two();
         let mut table = Vec::new();
         table
             .try_reserve_exact(table_size)
@@ -96,6 +105,14 @@ impl Arena {
         self.nodes.len() >= self.node_limit
     }
     pub(crate) fn push(&mut self, node: Node) -> u32 {
+        let id = self.nodes.len() as u32;
+        self.nodes.push(node);
+        id
+    }
+    /// Push the one node allowed past the limit: a solution discovered at the
+    /// exact moment the arena filled. Callers must bind its table slot.
+    pub(crate) fn push_final(&mut self, node: Node) -> u32 {
+        debug_assert_eq!(self.nodes.len(), self.node_limit);
         let id = self.nodes.len() as u32;
         self.nodes.push(node);
         id

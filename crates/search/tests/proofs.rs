@@ -117,3 +117,24 @@ fn bounded_certificates_reject_inverted_bounds() {
         }
     );
 }
+
+#[test]
+fn solutions_survive_exact_limit_boundaries() {
+    // Sweep the state limit across the boundary where a solution child is
+    // discovered at the exact moment the arena fills.
+    let board = Board::parse(TWO).unwrap();
+    for max_states in 1..=40 {
+        let mut search =
+            Search::new(board.clone(), board.initial, Mode::Fast, max_states, 8).unwrap();
+        while search.status() == Status::Running {
+            search.advance(16);
+        }
+        if let Some(moves) = search.best_moves() {
+            let route = search.solution().unwrap().unwrap();
+            assert_eq!(route.len(), moves as usize, "at {max_states} states");
+            let mut game = Game::new(board.clone());
+            game.replay(&route).unwrap();
+            assert!(game.solved(), "at {max_states} states");
+        }
+    }
+}
