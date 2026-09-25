@@ -1,7 +1,15 @@
-import { run, env } from './toolchain.mjs';
+import { run, env, root } from './toolchain.mjs';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-const PINNED = '0.2.128';
+// The CLI must equal the wasm-bindgen crate that Cargo.lock resolves.
+const lock = readFileSync(resolve(root, 'Cargo.lock'), 'utf8');
+const PINNED = /name = "wasm-bindgen"\r?\nversion = "([^"]+)"/.exec(lock)?.[1];
+if (!PINNED) {
+  console.error('Cargo.lock does not list wasm-bindgen.');
+  process.exit(1);
+}
 const version = spawnSync('wasm-bindgen', ['--version'], { env, encoding: 'utf8' });
 if (version.error || version.status !== 0) {
   console.error('wasm-bindgen is not runnable. See README setup.');

@@ -15,9 +15,8 @@ export function best(id: string, rows: string): Best | null {
   const v = read('best.' + id) as Partial<Best> | null;
   return v && v.rows === rows && typeof v.route === 'string' && Number.isInteger(v.moves) && Number.isInteger(v.pushes) ? v as Best : null;
 }
+// getRandomValues works over plain HTTP; randomUUID needs a secure context.
 function randomId(): string {
-  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID().replaceAll('-', '');
-  // randomUUID needs a secure context; getRandomValues works over plain HTTP.
   return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 export function profile(): string | null {
