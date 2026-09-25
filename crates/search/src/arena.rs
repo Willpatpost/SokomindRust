@@ -1,5 +1,5 @@
-use crate::Status;
-use sokomind_core::{Cell, MAX_ROUTE, State};
+use crate::{Status, deadlock::Deadlock, reach::Reach};
+use sokomind_core::{MAX_ROUTE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
 /// No node: an empty table slot, or the root's parent.
@@ -10,7 +10,8 @@ pub(crate) struct Node {
     pub state: State,
     pub g: u32,
     pub parent: u32,
-    pub box_from: Cell,
+    /// Direction of the push that made this node (unused at the root); the
+    /// pushed box started at `state.player`.
     pub direction: u8,
 }
 /// Queue entry `(f, h, id)`: lowest f first, then lowest h, then oldest.
@@ -48,14 +49,15 @@ impl Arena {
         if !(1..=1_000_000).contains(&max_states) || !(4..=256).contains(&memory_mib) {
             return Err("Use 1..1000000 states and 4..256 MiB".into());
         }
-        // Includes reachability buffers, reverse distances (one goal per
-        // box), and route scratch.
-        let fixed_bytes = cells * (9 + boxes * 2) + 2 * MAX_ROUTE + 64 * 1024;
+        // Flood and deadlock buffers, u16 reverse distances per goal (one
+        // goal per box), and the route plus its string.
+        let per_cell = Reach::BYTES_PER_CELL + Deadlock::BYTES_PER_CELL + boxes * 2;
+        let fixed_bytes = cells * per_cell + 2 * MAX_ROUTE + 64 * 1024;
         let budget = memory_mib * 1024 * 1024;
         // One spare node keeps a solution found at the exact limit reachable.
         let bytes_for = |count: usize| {
             fixed_bytes
-                + (count + 1) * (size_of::<Node>() + size_of::<Entry>() + size_of::<u32>())
+                + (count + 1) * (size_of::<Node>() + size_of::<Entry>())
                 + ((count + 1) * 2).next_power_of_two() * size_of::<u32>()
         };
         // Exact largest limit that fits the budget, instead of stepping down 10%.

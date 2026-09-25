@@ -104,7 +104,6 @@ impl Engine {
                 state: start,
                 g: 0,
                 parent: NIL,
-                box_from: NONE,
                 direction: 0,
             },
             slot,
@@ -244,7 +243,6 @@ impl Engine {
                         state: next,
                         g,
                         parent: index,
-                        box_from: from,
                         direction: d as u8,
                     };
                     if self.arena.is_full() {
@@ -290,7 +288,7 @@ impl Engine {
             let parent = self.arena.node(node.parent);
             route.push(node.direction);
             let stand =
-                self.board.neighbors[node.box_from as usize][OPPOSITE[node.direction as usize]];
+                self.board.neighbors[node.state.player as usize][OPPOSITE[node.direction as usize]];
             self.reach.fill(&self.board, &parent.state);
             self.reach
                 .append_walk_reversed(&self.board, stand, &mut route);

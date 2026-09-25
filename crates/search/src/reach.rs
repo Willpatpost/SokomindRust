@@ -1,4 +1,5 @@
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
+use std::mem::size_of;
 
 /// Keeper-reachability flood with epoch stamps: fills cost only the cells
 /// they actually visit, and never reset their buffers between calls.
@@ -10,6 +11,9 @@ pub struct Reach {
     queue: Vec<Cell>,
 }
 impl Reach {
+    /// Distances, stamps, parent directions and the queue.
+    pub(crate) const BYTES_PER_CELL: usize =
+        size_of::<u16>() + size_of::<u32>() + size_of::<u8>() + size_of::<Cell>();
     pub fn new(cells: usize) -> Self {
         Self {
             distances: vec![NONE; cells],

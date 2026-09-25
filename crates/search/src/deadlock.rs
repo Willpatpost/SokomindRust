@@ -1,25 +1,32 @@
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, WALL};
+use std::mem::size_of;
+
+/// Occupancy marker for a cell without a box.
+const EMPTY: u8 = u8::MAX;
 
 /// Sound post-push deadlock detection, ported from the reference engine's
 /// `creates2x2Deadlock` and `createsFrozenComponentDeadlock`. It only ever
 /// answers "dead" for states from which no solution exists, so every mode
 /// may prune with it freely.
 pub(crate) struct Deadlock {
-    /// Cell -> box index, or u32::MAX when empty. Refreshed once per expansion.
-    occupancy: Vec<u32>,
+    /// Cell -> box index, or `EMPTY`. Box indices are below `MAX_BOXES`, so
+    /// a byte holds one. Refreshed once per expansion.
+    occupancy: Vec<u8>,
 }
 
 impl Deadlock {
+    /// The occupancy map.
+    pub(crate) const BYTES_PER_CELL: usize = size_of::<u8>();
     pub(crate) fn new(board: &Board) -> Self {
         Self {
-            occupancy: vec![u32::MAX; board.tiles.len()],
+            occupancy: vec![EMPTY; board.tiles.len()],
         }
     }
     /// Rebuild occupancy for a state; call once per expansion, before its pushes.
     pub(crate) fn refresh(&mut self, boxes: &[Cell]) {
-        self.occupancy.fill(u32::MAX);
+        self.occupancy.fill(EMPTY);
         for (i, &cell) in boxes.iter().enumerate() {
-            self.occupancy[cell as usize] = i as u32;
+            self.occupancy[cell as usize] = i as u8;
         }
     }
     fn at(&self, cell: Cell) -> Option<usize> {
@@ -27,7 +34,7 @@ impl Deadlock {
             return None;
         }
         let id = self.occupancy[cell as usize];
-        (id != u32::MAX).then_some(id as usize)
+        (id != EMPTY).then_some(id as usize)
     }
     /// Box at `cell` after the hypothetical push of `index` from `from` to `to`.
     fn box_at(&self, from: Cell, to: Cell, index: usize, cell: Cell) -> Option<usize> {
