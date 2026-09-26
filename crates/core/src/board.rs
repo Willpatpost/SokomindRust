@@ -225,10 +225,10 @@ impl Board {
                 (x + 1 < width).then_some(i + 1),
             ];
             for (d, next) in candidates.into_iter().enumerate() {
-                if let Some(n) = next {
-                    if tiles[n] != WALL {
-                        neighbors[i][d] = n as Cell;
-                    }
+                if let Some(n) = next
+                    && tiles[n] != WALL
+                {
+                    neighbors[i][d] = n as Cell;
                 }
             }
         }

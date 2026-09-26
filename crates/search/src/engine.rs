@@ -218,7 +218,11 @@ impl Engine {
             self.reach.fill(&self.board, &node.state);
             self.deadlock
                 .refresh(&node.state.boxes[..self.board.labels().len()]);
-            let parent_h = node.known_h().unwrap_or_else(|| self.heuristic.estimate(&node.state).expect("queued state has an assignment"));
+            let parent_h = node.known_h().unwrap_or_else(|| {
+                self.heuristic
+                    .estimate(&node.state)
+                    .expect("queued state has an assignment")
+            });
             let mut parent_group = ParentGroup::EMPTY;
             for i in 0..self.board.labels().len() {
                 let from = node.state.boxes[i];
@@ -305,8 +309,11 @@ impl Engine {
                         return;
                     }
                     let id = self.arena.insert(child, slot);
-                    self.arena
-                        .enqueue(g as u64 + self.policy.weight as u64 * total_h as u64, total_h, id);
+                    self.arena.enqueue(
+                        g as u64 + self.policy.weight as u64 * total_h as u64,
+                        total_h,
+                        id,
+                    );
                     // Keep a solution even if a limit occurs before its pop.
                     if goal {
                         self.incumbent = Some(id);
@@ -324,13 +331,17 @@ impl Engine {
     /// moves are disjoint from the assignment's required pushes, so they add
     /// to its admissible estimate. Keep assignment costs separately cached.
     fn move_estimate(&self, state: &State, pushes: u32) -> u32 {
-        if pushes == 0 && self.board.solved(state) { return 0; }
+        if pushes == 0 && self.board.solved(state) {
+            return 0;
+        }
         let width = self.board.width();
         let x = state.player as usize % width;
         let y = state.player as usize / width;
-        let walk = state.boxes[..self.board.labels().len()].iter().map(|&cell| {
-            x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
-        }).min().unwrap_or(0);
+        let walk = state.boxes[..self.board.labels().len()]
+            .iter()
+            .map(|&cell| x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1)
+            .min()
+            .unwrap_or(0);
         pushes + walk as u32
     }
     /// Rebuilds the incumbent's full route and replays it from the start.

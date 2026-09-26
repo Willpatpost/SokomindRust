@@ -30,18 +30,53 @@ mod tests {
     fn compact_versions_preserve_parents_and_exact_keeper_identity() {
         for count in [1, 8, MAX_BOXES] {
             let mut arena = Arena::new(100, count, 10, 4).unwrap();
-            let mut state = State { player: 1, boxes: [NONE; MAX_BOXES] };
-            for (i, cell) in state.boxes[..count].iter_mut().enumerate() { *cell = i as Cell + 10; }
+            let mut state = State {
+                player: 1,
+                boxes: [NONE; MAX_BOXES],
+            };
+            for (i, cell) in state.boxes[..count].iter_mut().enumerate() {
+                *cell = i as Cell + 10;
+            }
             let (slot, _) = arena.find(&state);
-            let old = arena.insert(Node { state, g: 10, parent: NIL, direction: 0, flags: 0, h: 3 }, slot);
+            let old = arena.insert(
+                Node {
+                    state,
+                    g: 10,
+                    parent: NIL,
+                    direction: 0,
+                    flags: 0,
+                    h: 3,
+                },
+                slot,
+            );
             arena.close(old);
             let mut child = state;
             child.player = 2;
             let (slot, found) = arena.find(&child);
             assert_eq!(found, None);
-            let descendant = arena.insert(Node { state: child, g: 11, parent: old, direction: 1, flags: 0, h: 2 }, slot);
+            let descendant = arena.insert(
+                Node {
+                    state: child,
+                    g: 11,
+                    parent: old,
+                    direction: 1,
+                    flags: 0,
+                    h: 2,
+                },
+                slot,
+            );
             let (slot, _) = arena.find(&state);
-            let improved = arena.insert(Node { state, g: 8, parent: NIL, direction: 0, flags: 0, h: 3 }, slot);
+            let improved = arena.insert(
+                Node {
+                    state,
+                    g: 8,
+                    parent: NIL,
+                    direction: 0,
+                    flags: 0,
+                    h: 3,
+                },
+                slot,
+            );
             assert_eq!(arena.find(&state).1, Some(improved));
             assert_eq!(arena.find(&child).1, Some(descendant));
             assert_eq!(arena.node(descendant).parent, old);
@@ -136,7 +171,7 @@ impl Arena {
         let mut low = 0;
         let mut high = max_states;
         while low < high {
-            let mid = low + (high - low + 1) / 2;
+            let mid = low + (high - low).div_ceil(2);
             if bytes_for(mid) <= budget {
                 low = mid;
             } else {

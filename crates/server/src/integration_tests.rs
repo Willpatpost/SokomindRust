@@ -169,7 +169,9 @@ async fn live_postgres_persistence() {
         Ok(pool) => pool,
         Err(error) => {
             sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-                .execute(&mut admin).await.unwrap();
+                .execute(&mut admin)
+                .await
+                .unwrap();
             panic!("connect to isolated test schema: {error}");
         }
     };

@@ -125,12 +125,12 @@ impl Deadlock {
             head += 1;
             for d in 0..4 {
                 let adjacent = board.neighbors()[cell as usize][d];
-                if let Some(j) = self.box_at(from, to, index, adjacent) {
-                    if !in_component[j] {
-                        in_component[j] = true;
-                        component[size] = (j, adjacent);
-                        size += 1;
-                    }
+                if let Some(j) = self.box_at(from, to, index, adjacent)
+                    && !in_component[j]
+                {
+                    in_component[j] = true;
+                    component[size] = (j, adjacent);
+                    size += 1;
                 }
             }
         }
@@ -169,9 +169,9 @@ impl Deadlock {
         // push cell of a component box is adjacent to it, so only component
         // boxes — all currently immovable — could unblock it.
         for &(_, cell) in component {
-            for d in 0..4 {
+            for (d, &opposite) in OPPOSITE.iter().enumerate() {
                 let destination = board.neighbors()[cell as usize][d];
-                let support = board.neighbors()[cell as usize][OPPOSITE[d]];
+                let support = board.neighbors()[cell as usize][opposite];
                 if destination != NONE
                     && support != NONE
                     && self.box_at(from, to, index, destination).is_none()
