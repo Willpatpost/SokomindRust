@@ -338,7 +338,7 @@ fn fast_routes_survive_state_limit_boundaries() {
 
 /// Sweeps every state limit up to the unlimited run's node count. A limit
 /// always cuts an expansion short, so the frontier must count that node's
-/// unpushed children (`interrupted_g`); some limits land exactly as the solved
+/// unpushed children (`interrupted_f`); some limits land exactly as the solved
 /// child needs the arena's spare node (`Arena::insert` past the limit).
 #[test]
 fn limited_optimal_bounds_never_pass_the_optimum() {
@@ -383,6 +383,27 @@ fn limited_optimal_bounds_never_pass_the_optimum() {
     }
     assert!(kept > 0, "no limited run kept an incumbent");
     assert!(spare > 0, "no limited run used the spare node");
+}
+
+/// A one-state limit cuts the root expansion short at its first child and
+/// leaves the queue empty. The bound keeps the root's f rather than falling
+/// to g + 1.
+#[test]
+fn capped_optimal_bound_keeps_the_interrupted_f() {
+    let board = Board::parse(TWO).unwrap();
+    let root = ExactSearch::new(board.clone(), board.initial(), 20_000, 8)
+        .unwrap()
+        .lower_bound();
+    assert!(
+        root.is_some_and(|bound| (2..=20).contains(&bound)),
+        "{root:?}"
+    );
+    let mut capped = ExactSearch::new(board.clone(), board.initial(), 1, 8).unwrap();
+    capped.advance(32);
+    assert_eq!(capped.status(), Status::StateLimit);
+    assert_eq!((capped.expanded(), capped.generated()), (1, 1));
+    assert_eq!(capped.proof(), None);
+    assert_eq!(capped.lower_bound(), root);
 }
 
 /// All three modes against the BFS oracle on seeded random boards, plus two

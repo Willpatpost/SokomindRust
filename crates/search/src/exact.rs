@@ -102,13 +102,13 @@ impl ExactSearch {
             }
         }
     }
-    /// Minimum f over everything not yet expanded, including the unpushed
-    /// successors of an interrupted expansion.
+    /// Minimum f over everything not yet expanded. An interrupted expansion
+    /// contributes its own f, which bounds its unpushed successors.
     fn frontier(&self) -> u64 {
         self.0
             .arena
             .min_f()
             .unwrap_or(u64::MAX)
-            .min(self.0.interrupted_g.map_or(u64::MAX, |g| g as u64 + 1))
+            .min(self.0.interrupted_f.unwrap_or(u64::MAX))
     }
 }

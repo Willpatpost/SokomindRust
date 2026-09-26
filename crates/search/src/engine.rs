@@ -71,9 +71,10 @@ pub(crate) struct Engine {
     expanded: u32,
     stats: SearchStats,
     incumbent: Option<u32>,
-    /// Cost of a node whose expansion a limit cut short. Its unpushed
-    /// successors have f >= g + 1, which the exact frontier must include.
-    pub(crate) interrupted_g: Option<u32>,
+    /// g + queued h (at least 1) of a node whose expansion a limit cut short.
+    /// Under an admissible h, no route through its unpushed successors along
+    /// this path is shorter, so the exact frontier must include it.
+    pub(crate) interrupted_f: Option<u64>,
 }
 
 impl Engine {
@@ -106,7 +107,7 @@ impl Engine {
             expanded: 0,
             stats: SearchStats::default(),
             incumbent: None,
-            interrupted_g: None,
+            interrupted_f: None,
         };
         let (slot, _) = search.arena.find(&start);
         let root = search.arena.insert(
@@ -165,9 +166,9 @@ impl Engine {
             };
         }
     }
-    /// The arena is full while expanding a node of cost `g`.
-    fn stop_at_limit(&mut self, g: u32) {
-        self.interrupted_g = Some(g);
+    /// The arena is full while expanding a node whose g + queued h is `f`.
+    fn stop_at_limit(&mut self, f: u64) {
+        self.interrupted_f = Some(f);
         self.status = self.arena.limit_status();
     }
     /// Work is sliced by queue pops so a worker can yield, report, or cancel.
@@ -304,7 +305,8 @@ impl Engine {
                         if goal {
                             self.incumbent = Some(self.arena.insert(child, slot));
                         }
-                        self.stop_at_limit(node.g);
+                        // An expanded node is unsolved, so at least one move remains.
+                        self.stop_at_limit(node.g as u64 + queued_h.max(1) as u64);
                         return;
                     }
                     let id = self.arena.insert(child, slot);
