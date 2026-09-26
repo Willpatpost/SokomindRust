@@ -1,0 +1,3 @@
+# The benchmark baseline hashes catalog text after CRLF normalization;
+# keep data files LF in every working copy.
+data/*.json text eol=lf

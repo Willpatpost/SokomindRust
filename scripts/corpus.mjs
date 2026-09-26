@@ -5,7 +5,11 @@ import { resolve } from 'node:path';
 import { env, root, run } from './toolchain.mjs';
 
 export const catalog = JSON.parse(readFileSync(resolve(root, 'data/puzzles.json'), 'utf8'));
-export const catalogHash = createHash('sha256').update(readFileSync(resolve(root, 'data/puzzles.json'))).digest('hex');
+// Windows checkouts hold CRLF working copies; hash normalized text so the
+// benchmark baseline is stable on every platform.
+export const catalogHash = createHash('sha256')
+    .update(readFileSync(resolve(root, 'data/puzzles.json'), 'utf8').replace(/\r\n/g, '\n'))
+    .digest('hex');
 export const diagnosticFields = [
   'unique_states', 'duplicate_improvements', 'reopened_states', 'stale_pops', 'peak_queue',
   'pruned_dead_cells', 'pruned_deadlocks', 'pruned_duplicates', 'pruned_assignment', 'pruned_bound',
