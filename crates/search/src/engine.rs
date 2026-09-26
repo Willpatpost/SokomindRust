@@ -121,7 +121,7 @@ impl Engine {
             slot,
         );
         if let Some(h) = h {
-            let total_h = search.move_estimate(&start, h);
+            let total_h = search.root_estimate(&start, h);
             search
                 .arena
                 .enqueue(total_h as u64 * policy.weight as u64, total_h, root);
@@ -281,10 +281,9 @@ impl Engine {
                         self.stats.pruned_assignment += 1;
                         continue;
                     };
-                    let total_h = self.move_estimate(&next, h);
                     if self
                         .best_moves()
-                        .is_some_and(|best| g as u64 + total_h as u64 >= best as u64)
+                        .is_some_and(|best| g as u64 + h as u64 >= best as u64)
                     {
                         self.stats.pruned_bound += 1;
                         continue;
@@ -309,11 +308,8 @@ impl Engine {
                         return;
                     }
                     let id = self.arena.insert(child, slot);
-                    self.arena.enqueue(
-                        g as u64 + self.policy.weight as u64 * total_h as u64,
-                        total_h,
-                        id,
-                    );
+                    self.arena
+                        .enqueue(g as u64 + self.policy.weight as u64 * h as u64, h, id);
                     // Keep a solution even if a limit occurs before its pop.
                     if goal {
                         self.incumbent = Some(id);
@@ -330,7 +326,9 @@ impl Engine {
     /// walls and all other boxes can only shorten that walk. These walking
     /// moves are disjoint from the assignment's required pushes, so they add
     /// to its admissible estimate. Keep assignment costs separately cached.
-    fn move_estimate(&self, state: &State, pushes: u32) -> u32 {
+    /// Only the root needs this: a pushed child's player stands next to the
+    /// box it just pushed, so the walk term is always 0 there.
+    fn root_estimate(&self, state: &State, pushes: u32) -> u32 {
         if pushes == 0 && self.board.solved(state) {
             return 0;
         }
