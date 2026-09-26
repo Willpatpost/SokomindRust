@@ -1,5 +1,5 @@
 import { MAX_ROUTE, errorMessage, type SearchUpdate, type SolveRequest, type WorkerRequest } from './protocol.ts';
-import { decodeNativeReply, decodeWorkerReply, errorText } from './transport.ts';
+import { decodeNativeReply, decodeWorkerReply, errorText, unboundFetch } from './transport.ts';
 
 export interface WorkerPort {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
@@ -45,7 +45,7 @@ export class SolverClient {
   constructor(options: Options) {
     this.options = options;
     this.clock = options.scheduler ?? browserScheduler;
-    this.request = options.fetch ?? fetch;
+    this.request = unboundFetch(options.fetch);
   }
   get busy() { return this.state.kind === 'browser-running' || this.state.kind === 'native-running'; }
   get route() { return this.state.kind === 'idle' ? undefined : this.state.route; }

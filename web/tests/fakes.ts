@@ -51,3 +51,31 @@ export function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+// Mirrors the browser's WebIDL brand check: fetch rejects any receiver other
+// than undefined or the global object with "Illegal invocation".
+export function brandCheckedFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): typeof fetch {
+  return function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    if (this !== undefined && this !== globalThis)
+      return Promise.reject(new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation"));
+    return handler(String(input), init);
+  } as typeof fetch;
+}
+export async function withGlobalFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
+  const saved = globalThis.fetch;
+  globalThis.fetch = stub;
+  try { return await body(); } finally { globalThis.fetch = saved; }
+}
+// Node has no usable localStorage; node --test runs each file in its own process.
+export function installMemoryStorage() {
+  const items = new Map<string, string>();
+  const value = {
+    get length() { return items.size; },
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, item: string) => { items.set(key, String(item)); },
+    removeItem: (key: string) => { items.delete(key); },
+    clear: () => items.clear(),
+  };
+  Object.defineProperty(globalThis, 'localStorage', { value, configurable: true, writable: true });
+  return items;
+}

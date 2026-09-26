@@ -1,5 +1,5 @@
 import * as storage from './storage.ts';
-import { counter, errorText, route } from './transport.ts';
+import { counter, errorText, route, unboundFetch } from './transport.ts';
 import { browserScheduler, type Scheduler } from './solver-client.ts';
 
 interface Context { id: string; rows: string }
@@ -22,7 +22,7 @@ export class ProgressClient {
   private saveTimer: number | undefined;
   constructor(options: Options) {
     this.options = options; this.profile = options.profile === undefined ? storage.profile() : options.profile;
-    this.request = options.fetch ?? fetch; this.clock = options.scheduler ?? browserScheduler;
+    this.request = unboundFetch(options.fetch); this.clock = options.scheduler ?? browserScheduler;
   }
   select(id: string, rows: string) {
     if (this.saveTimer !== undefined) this.clock.clearTimeout(this.saveTimer);

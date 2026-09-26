@@ -123,3 +123,9 @@ export async function errorText(response: Response): Promise<string | undefined>
   const error = (value as ObjectValue).error;
   return typeof error === 'string' ? error : undefined;
 }
+/** Browsers brand-check fetch's receiver ("Illegal invocation"), so a stored
+ * fetch must never be called as a method. The wrapper always calls with an
+ * undefined receiver and looks the global up per call, so tests can swap it. */
+export function unboundFetch(custom?: typeof fetch): typeof fetch {
+  return custom ? (input, init) => custom(input, init) : (input, init) => fetch(input, init);
+}

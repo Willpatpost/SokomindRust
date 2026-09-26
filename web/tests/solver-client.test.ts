@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SolverClient } from '../src/solver-client.ts';
 import { MAX_ROUTE } from '../src/protocol.ts';
-import { Clock, Worker, deferred, native, progress } from './fakes.ts';
+import { Clock, Worker, brandCheckedFetch, deferred, native, progress, withGlobalFetch } from './fakes.ts';
 const request = { rows: 'rows', actions: '', mode: 'optimal', maxStates: 500000, memoryMiB: 64, timeMs: 10 };
 function setup(overrides: Partial<ConstructorParameters<typeof SolverClient>[0]> = {}) {
   const clock = new Clock(), worker = new Worker(), statuses: string[] = [], updates: unknown[] = [], verified: string[] = [];
@@ -78,4 +78,10 @@ test('native reply is normalized and verified, busy API failure leaves client us
   assert.equal(good.client.route, 'D'); assert.deepEqual(good.verified, ['D']); assert.equal(good.clock.tasks.size, 0);
   const busy = setup({ fetch: async () => Response.json({ error: 'Too many solve requests' }, { status: 429 }) });
   await busy.client.solve('native', request); assert.match(busy.statuses[0], /browser solver still works/); assert.equal(busy.client.busy, false);
+});
+test('native default transport passes the browser fetch brand check', async () => {
+  await withGlobalFetch(brandCheckedFetch(async () => Response.json(native())), async () => {
+    const { client, statuses } = setup(); await client.solve('native', request);
+    assert.equal(client.route, 'D'); assert.deepEqual(statuses, []); assert.equal(client.state.kind, 'completed');
+  });
 });
