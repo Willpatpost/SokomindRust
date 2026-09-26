@@ -14,7 +14,7 @@ fn routes_stop_at_max_route_moves() {
     game.replay(&full).unwrap();
     assert_eq!(game.moves() as usize, MAX_ROUTE);
     assert_eq!(game.pushes(), 0);
-    assert_eq!(game.state(), game.board().initial);
+    assert_eq!(game.state(), game.board().initial());
     // The budget, not the board, refuses the next legal step.
     assert!(!game.step(2));
     assert!(game.undo());
@@ -32,7 +32,7 @@ fn routes_stop_at_max_route_moves() {
 #[test]
 fn rules_undo_and_atomic_replay() {
     let board = Board::parse(CROSSING_PAIR).unwrap();
-    let at = |row: usize, column: usize| (row * board.width + column) as Cell;
+    let at = |row: usize, column: usize| (row * board.width() + column) as Cell;
     let snapshot = |game: &Game| {
         (
             game.state(),
@@ -62,7 +62,7 @@ fn rules_undo_and_atomic_replay() {
         assert_eq!(&snapshot(&game), expected);
     }
     assert!(!game.undo());
-    assert_eq!(game.state(), board.initial);
+    assert_eq!(game.state(), board.initial());
     // The restored game replays the same route to the same result.
     game.replay("DLDR").unwrap();
     assert_eq!(&snapshot(&game), trail.last().unwrap());

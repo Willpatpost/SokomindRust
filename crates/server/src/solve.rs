@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sokomind_core::{Board, Game, MAX_ROUTE};
-use sokomind_search::{Mode, Proof, Search, Status};
+use sokomind_search::{Mode, Proof, Search, Status, StopReason};
 use std::{
     net::SocketAddr,
     ops::RangeInclusive,
@@ -102,6 +102,7 @@ pub struct ResultBody {
     reserved_bytes: usize,
     elapsed_ms: u64,
     proof: Option<ProofBody>,
+    stats: serde_json::Value,
 }
 struct CancelOnDrop(Arc<AtomicBool>);
 impl Drop for CancelOnDrop {
@@ -166,9 +167,9 @@ pub async fn solve(
         })?;
         while search.status() == Status::Running {
             if cancel.load(Ordering::Relaxed) {
-                search.stop(Status::Cancelled);
+                search.stop(StopReason::Cancelled);
             } else if started.elapsed() >= deadline {
-                search.stop(Status::TimeLimit);
+                search.stop(StopReason::TimeLimit);
             } else {
                 search.advance(8);
             }
@@ -195,6 +196,7 @@ pub async fn solve(
         } else {
             (None, None)
         };
+        let stats = search.stats();
         Ok(ResultBody {
             status: search.status().as_str(),
             route,
@@ -205,6 +207,18 @@ pub async fn solve(
             reserved_bytes: search.reserved_bytes(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             proof: proof_body(search.proof()),
+            stats: serde_json::json!({
+                "unique_states": stats.unique_states,
+                "duplicate_improvements": stats.duplicate_improvements,
+                "reopened_states": stats.reopened_states,
+                "stale_pops": stats.stale_pops,
+                "peak_queue": stats.peak_queue,
+                "pruned_dead_cells": stats.pruned_dead_cells,
+                "pruned_deadlocks": stats.pruned_deadlocks,
+                "pruned_duplicates": stats.pruned_duplicates,
+                "pruned_assignment": stats.pruned_assignment,
+                "pruned_bound": stats.pruned_bound,
+            }),
         })
     })
     .await

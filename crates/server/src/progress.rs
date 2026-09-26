@@ -1,4 +1,5 @@
 use crate::api::{ApiJson, ApiPath, App, Error};
+use crate::database;
 use axum::{
     Json,
     extract::{ConnectInfo, State},
@@ -35,10 +36,10 @@ pub struct Save {
     route: String,
 }
 
-const FETCH: &str = "
+pub(crate) const FETCH: &str = "
 SELECT puzzle_id, moves, pushes, route FROM progress
 WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3";
-const UPSERT: &str = "
+pub(crate) const UPSERT: &str = "
 INSERT INTO progress (profile, puzzle_id, fingerprint, moves, pushes, route)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (profile, puzzle_id, fingerprint) DO UPDATE
@@ -57,15 +58,17 @@ pub async fn get(
     let db = app.db()?;
     // A catalog layout change retires old records: they cannot be beaten by
     // fresh saves and their routes no longer replay.
-    let fingerprint = &app.puzzle(&id)?.fingerprint;
-    let record = sqlx::query_as::<_, Record>(FETCH)
-        .bind(profile)
-        .bind(&id)
-        .bind(fingerprint)
-        .fetch_optional(db)
-        .await
-        .map_err(Error::database)?
-        .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "No saved route"))?;
+    let fingerprint = app.puzzle(&id)?.fingerprint();
+    let _permit = app.progress_permit()?;
+    let record = database::run(
+        sqlx::query_as::<_, Record>(FETCH)
+            .bind(profile)
+            .bind(&id)
+            .bind(fingerprint)
+            .fetch_optional(db),
+    )
+    .await?
+    .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "No saved route"))?;
     Ok(Json(record))
 }
 pub async fn save(
@@ -86,9 +89,12 @@ pub async fn save(
     if !app.saves.allow(app.proxies.client(&headers, peer.ip())) {
         return Err(Error::too_many("Too many saves; try again shortly"));
     }
+    let permit = app.progress_permit()?;
     let route = body.route;
     // Replay is pure CPU: keep it off the async runtime, like the solver.
-    let (moves, pushes, fingerprint, route) = tokio::task::spawn_blocking(move || {
+    let (_permit, moves, pushes, fingerprint, route) = tokio::task::spawn_blocking(move || {
+        // If the HTTP future is dropped, the blocking job retains admission
+        // until it finishes. Successful jobs return it across the DB write.
         let mut game = Game::new(board);
         // Never trust client counters, box coordinates, solved flags, or optimality claims.
         game.replay(&route)?;
@@ -96,21 +102,28 @@ pub async fn save(
             return Err("Route does not solve the puzzle".to_string());
         }
         let (moves, pushes) = (game.moves() as i32, game.pushes() as i32);
-        Ok((moves, pushes, game.into_parts().0.fingerprint, route))
+        Ok((
+            permit,
+            moves,
+            pushes,
+            game.board().fingerprint().to_owned(),
+            route,
+        ))
     })
     .await
     .map_err(Error::internal)?
     .map_err(Error::bad)?;
-    let result = sqlx::query(UPSERT)
-        .bind(profile)
-        .bind(id)
-        .bind(fingerprint)
-        .bind(moves)
-        .bind(pushes)
-        .bind(route)
-        .execute(db)
-        .await
-        .map_err(Error::database)?;
+    let result = database::run(
+        sqlx::query(UPSERT)
+            .bind(profile)
+            .bind(id)
+            .bind(fingerprint)
+            .bind(moves)
+            .bind(pushes)
+            .bind(route)
+            .execute(db),
+    )
+    .await?;
     Ok(Json(
         serde_json::json!({ "saved": true, "improved": result.rows_affected() > 0 }),
     ))
@@ -126,7 +139,8 @@ mod tests {
         const HEX: &[u8] = b"0123456789abcdefABCDEF0123456789";
         const MISSING: &str = "Missing x-profile-id";
         const MALFORMED: &str = "Profile must be 32 hexadecimal characters";
-        let cases: [(Option<&[u8]>, Result<&str, &str>); 7] = [
+        type ProfileCase<'a> = (Option<&'a [u8]>, Result<&'a str, &'a str>);
+        let cases: [ProfileCase<'_>; 7] = [
             (None, Err(MISSING)),
             (Some(HEX), Ok("0123456789abcdefABCDEF0123456789")),
             (Some(&HEX[1..]), Err(MALFORMED)),

@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game, State};
-use sokomind_search::{ExactSearch, Mode, Proof, Search, Status};
+use sokomind_search::{ExactSearch, Mode, Proof, Search, Status, StopReason};
 use std::collections::{HashSet, VecDeque};
 
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
@@ -51,8 +51,8 @@ fn bfs(board: &Board) -> Option<u32> {
 /// `bfs`, or `None` once it has seen more than `cap` states.
 fn bfs_within(board: &Board, cap: usize) -> Option<Option<u32>> {
     let key = |s: State| (s.player, s.boxes);
-    let mut queue = VecDeque::from([(board.initial, 0)]);
-    let mut seen = HashSet::from([key(board.initial)]);
+    let mut queue = VecDeque::from([(board.initial(), 0)]);
+    let mut seen = HashSet::from([key(board.initial())]);
     while let Some((state, moves)) = queue.pop_front() {
         if board.solved(&state) {
             return Some(Some(moves));
@@ -79,7 +79,7 @@ fn drive(
     optimum: Option<u32>,
     context: &str,
 ) -> Search {
-    let mut search = Search::new(board.clone(), board.initial, mode, max_states, 8).unwrap();
+    let mut search = Search::new(board.clone(), board.initial(), mode, max_states, 8).unwrap();
     let mut best = u32::MAX;
     while search.status() == Status::Running {
         search.advance(1);
@@ -281,8 +281,8 @@ fn engines_agree_with_bfs_on_fixed_boards() {
 fn searches_stopped_before_starting_claim_nothing() {
     let board = Board::parse(TWO).unwrap();
     for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
-        let mut search = Search::new(board.clone(), board.initial, mode, 20_000, 8).unwrap();
-        search.stop(Status::Cancelled);
+        let mut search = Search::new(board.clone(), board.initial(), mode, 20_000, 8).unwrap();
+        search.stop(StopReason::Cancelled);
         search.advance(32);
         assert_eq!(search.status(), Status::Cancelled, "{mode:?}");
         assert_eq!((search.expanded(), search.generated()), (0, 1), "{mode:?}");
@@ -295,13 +295,13 @@ fn searches_stopped_before_starting_claim_nothing() {
 fn interrupted_optimal_keeps_a_sound_gap() {
     let board = Board::parse(TWO).unwrap();
     let optimum = bfs(&board);
-    let mut search = Search::new(board.clone(), board.initial, Mode::Optimal, 20_000, 8).unwrap();
+    let mut search = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8).unwrap();
     // The first incumbent always appears when the solved child is generated,
     // at least one expansion before it can pop, so the stop lands mid-run.
     while search.status() == Status::Running && search.best_moves().is_none() {
         search.advance(1);
     }
-    search.stop(Status::TimeLimit);
+    search.stop(StopReason::TimeLimit);
     assert_eq!(search.status(), Status::TimeLimit);
     let best = search.best_moves().unwrap();
     assert!(
@@ -447,7 +447,7 @@ mod fixtures {
 
     fn check(name: &str, rows: &str, optimum: Option<u32>) {
         let board = Board::parse(rows).unwrap();
-        let mut engine = ExactSearch::new(board.clone(), board.initial, 1_000_000, 256).unwrap();
+        let mut engine = ExactSearch::new(board.clone(), board.initial(), 1_000_000, 256).unwrap();
         while engine.status() == Status::Running {
             engine.advance(4096);
         }

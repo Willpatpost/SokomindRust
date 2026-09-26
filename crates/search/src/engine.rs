@@ -1,5 +1,5 @@
 use crate::{
-    Status,
+    SearchError, SearchStats, Status, StopReason,
     arena::{Arena, NIL, Node},
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
@@ -59,7 +59,7 @@ impl Policy {
 /// Push search over one reserved arena. Only [`crate::ExactSearch`] turns its
 /// state into bounds or a proof; with a weighted policy results are always
 /// optimality unknown.
-pub struct Engine {
+pub(crate) struct Engine {
     policy: Policy,
     board: Board,
     start: State,
@@ -69,6 +69,7 @@ pub struct Engine {
     pub(crate) arena: Arena,
     status: Status,
     expanded: u32,
+    stats: SearchStats,
     incumbent: Option<u32>,
     /// Cost of a node whose expansion a limit cut short. Its unpushed
     /// successors have f >= g + 1, which the exact frontier must include.
@@ -82,10 +83,14 @@ impl Engine {
         policy: Policy,
         max_states: usize,
         memory_mib: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, SearchError> {
+        board
+            .validate_state(&start)
+            .map_err(SearchError::InvalidState)?;
         board.canonicalize(&mut start);
-        let cells = board.tiles.len();
-        let arena = Arena::new(cells, board.labels.len(), max_states, memory_mib)?;
+        let cells = board.tiles().len();
+        let arena = Arena::new(cells, board.labels().len(), max_states, memory_mib)
+            .map_err(SearchError::Configuration)?;
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
         let h = heuristic.estimate(&start);
@@ -99,6 +104,7 @@ impl Engine {
             deadlock,
             status: Status::Running,
             expanded: 0,
+            stats: SearchStats::default(),
             incumbent: None,
             interrupted_g: None,
         };
@@ -115,9 +121,10 @@ impl Engine {
             slot,
         );
         if let Some(h) = h {
+            let total_h = search.move_estimate(&start, h);
             search
                 .arena
-                .enqueue(h as u64 * policy.weight as u64, h, root);
+                .enqueue(total_h as u64 * policy.weight as u64, total_h, root);
         } else {
             search.status = Status::Exhausted;
         }
@@ -138,15 +145,24 @@ impl Engine {
     pub fn reserved_bytes(&self) -> usize {
         self.arena.reserved_bytes()
     }
+    pub fn stats(&self) -> SearchStats {
+        let arena = self.arena.stats();
+        SearchStats {
+            unique_states: arena.unique_states,
+            duplicate_improvements: arena.duplicate_improvements,
+            reopened_states: arena.reopened_states,
+            peak_queue: arena.peak_queue,
+            ..self.stats
+        }
+    }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach.
-    pub fn stop(&mut self, reason: Status) {
-        debug_assert!(!matches!(
-            reason,
-            Status::Running | Status::Solved | Status::Exhausted
-        ));
+    pub fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
-            self.status = reason;
+            self.status = match reason {
+                StopReason::Cancelled => Status::Cancelled,
+                StopReason::TimeLimit => Status::TimeLimit,
+            };
         }
     }
     /// The arena is full while expanding a node of cost `g`.
@@ -162,7 +178,7 @@ impl Engine {
             return;
         }
         for _ in 0..pops {
-            let Some((index, parent_h)) = self.arena.dequeue() else {
+            let Some((index, queued_h)) = self.arena.dequeue() else {
                 // The queue emptied: every state was popped, dominated, or
                 // pruned by an admissible rule. Under the exact policy that
                 // makes the incumbent optimal.
@@ -176,6 +192,7 @@ impl Engine {
             let node = self.arena.node(index);
             // A cheaper duplicate has since taken over this state's slot.
             if self.arena.find(&node.state).1 != Some(index) {
+                self.stats.stale_pops += 1;
                 continue;
             }
             if self.board.solved(&node.state) {
@@ -191,26 +208,27 @@ impl Engine {
             if self.best_moves().is_some_and(|best| {
                 node.g >= best
                     || (self.policy.prune_popped_estimate
-                        && node.g as u64 + parent_h as u64 >= best as u64)
+                        && node.g as u64 + queued_h as u64 >= best as u64)
             }) {
+                self.stats.pruned_bound += 1;
                 continue;
             }
             self.expanded += 1;
             self.arena.close(index);
             self.reach.fill(&self.board, &node.state);
             self.deadlock
-                .refresh(&node.state.boxes[..self.board.labels.len()]);
+                .refresh(&node.state.boxes[..self.board.labels().len()]);
+            let parent_h = node.known_h().unwrap_or_else(|| self.heuristic.estimate(&node.state).expect("queued state has an assignment"));
             let mut parent_group = ParentGroup::EMPTY;
-            for i in 0..self.board.labels.len() {
+            for i in 0..self.board.labels().len() {
                 let from = node.state.boxes[i];
                 for (d, &opposite) in OPPOSITE.iter().enumerate() {
-                    let to = self.board.neighbors[from as usize][d];
-                    let stand = self.board.neighbors[from as usize][opposite];
+                    let to = self.board.neighbors()[from as usize][d];
+                    let stand = self.board.neighbors()[from as usize][opposite];
                     if to == NONE
                         || stand == NONE
                         || self.reach.blocked(to)
                         || self.reach.distance(stand) == NONE
-                        || self.heuristic.dead(i, to)
                     {
                         // A box pushed onto a dead cell would only fail the
                         // estimate below, and every check in between just
@@ -218,11 +236,17 @@ impl Engine {
                         // count or result.
                         continue;
                     }
+                    if self.heuristic.dead(i, to) {
+                        self.stats.pruned_dead_cells += 1;
+                        continue;
+                    }
                     let g = node.g + self.reach.distance(stand) as u32 + 1;
                     if self.best_moves().is_some_and(|best| g >= best) {
+                        self.stats.pruned_bound += 1;
                         continue;
                     }
                     if self.deadlock.is_dead_after_push(&self.board, from, to) {
+                        self.stats.pruned_deadlocks += 1;
                         continue;
                     }
                     let mut next = node.state;
@@ -234,6 +258,7 @@ impl Engine {
                     if previous.is_some_and(|previous| {
                         previous.g <= g || (!self.policy.reopen_closed && previous.is_closed())
                     }) {
+                        self.stats.pruned_duplicates += 1;
                         continue;
                     }
                     // A cheaper duplicate reuses the stored estimate; otherwise
@@ -249,12 +274,15 @@ impl Engine {
                             to,
                         )
                     }) else {
+                        self.stats.pruned_assignment += 1;
                         continue;
                     };
+                    let total_h = self.move_estimate(&next, h);
                     if self
                         .best_moves()
-                        .is_some_and(|best| g as u64 + h as u64 >= best as u64)
+                        .is_some_and(|best| g as u64 + total_h as u64 >= best as u64)
                     {
+                        self.stats.pruned_bound += 1;
                         continue;
                     }
                     // Past the prune above g + h < best, so a solved child
@@ -278,7 +306,7 @@ impl Engine {
                     }
                     let id = self.arena.insert(child, slot);
                     self.arena
-                        .enqueue(g as u64 + self.policy.weight as u64 * h as u64, h, id);
+                        .enqueue(g as u64 + self.policy.weight as u64 * total_h as u64, total_h, id);
                     // Keep a solution even if a limit occurs before its pop.
                     if goal {
                         self.incumbent = Some(id);
@@ -290,6 +318,20 @@ impl Engine {
                 }
             }
         }
+    }
+    /// Every unsolved route walks to a box before its first push. Ignoring
+    /// walls and all other boxes can only shorten that walk. These walking
+    /// moves are disjoint from the assignment's required pushes, so they add
+    /// to its admissible estimate. Keep assignment costs separately cached.
+    fn move_estimate(&self, state: &State, pushes: u32) -> u32 {
+        if pushes == 0 && self.board.solved(state) { return 0; }
+        let width = self.board.width();
+        let x = state.player as usize % width;
+        let y = state.player as usize / width;
+        let walk = state.boxes[..self.board.labels().len()].iter().map(|&cell| {
+            x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
+        }).min().unwrap_or(0);
+        pushes + walk as u32
     }
     /// Rebuilds the incumbent's full route and replays it from the start.
     /// Costs O(route) plus one flood per push, so call it once per improved
@@ -310,8 +352,8 @@ impl Engine {
         while node.parent != NIL {
             let parent = self.arena.node(node.parent);
             route.push(node.direction);
-            let stand =
-                self.board.neighbors[node.state.player as usize][OPPOSITE[node.direction as usize]];
+            let stand = self.board.neighbors()[node.state.player as usize]
+                [OPPOSITE[node.direction as usize]];
             self.reach.fill(&self.board, &parent.state);
             self.reach
                 .append_walk_reversed(&self.board, stand, &mut route);

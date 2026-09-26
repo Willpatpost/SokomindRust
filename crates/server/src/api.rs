@@ -23,11 +23,18 @@ pub struct App {
     pub db: Option<PgPool>,
     pub catalog: Arc<HashMap<String, Board>>,
     pub slots: Arc<Semaphore>,
+    pub progress_slots: Arc<Semaphore>,
     pub proxies: Arc<TrustedProxies>,
     pub saves: Arc<RateLimiter>,
     pub solves: Arc<RateLimiter>,
 }
 impl App {
+    pub fn progress_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+        self.progress_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::too_many("Progress busy; retry later"))
+    }
     pub fn db(&self) -> Result<&PgPool, Error> {
         self.db.as_ref().ok_or_else(Error::unavailable)
     }
@@ -93,6 +100,7 @@ where
         }
     }
 }
+#[derive(Debug)]
 pub struct Error(pub StatusCode, pub String);
 impl Error {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
@@ -113,10 +121,20 @@ impl Error {
             "PostgreSQL persistence is unavailable",
         )
     }
-    /// An unreachable database is the same 503 as an unconfigured one;
-    /// any other database failure is a server bug.
+    pub fn database_timeout() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PostgreSQL operation timed out; retry later",
+        )
+    }
+    /// Transient resource/lock failures can be retried, while malformed SQL
+    /// and constraint errors remain internal failures.
     pub fn database(error: sqlx::Error) -> Self {
-        if db_unreachable(&error) {
+        if matches!(&error, sqlx::Error::Database(error) if error.code().is_some_and(|code| matches!(&*code, "57014" | "55P03" | "40P01")))
+        {
+            eprintln!("database operation interrupted: {error}");
+            Self::database_timeout()
+        } else if db_unreachable(&error) {
             eprintln!("database unavailable: {error}");
             Self::unavailable()
         } else {
@@ -149,6 +167,9 @@ impl IntoResponse for Error {
 pub async fn health(State(app): State<App>) -> Json<serde_json::Value> {
     // A slow probe is indistinguishable from a dead one to the frontend.
     let persistence = if let Some(db) = &app.db {
+        let Ok(_permit) = app.progress_permit() else {
+            return Json(serde_json::json!({ "status": "ok", "persistence": false }));
+        };
         tokio::time::timeout(HEALTH_TIMEOUT, sqlx::query("SELECT 1").execute(db))
             .await
             .map(|result| result.is_ok())
@@ -207,7 +228,11 @@ mod tests {
     fn every_embedded_puzzle_parses() {
         let catalog = load_catalog().unwrap();
         assert!(!catalog.is_empty());
-        assert!(catalog.values().all(|board| !board.fingerprint.is_empty()));
+        assert!(
+            catalog
+                .values()
+                .all(|board| !board.fingerprint().is_empty())
+        );
     }
 
     #[test]

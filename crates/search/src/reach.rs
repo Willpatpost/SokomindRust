@@ -32,7 +32,7 @@ impl Reach {
         self.queue.clear();
         // Boxes are stamped without a distance, which blocks the flood and
         // marks the cell occupied for push generation.
-        for &cell in &state.boxes[..board.labels.len()] {
+        for &cell in &state.boxes[..board.labels().len()] {
             self.stamps[cell as usize] = self.epoch;
             self.distances[cell as usize] = NONE;
         }
@@ -47,7 +47,7 @@ impl Reach {
             let cell = self.queue[head];
             head += 1;
             for d in 0..4 {
-                let next = board.neighbors[cell as usize][d];
+                let next = board.neighbors()[cell as usize][d];
                 if next != NONE && self.stamps[next as usize] != self.epoch {
                     self.stamps[next as usize] = self.epoch;
                     self.distances[next as usize] = self.distances[cell as usize] + 1;
@@ -73,7 +73,7 @@ impl Reach {
         while self.distance(cell) != 0 {
             let d = self.parent_direction[cell as usize];
             route.push(d);
-            cell = board.neighbors[cell as usize][OPPOSITE[d as usize]];
+            cell = board.neighbors()[cell as usize][OPPOSITE[d as usize]];
         }
     }
 }

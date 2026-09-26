@@ -1,8 +1,7 @@
 import init, { WasmSearch } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
-import {
-  errorMessage, type Metrics, type Proof, type SearchStatus, type WorkerReply, type WorkerRequest,
-} from './protocol';
+import { errorMessage, type WorkerReply, type WorkerRequest } from './protocol';
+import { decodeMetricTuple } from './transport';
 let cancelled = false;
 const post = (message: WorkerReply) => self.postMessage(message);
 // Browsers clamp nested setTimeout(0) to >= 4ms, which would idle a third
@@ -12,22 +11,6 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => {
   yieldChannel.port1.onmessage = () => resolve();
   yieldChannel.port2.postMessage(0);
 });
-// WasmSearch.metrics(): expanded, generated, reserved bytes, best moves, proof
-// kind (0 none, 1 bounded, 2 optimal, 3 unsolvable) and the lower bound, with
-// u32::MAX for a missing best or bound. Decoded here, once per slice.
-const NONE = 0xffffffff;
-function readMetrics(search: WasmSearch, status: SearchStatus): Metrics {
-  const [expanded, generated, reservedBytes, best, kind, lower] = search.metrics();
-  const proof: Proof = kind === 2 ? { kind: 'optimal', moves: best }
-    : kind === 1 ? { kind: 'bounded', lower, upper: best }
-    : kind === 3 ? { kind: 'unsolvable' } : { kind: 'none' };
-  return {
-    expanded, generated, reservedBytes,
-    best: best === NONE ? undefined : best,
-    lowerBound: lower === NONE ? undefined : lower,
-    proof, status,
-  };
-}
 self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
   if (data.type === 'cancel') { cancelled = true; return; }
   let search: WasmSearch | undefined;
@@ -48,7 +31,7 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
       }
       const elapsedMs = performance.now() - started;
       // Only a finished search needs its status string from Rust.
-      const metrics = readMetrics(search, running ? 'running' : search.status() as SearchStatus);
+      const metrics = decodeMetricTuple(search.metrics(), running ? 'running' : search.status());
       // Rebuilding a route walks every push, so a stream of Quality improvements
       // is sampled every 500 ms; the first route and the final best always go out.
       const best = metrics.best;

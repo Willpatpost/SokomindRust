@@ -1225,6 +1225,7 @@ version = "0.1.0"
 name = "sokomind-search"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sokomind-core",
 ]
 

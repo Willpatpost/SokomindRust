@@ -19,7 +19,7 @@ impl Deadlock {
     pub(crate) const BYTES_PER_CELL: usize = size_of::<u8>();
     pub(crate) fn new(board: &Board) -> Self {
         Self {
-            occupancy: vec![EMPTY; board.tiles.len()],
+            occupancy: vec![EMPTY; board.tiles().len()],
         }
     }
     /// Rebuild occupancy for a state; call once per expansion, before its pushes.
@@ -67,7 +67,7 @@ impl Deadlock {
         let mut unsolved = false;
         for (dy, dx) in [(0isize, 0isize), (1, 0), (0, 1), (1, 1)] {
             let cell =
-                ((origin_row + dy) as usize * board.width + (origin_col + dx) as usize) as Cell;
+                ((origin_row + dy) as usize * board.width() + (origin_col + dx) as usize) as Cell;
             match box_at(cell) {
                 Some(i) => {
                     if !board.on_goal(i, cell) {
@@ -75,7 +75,7 @@ impl Deadlock {
                     }
                 }
                 None => {
-                    if board.tiles[cell as usize] != WALL {
+                    if board.tiles()[cell as usize] != WALL {
                         blocked = false;
                         break;
                     }
@@ -85,13 +85,13 @@ impl Deadlock {
         blocked && unsolved
     }
     fn two_by_two(&self, board: &Board, index: usize, from: Cell, to: Cell) -> bool {
-        let (mx, my) = ((to as usize) % board.width, (to as usize) / board.width);
+        let (mx, my) = ((to as usize) % board.width(), (to as usize) / board.width());
         for row in [my as isize - 1, my as isize] {
             for column in [mx as isize - 1, mx as isize] {
                 if row < 0
                     || column < 0
-                    || row + 1 >= board.height as isize
-                    || column + 1 >= board.width as isize
+                    || row + 1 >= board.height() as isize
+                    || column + 1 >= board.width() as isize
                 {
                     continue;
                 }
@@ -124,7 +124,7 @@ impl Deadlock {
             let (_, cell) = component[head];
             head += 1;
             for d in 0..4 {
-                let adjacent = board.neighbors[cell as usize][d];
+                let adjacent = board.neighbors()[cell as usize][d];
                 if let Some(j) = self.box_at(from, to, index, adjacent) {
                     if !in_component[j] {
                         in_component[j] = true;
@@ -143,7 +143,7 @@ impl Deadlock {
                 if frozen[i] {
                     continue;
                 }
-                let neighbors = board.neighbors[cell as usize];
+                let neighbors = board.neighbors()[cell as usize];
                 let blocker = |cell: Cell| {
                     cell == NONE
                         || self
@@ -170,8 +170,8 @@ impl Deadlock {
         // boxes — all currently immovable — could unblock it.
         for &(_, cell) in component {
             for d in 0..4 {
-                let destination = board.neighbors[cell as usize][d];
-                let support = board.neighbors[cell as usize][OPPOSITE[d]];
+                let destination = board.neighbors()[cell as usize][d];
+                let support = board.neighbors()[cell as usize][OPPOSITE[d]];
                 if destination != NONE
                     && support != NONE
                     && self.box_at(from, to, index, destination).is_none()
@@ -200,7 +200,7 @@ mod tests {
     const CROSSING_PAIR: &str = "OOOOOO\nOOOROO\nOO XOO\nOOX SO\nOOSOOO\nOOOOOO";
 
     fn at(board: &Board, row: usize, column: usize) -> Cell {
-        (row * board.width + column) as Cell
+        (row * board.width() + column) as Cell
     }
     fn state(player: Cell, boxes: &[Cell]) -> State {
         let mut next = State {
@@ -216,10 +216,10 @@ mod tests {
         let board = Board::parse(CHAIN).unwrap();
         let d = at(&board, 2, 1);
         let a = at(&board, 2, 3);
-        assert_eq!(board.initial.boxes[..2], [a, at(&board, 1, 1)]);
+        assert_eq!(board.initial().boxes[..2], [a, at(&board, 1, 1)]);
         let mut deadlock = Deadlock::new(&board);
         // Before D reaches its goal, pushing A left is merely a legal retreat.
-        deadlock.refresh(&board.initial.boxes[..board.labels.len()]);
+        deadlock.refresh(&board.initial().boxes[..board.labels().len()]);
         assert!(!deadlock.is_dead_after_push(&board, a, at(&board, 2, 2)));
         // With D staged on its goal, the same push completes a frozen component.
         deadlock.refresh(&[a, d]);
@@ -237,7 +237,7 @@ mod tests {
         let board = Board::parse(WALL_PAIR).unwrap();
         let a = at(&board, 2, 2);
         let b = at(&board, 2, 3);
-        assert_eq!(board.initial.boxes[..2], [a, b]);
+        assert_eq!(board.initial().boxes[..2], [a, b]);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[a, b]);
         // One box against the wall can still be pushed away from it.
@@ -255,7 +255,7 @@ mod tests {
         let upper = at(&board, 2, 3);
         let lower = at(&board, 3, 2);
         let below = at(&board, 3, 3);
-        assert_eq!(board.initial.boxes[..2], [upper, lower]);
+        assert_eq!(board.initial().boxes[..2], [upper, lower]);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[upper, lower]);
         // The first push of the 4-move solution.

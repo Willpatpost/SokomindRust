@@ -1,5 +1,8 @@
 mod api;
 mod client;
+mod database;
+#[cfg(test)]
+mod integration_tests;
 mod limit;
 mod progress;
 mod solve;
@@ -27,8 +30,6 @@ use std::{
 use tokio::{net::TcpListener, sync::Semaphore};
 
 const BODY_LIMIT: usize = 128 * 1024;
-const DB_POOL_SIZE: u32 = 5;
-const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Direct runs can race the database startup; retry briefly so compose's
 /// restart policy is a backstop, not the only defense.
 const DB_RETRY_WINDOW: Duration = Duration::from_secs(30);
@@ -37,6 +38,7 @@ const SAVES_PER_MINUTE: u32 = 60;
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 const RETENTION_SWEEP: Duration = Duration::from_secs(3600);
 const MAX_RETENTION_DAYS: i32 = 36_500;
+const RETENTION_MAX_BATCHES: usize = 20;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,6 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = TrustedProxies::parse(&env_value("TRUSTED_PROXIES").unwrap_or_default())?;
     let concurrency = env_setting("SOLVE_CONCURRENCY", 1..=8, 1);
     let solve_rate = env_setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
+    let progress_concurrency = env_setting("PROGRESS_CONCURRENCY", 1..=32, 4);
+    let db_pool_size = env_setting("DB_POOL_SIZE", 1..=32, 5);
+    let retention_batch_size = env_setting("PROGRESS_RETENTION_BATCH_SIZE", 1..=5000, 500);
     let retention = retention(env_setting(
         "PROGRESS_RETENTION_DAYS",
         0..=MAX_RETENTION_DAYS,
@@ -56,10 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&bind).await?;
     let db = match options {
         Some(options) => {
-            let pool = connect(options).await?;
+            let pool = connect(database::bounded_options(options), db_pool_size).await?;
             sqlx::migrate!("../../migrations").run(&pool).await?;
             if let Some(days) = retention {
-                tokio::spawn(expire_progress(pool.clone(), days));
+                tokio::spawn(expire_progress(pool.clone(), days, retention_batch_size));
             }
             Some(pool)
         }
@@ -74,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db,
         catalog: Arc::new(catalog),
         slots: Arc::new(Semaphore::new(concurrency)),
+        progress_slots: Arc::new(Semaphore::new(progress_concurrency)),
         proxies: Arc::new(proxies),
         saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
         solves: Arc::new(RateLimiter::new(solve_rate, RATE_WINDOW)),
@@ -159,12 +165,15 @@ fn retention(days: i32) -> Option<i32> {
 
 /// Retries only while the database is unreachable, for about
 /// DB_RETRY_WINDOW; bad credentials or a missing database fail at once.
-async fn connect(options: PgConnectOptions) -> Result<PgPool, Box<dyn std::error::Error>> {
+async fn connect(
+    options: PgConnectOptions,
+    pool_size: u32,
+) -> Result<PgPool, Box<dyn std::error::Error>> {
     let deadline = Instant::now() + DB_RETRY_WINDOW;
     loop {
         let error = match PgPoolOptions::new()
-            .max_connections(DB_POOL_SIZE)
-            .acquire_timeout(DB_ACQUIRE_TIMEOUT)
+            .max_connections(pool_size)
+            .acquire_timeout(database::ACQUIRE_TIMEOUT)
             .connect_with(options.clone())
             .await
         {
@@ -181,23 +190,28 @@ async fn connect(options: PgConnectOptions) -> Result<PgPool, Box<dyn std::error
 
 /// Deletes records whose best route was last improved more than `days`
 /// ago: at startup (the first tick is immediate), then every hour.
-async fn expire_progress(db: PgPool, days: i32) {
+async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
     let mut sweep = tokio::time::interval(RETENTION_SWEEP);
     loop {
         sweep.tick().await;
-        let result = sqlx::query(
-            "DELETE FROM progress WHERE updated_at < now() - make_interval(days => $1)",
-        )
-        .bind(days)
-        .execute(&db)
-        .await;
-        match result {
-            Ok(done) if done.rows_affected() > 0 => eprintln!(
-                "Deleted {} progress records older than {days} days",
-                done.rows_affected()
-            ),
-            Ok(_) => {}
-            Err(error) => eprintln!("Progress retention sweep failed: {error}"),
+        let mut deleted = 0;
+        for _ in 0..RETENTION_MAX_BATCHES {
+            match database::expire_batch(&db, days, batch_size).await {
+                Ok(count) => {
+                    deleted += count;
+                    if count < batch_size as u64 {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Progress retention sweep failed: {}", error.1);
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+        if deleted > 0 {
+            eprintln!("Deleted {deleted} progress records older than {days} days");
         }
     }
 }
@@ -298,6 +312,7 @@ mod tests {
             db: None,
             catalog: Arc::new(api::load_catalog().unwrap()),
             slots: Arc::new(Semaphore::new(1)),
+            progress_slots: Arc::new(Semaphore::new(4)),
             proxies: Arc::new(TrustedProxies::default()),
             saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
             solves: Arc::new(RateLimiter::new(20, RATE_WINDOW)),

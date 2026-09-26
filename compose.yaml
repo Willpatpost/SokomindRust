@@ -22,6 +22,13 @@ services:
       # Passed to the driver as-is, so any characters are safe. Other
       # settings: README's Configuration table.
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      # Budgets apply to each API process. Recheck aggregate CPU, memory and
+      # PostgreSQL connections before adding replicas.
+      SOLVE_CONCURRENCY: ${SOLVE_CONCURRENCY:-1}
+      PROGRESS_CONCURRENCY: ${PROGRESS_CONCURRENCY:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      PROGRESS_RETENTION_DAYS: ${PROGRESS_RETENTION_DAYS:-0}
+      PROGRESS_RETENTION_BATCH_SIZE: ${PROGRESS_RETENTION_BATCH_SIZE:-500}
       # nginx is the API's only peer and overwrites X-Forwarded-For with its
       # client, so trust Docker's bridge range. If your networks come from
       # another pool (docker network inspect), list that instead.

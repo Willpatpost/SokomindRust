@@ -1,37 +1,76 @@
 use crate::{
-    Status,
+    SearchError, SearchStats, Status, StopReason,
     engine::{Engine, Policy},
     proof::Proof,
 };
 use sokomind_core::{Board, State};
-use std::ops::{Deref, DerefMut};
 
 /// Move-optimal push A* over an admissible heuristic. A cheaper path to a
 /// known state is re-inserted as a new node, even if the old one was already
 /// expanded, so soundness never depends on consistency; with a consistent
 /// heuristic, closed nodes are never re-expanded. The only engine that may
-/// produce a [`Proof`]; the shared search methods come through `Deref`.
+/// produce a [`Proof`]; callers cannot replace its engine.
+///
+/// ```compile_fail
+/// # use sokomind_core::Board;
+/// # use sokomind_search::{ExactSearch, Search, Mode};
+/// # let board = Board::parse("ORXS").unwrap();
+/// # let mut exact = ExactSearch::new(board.clone(), board.initial(), 100, 4).unwrap();
+/// # let mut fast = Search::new(board.clone(), board.initial(), Mode::Fast, 100, 4).unwrap();
+/// std::mem::swap(&mut *exact, &mut *fast);
+/// ```
+///
+/// ```compile_fail
+/// # use sokomind_core::Board;
+/// # use sokomind_search::{ExactSearch, Status};
+/// # let board = Board::parse("ORXS").unwrap();
+/// # let mut exact = ExactSearch::new(board.clone(), board.initial(), 100, 4).unwrap();
+/// exact.stop(Status::Exhausted);
+/// ```
 pub struct ExactSearch(Engine);
 
-impl Deref for ExactSearch {
-    type Target = Engine;
-    fn deref(&self) -> &Engine {
+impl ExactSearch {
+    pub(crate) fn engine(&self) -> &Engine {
         &self.0
     }
-}
-impl DerefMut for ExactSearch {
-    fn deref_mut(&mut self) -> &mut Engine {
+    pub(crate) fn engine_mut(&mut self) -> &mut Engine {
         &mut self.0
     }
-}
 
-impl ExactSearch {
+    pub fn status(&self) -> Status {
+        self.engine().status()
+    }
+    pub fn best_moves(&self) -> Option<u32> {
+        self.engine().best_moves()
+    }
+    pub fn expanded(&self) -> u32 {
+        self.engine().expanded()
+    }
+    pub fn generated(&self) -> u32 {
+        self.engine().generated()
+    }
+    pub fn reserved_bytes(&self) -> usize {
+        self.engine().reserved_bytes()
+    }
+    pub fn stats(&self) -> SearchStats {
+        self.engine().stats()
+    }
+    pub fn stop(&mut self, reason: StopReason) {
+        self.engine_mut().stop(reason);
+    }
+    pub fn advance(&mut self, pops: u32) {
+        self.engine_mut().advance(pops);
+    }
+    pub fn solution(&mut self) -> Result<Option<String>, String> {
+        self.engine_mut().solution()
+    }
+
     pub fn new(
         board: Board,
         start: State,
         max_states: usize,
         memory_mib: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, SearchError> {
         Engine::new(board, start, Policy::EXACT, max_states, memory_mib).map(Self)
     }
     /// Live certified lower bound on the optimal move count from the start:
@@ -66,9 +105,10 @@ impl ExactSearch {
     /// Minimum f over everything not yet expanded, including the unpushed
     /// successors of an interrupted expansion.
     fn frontier(&self) -> u64 {
-        self.arena
+        self.0
+            .arena
             .min_f()
             .unwrap_or(u64::MAX)
-            .min(self.interrupted_g.map_or(u64::MAX, |g| g as u64 + 1))
+            .min(self.0.interrupted_g.map_or(u64::MAX, |g| g as u64 + 1))
     }
 }

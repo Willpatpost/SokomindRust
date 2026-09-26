@@ -1,0 +1,1548 @@
+{
+  "version": 1,
+  "sourceRevision": "240517d",
+  "catalogHash": "9e7ee299363655bd733dc8097e39772ddbd9640dabf6af6a9685ca42d956453f",
+  "maxStates": 20000,
+  "memoryMiB": 64,
+  "cases": [
+    {
+      "id": "ultra-tiny",
+      "mode": "fast",
+      "moves": 1,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "ultra-tiny",
+      "mode": "quality",
+      "moves": 1,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "ultra-tiny",
+      "mode": "optimal",
+      "moves": 1,
+      "proven": true,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "tiny",
+      "mode": "fast",
+      "moves": 20,
+      "proven": false,
+      "expanded": 5,
+      "generated": 9,
+      "reserved_bytes": 2448424
+    },
+    {
+      "id": "tiny",
+      "mode": "quality",
+      "moves": 20,
+      "proven": false,
+      "expanded": 9,
+      "generated": 10,
+      "reserved_bytes": 2448424
+    },
+    {
+      "id": "tiny",
+      "mode": "optimal",
+      "moves": 20,
+      "proven": true,
+      "expanded": 9,
+      "generated": 10,
+      "reserved_bytes": 2448424
+    },
+    {
+      "id": "tutorial-push",
+      "mode": "fast",
+      "moves": 4,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "tutorial-push",
+      "mode": "quality",
+      "moves": 4,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "tutorial-push",
+      "mode": "optimal",
+      "moves": 4,
+      "proven": true,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448176
+    },
+    {
+      "id": "tutorial-around",
+      "mode": "fast",
+      "moves": 4,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448336
+    },
+    {
+      "id": "tutorial-around",
+      "mode": "quality",
+      "moves": 4,
+      "proven": false,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448336
+    },
+    {
+      "id": "tutorial-around",
+      "mode": "optimal",
+      "moves": 4,
+      "proven": true,
+      "expanded": 1,
+      "generated": 2,
+      "reserved_bytes": 2448336
+    },
+    {
+      "id": "beginner-three",
+      "mode": "fast",
+      "moves": 7,
+      "proven": false,
+      "expanded": 3,
+      "generated": 9,
+      "reserved_bytes": 2448736
+    },
+    {
+      "id": "beginner-three",
+      "mode": "quality",
+      "moves": 7,
+      "proven": false,
+      "expanded": 8,
+      "generated": 11,
+      "reserved_bytes": 2448736
+    },
+    {
+      "id": "beginner-three",
+      "mode": "optimal",
+      "moves": 7,
+      "proven": true,
+      "expanded": 8,
+      "generated": 14,
+      "reserved_bytes": 2448736
+    },
+    {
+      "id": "beginner-detour",
+      "mode": "fast",
+      "moves": 27,
+      "proven": false,
+      "expanded": 10,
+      "generated": 25,
+      "reserved_bytes": 2448640
+    },
+    {
+      "id": "beginner-detour",
+      "mode": "quality",
+      "moves": 24,
+      "proven": false,
+      "expanded": 101,
+      "generated": 115,
+      "reserved_bytes": 2448640
+    },
+    {
+      "id": "beginner-detour",
+      "mode": "optimal",
+      "moves": 24,
+      "proven": true,
+      "expanded": 74,
+      "generated": 120,
+      "reserved_bytes": 2448640
+    },
+    {
+      "id": "beginner-typed-line",
+      "mode": "fast",
+      "moves": 33,
+      "proven": false,
+      "expanded": 15,
+      "generated": 81,
+      "reserved_bytes": 2448856
+    },
+    {
+      "id": "beginner-typed-line",
+      "mode": "quality",
+      "moves": 27,
+      "proven": false,
+      "expanded": 2249,
+      "generated": 2828,
+      "reserved_bytes": 2448856
+    },
+    {
+      "id": "beginner-typed-line",
+      "mode": "optimal",
+      "moves": 27,
+      "proven": true,
+      "expanded": 1588,
+      "generated": 2916,
+      "reserved_bytes": 2448856
+    },
+    {
+      "id": "box-5x5-a",
+      "mode": "fast",
+      "moves": 6,
+      "proven": false,
+      "expanded": 3,
+      "generated": 6,
+      "reserved_bytes": 2448226
+    },
+    {
+      "id": "box-5x5-a",
+      "mode": "quality",
+      "moves": 6,
+      "proven": false,
+      "expanded": 3,
+      "generated": 6,
+      "reserved_bytes": 2448226
+    },
+    {
+      "id": "box-5x5-a",
+      "mode": "optimal",
+      "moves": 6,
+      "proven": true,
+      "expanded": 3,
+      "generated": 6,
+      "reserved_bytes": 2448226
+    },
+    {
+      "id": "medium",
+      "mode": "fast",
+      "moves": 46,
+      "proven": false,
+      "expanded": 60,
+      "generated": 137,
+      "reserved_bytes": 2449246
+    },
+    {
+      "id": "medium",
+      "mode": "quality",
+      "moves": 34,
+      "proven": false,
+      "expanded": 17336,
+      "generated": 20000,
+      "reserved_bytes": 2449246
+    },
+    {
+      "id": "medium",
+      "mode": "optimal",
+      "moves": 34,
+      "proven": true,
+      "expanded": 11085,
+      "generated": 19978,
+      "reserved_bytes": 2449246
+    },
+    {
+      "id": "garden-2",
+      "mode": "fast",
+      "moves": 73,
+      "proven": false,
+      "expanded": 80,
+      "generated": 246,
+      "reserved_bytes": 2449558
+    },
+    {
+      "id": "garden-2",
+      "mode": "quality",
+      "moves": 73,
+      "proven": false,
+      "expanded": 616,
+      "generated": 736,
+      "reserved_bytes": 2449558
+    },
+    {
+      "id": "garden-2",
+      "mode": "optimal",
+      "moves": 73,
+      "proven": true,
+      "expanded": 590,
+      "generated": 728,
+      "reserved_bytes": 2449558
+    },
+    {
+      "id": "workshop-1",
+      "mode": "fast",
+      "moves": 27,
+      "proven": false,
+      "expanded": 10,
+      "generated": 56,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "workshop-1",
+      "mode": "quality",
+      "moves": 23,
+      "proven": false,
+      "expanded": 821,
+      "generated": 924,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "workshop-1",
+      "mode": "optimal",
+      "moves": 23,
+      "proven": true,
+      "expanded": 756,
+      "generated": 1245,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "classic-1",
+      "mode": "fast",
+      "moves": 42,
+      "proven": false,
+      "expanded": 19,
+      "generated": 73,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "classic-1",
+      "mode": "quality",
+      "moves": 40,
+      "proven": false,
+      "expanded": 870,
+      "generated": 1181,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "classic-1",
+      "mode": "optimal",
+      "moves": 40,
+      "proven": true,
+      "expanded": 788,
+      "generated": 1166,
+      "reserved_bytes": 2448896
+    },
+    {
+      "id": "theme-kitchen",
+      "mode": "fast",
+      "moves": 34,
+      "proven": false,
+      "expanded": 12,
+      "generated": 57,
+      "reserved_bytes": 2449216
+    },
+    {
+      "id": "theme-kitchen",
+      "mode": "quality",
+      "moves": 34,
+      "proven": false,
+      "expanded": 986,
+      "generated": 1065,
+      "reserved_bytes": 2449216
+    },
+    {
+      "id": "theme-kitchen",
+      "mode": "optimal",
+      "moves": 34,
+      "proven": true,
+      "expanded": 904,
+      "generated": 1437,
+      "reserved_bytes": 2449216
+    },
+    {
+      "id": "large",
+      "mode": "fast",
+      "moves": 164,
+      "proven": false,
+      "expanded": 12942,
+      "generated": 19342,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "large",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 9756,
+      "generated": 20000,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "large",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 9132,
+      "generated": 20000,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "adv-gallery",
+      "mode": "fast",
+      "moves": 31,
+      "proven": false,
+      "expanded": 10,
+      "generated": 69,
+      "reserved_bytes": 2449976
+    },
+    {
+      "id": "adv-gallery",
+      "mode": "quality",
+      "moves": 29,
+      "proven": false,
+      "expanded": 587,
+      "generated": 699,
+      "reserved_bytes": 2449976
+    },
+    {
+      "id": "adv-gallery",
+      "mode": "optimal",
+      "moves": 29,
+      "proven": true,
+      "expanded": 569,
+      "generated": 1386,
+      "reserved_bytes": 2449976
+    },
+    {
+      "id": "theme-parking",
+      "mode": "fast",
+      "moves": 136,
+      "proven": false,
+      "expanded": 2557,
+      "generated": 7076,
+      "reserved_bytes": 2450152
+    },
+    {
+      "id": "theme-parking",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4813,
+      "generated": 20000,
+      "reserved_bytes": 2450152
+    },
+    {
+      "id": "theme-parking",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 4245,
+      "generated": 20000,
+      "reserved_bytes": 2450152
+    },
+    {
+      "id": "open-field",
+      "mode": "fast",
+      "moves": 160,
+      "proven": false,
+      "expanded": 66,
+      "generated": 901,
+      "reserved_bytes": 2461376
+    },
+    {
+      "id": "open-field",
+      "mode": "quality",
+      "moves": 157,
+      "proven": false,
+      "expanded": 13089,
+      "generated": 20000,
+      "reserved_bytes": 2461376
+    },
+    {
+      "id": "open-field",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1099,
+      "generated": 20000,
+      "reserved_bytes": 2461376
+    },
+    {
+      "id": "huge",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 3328,
+      "generated": 20000,
+      "reserved_bytes": 2458576
+    },
+    {
+      "id": "huge",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 1660,
+      "generated": 20000,
+      "reserved_bytes": 2458576
+    },
+    {
+      "id": "huge",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 958,
+      "generated": 20000,
+      "reserved_bytes": 2458576
+    },
+    {
+      "id": "expert-maze",
+      "mode": "fast",
+      "moves": 79,
+      "proven": false,
+      "expanded": 1757,
+      "generated": 3845,
+      "reserved_bytes": 2450944
+    },
+    {
+      "id": "expert-maze",
+      "mode": "quality",
+      "moves": 65,
+      "proven": false,
+      "expanded": 16601,
+      "generated": 20000,
+      "reserved_bytes": 2450944
+    },
+    {
+      "id": "expert-maze",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 5227,
+      "generated": 20000,
+      "reserved_bytes": 2450944
+    },
+    {
+      "id": "gen-v2-310116-594a231c",
+      "mode": "fast",
+      "moves": 39,
+      "proven": false,
+      "expanded": 25,
+      "generated": 93,
+      "reserved_bytes": 2450656
+    },
+    {
+      "id": "gen-v2-310116-594a231c",
+      "mode": "quality",
+      "moves": 31,
+      "proven": false,
+      "expanded": 3499,
+      "generated": 4285,
+      "reserved_bytes": 2450656
+    },
+    {
+      "id": "gen-v2-310116-594a231c",
+      "mode": "optimal",
+      "moves": 31,
+      "proven": true,
+      "expanded": 3097,
+      "generated": 4969,
+      "reserved_bytes": 2450656
+    },
+    {
+      "id": "gen-v2-310014-7ebd2f54",
+      "mode": "fast",
+      "moves": 22,
+      "proven": false,
+      "expanded": 12,
+      "generated": 33,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310014-7ebd2f54",
+      "mode": "quality",
+      "moves": 22,
+      "proven": false,
+      "expanded": 92,
+      "generated": 101,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310014-7ebd2f54",
+      "mode": "optimal",
+      "moves": 22,
+      "proven": true,
+      "expanded": 88,
+      "generated": 140,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310089-a702de93",
+      "mode": "fast",
+      "moves": 23,
+      "proven": false,
+      "expanded": 13,
+      "generated": 16,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310089-a702de93",
+      "mode": "quality",
+      "moves": 23,
+      "proven": false,
+      "expanded": 15,
+      "generated": 16,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310089-a702de93",
+      "mode": "optimal",
+      "moves": 23,
+      "proven": true,
+      "expanded": 15,
+      "generated": 16,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310032-ceaf7565",
+      "mode": "fast",
+      "moves": 27,
+      "proven": false,
+      "expanded": 59,
+      "generated": 90,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "gen-v2-310032-ceaf7565",
+      "mode": "quality",
+      "moves": 22,
+      "proven": false,
+      "expanded": 134,
+      "generated": 159,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "gen-v2-310032-ceaf7565",
+      "mode": "optimal",
+      "moves": 22,
+      "proven": true,
+      "expanded": 130,
+      "generated": 173,
+      "reserved_bytes": 2450376
+    },
+    {
+      "id": "gen-v2-310056-2f55f9f8",
+      "mode": "fast",
+      "moves": 44,
+      "proven": false,
+      "expanded": 28,
+      "generated": 59,
+      "reserved_bytes": 2451136
+    },
+    {
+      "id": "gen-v2-310056-2f55f9f8",
+      "mode": "quality",
+      "moves": 44,
+      "proven": false,
+      "expanded": 1272,
+      "generated": 1521,
+      "reserved_bytes": 2451136
+    },
+    {
+      "id": "gen-v2-310056-2f55f9f8",
+      "mode": "optimal",
+      "moves": 44,
+      "proven": true,
+      "expanded": 1115,
+      "generated": 1627,
+      "reserved_bytes": 2451136
+    },
+    {
+      "id": "gen-v2-310118-e9172c97",
+      "mode": "fast",
+      "moves": 45,
+      "proven": false,
+      "expanded": 39,
+      "generated": 110,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310118-e9172c97",
+      "mode": "quality",
+      "moves": 39,
+      "proven": false,
+      "expanded": 5270,
+      "generated": 5711,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310118-e9172c97",
+      "mode": "optimal",
+      "moves": 39,
+      "proven": true,
+      "expanded": 4097,
+      "generated": 9937,
+      "reserved_bytes": 2451472
+    },
+    {
+      "id": "gen-v2-310145-228a1c30",
+      "mode": "fast",
+      "moves": 44,
+      "proven": false,
+      "expanded": 18,
+      "generated": 52,
+      "reserved_bytes": 2450856
+    },
+    {
+      "id": "gen-v2-310145-228a1c30",
+      "mode": "quality",
+      "moves": 40,
+      "proven": false,
+      "expanded": 521,
+      "generated": 552,
+      "reserved_bytes": 2450856
+    },
+    {
+      "id": "gen-v2-310145-228a1c30",
+      "mode": "optimal",
+      "moves": 40,
+      "proven": true,
+      "expanded": 398,
+      "generated": 593,
+      "reserved_bytes": 2450856
+    },
+    {
+      "id": "gen-v2-310136-dd37455b",
+      "mode": "fast",
+      "moves": 34,
+      "proven": false,
+      "expanded": 18,
+      "generated": 45,
+      "reserved_bytes": 2451696
+    },
+    {
+      "id": "gen-v2-310136-dd37455b",
+      "mode": "quality",
+      "moves": 32,
+      "proven": false,
+      "expanded": 999,
+      "generated": 1046,
+      "reserved_bytes": 2451696
+    },
+    {
+      "id": "gen-v2-310136-dd37455b",
+      "mode": "optimal",
+      "moves": 32,
+      "proven": true,
+      "expanded": 538,
+      "generated": 802,
+      "reserved_bytes": 2451696
+    },
+    {
+      "id": "gen-v2-310081-a2088508",
+      "mode": "fast",
+      "moves": 68,
+      "proven": false,
+      "expanded": 29,
+      "generated": 94,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310081-a2088508",
+      "mode": "quality",
+      "moves": 61,
+      "proven": false,
+      "expanded": 16192,
+      "generated": 20000,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310081-a2088508",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 9392,
+      "generated": 20000,
+      "reserved_bytes": 2451416
+    },
+    {
+      "id": "gen-v2-310183-c9e1ef62",
+      "mode": "fast",
+      "moves": 61,
+      "proven": false,
+      "expanded": 31,
+      "generated": 77,
+      "reserved_bytes": 2452088
+    },
+    {
+      "id": "gen-v2-310183-c9e1ef62",
+      "mode": "quality",
+      "moves": 59,
+      "proven": false,
+      "expanded": 15614,
+      "generated": 17522,
+      "reserved_bytes": 2452088
+    },
+    {
+      "id": "gen-v2-310183-c9e1ef62",
+      "mode": "optimal",
+      "moves": 59,
+      "proven": true,
+      "expanded": 8914,
+      "generated": 14893,
+      "reserved_bytes": 2452088
+    },
+    {
+      "id": "gen-v2-320093-09d278d1",
+      "mode": "fast",
+      "moves": 98,
+      "proven": false,
+      "expanded": 2934,
+      "generated": 4507,
+      "reserved_bytes": 2453236
+    },
+    {
+      "id": "gen-v2-320093-09d278d1",
+      "mode": "quality",
+      "moves": 86,
+      "proven": false,
+      "expanded": 7755,
+      "generated": 20000,
+      "reserved_bytes": 2453236
+    },
+    {
+      "id": "gen-v2-320093-09d278d1",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 4141,
+      "generated": 20000,
+      "reserved_bytes": 2453236
+    },
+    {
+      "id": "gen-v2-320165-dcd465b6",
+      "mode": "fast",
+      "moves": 108,
+      "proven": false,
+      "expanded": 72,
+      "generated": 327,
+      "reserved_bytes": 2453656
+    },
+    {
+      "id": "gen-v2-320165-dcd465b6",
+      "mode": "quality",
+      "moves": 102,
+      "proven": false,
+      "expanded": 10540,
+      "generated": 20000,
+      "reserved_bytes": 2453656
+    },
+    {
+      "id": "gen-v2-320165-dcd465b6",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2056,
+      "generated": 20000,
+      "reserved_bytes": 2453656
+    },
+    {
+      "id": "gen-v2-320118-f55e1396",
+      "mode": "fast",
+      "moves": 112,
+      "proven": false,
+      "expanded": 158,
+      "generated": 576,
+      "reserved_bytes": 2454076
+    },
+    {
+      "id": "gen-v2-320118-f55e1396",
+      "mode": "quality",
+      "moves": 98,
+      "proven": false,
+      "expanded": 7227,
+      "generated": 20000,
+      "reserved_bytes": 2454076
+    },
+    {
+      "id": "gen-v2-320118-f55e1396",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2015,
+      "generated": 20000,
+      "reserved_bytes": 2454076
+    },
+    {
+      "id": "gen-v2-320050-78319f43",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8542,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-78319f43",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5900,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-78319f43",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2381,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-ece6c64b",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8553,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-ece6c64b",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5902,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-ece6c64b",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2977,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320115-e2982270",
+      "mode": "fast",
+      "moves": 124,
+      "proven": false,
+      "expanded": 52,
+      "generated": 282,
+      "reserved_bytes": 2454496
+    },
+    {
+      "id": "gen-v2-320115-e2982270",
+      "mode": "quality",
+      "moves": 119,
+      "proven": false,
+      "expanded": 10994,
+      "generated": 20000,
+      "reserved_bytes": 2454496
+    },
+    {
+      "id": "gen-v2-320115-e2982270",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 3213,
+      "generated": 20000,
+      "reserved_bytes": 2454496
+    },
+    {
+      "id": "gen-v2-320041-027a9b04",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 11601,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-320041-027a9b04",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 8553,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-320041-027a9b04",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2694,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-320050-4eb88a2d",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8243,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-4eb88a2d",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5007,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320050-4eb88a2d",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2603,
+      "generated": 20000,
+      "reserved_bytes": 2454944
+    },
+    {
+      "id": "gen-v2-320081-b59cab95",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8607,
+      "generated": 20000,
+      "reserved_bytes": 2454976
+    },
+    {
+      "id": "gen-v2-320081-b59cab95",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4944,
+      "generated": 20000,
+      "reserved_bytes": 2454976
+    },
+    {
+      "id": "gen-v2-320081-b59cab95",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2358,
+      "generated": 20000,
+      "reserved_bytes": 2454976
+    },
+    {
+      "id": "gen-v2-320041-e16f5a47",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 13854,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-320041-e16f5a47",
+      "mode": "quality",
+      "moves": 101,
+      "proven": false,
+      "expanded": 10553,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-320041-e16f5a47",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2800,
+      "generated": 20000,
+      "reserved_bytes": 2453176
+    },
+    {
+      "id": "gen-v2-340114-a8b9d02a",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 9925,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340114-a8b9d02a",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 7183,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340114-a8b9d02a",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2326,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340053-6d913910",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 6191,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-340053-6d913910",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4494,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-340053-6d913910",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2246,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-340187-cd08a50a",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 9488,
+      "generated": 20000,
+      "reserved_bytes": 2454916
+    },
+    {
+      "id": "gen-v2-340187-cd08a50a",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5849,
+      "generated": 20000,
+      "reserved_bytes": 2454916
+    },
+    {
+      "id": "gen-v2-340187-cd08a50a",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 3799,
+      "generated": 20000,
+      "reserved_bytes": 2454916
+    },
+    {
+      "id": "gen-v2-340053-466f0008",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 10403,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-340053-466f0008",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4343,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-340053-466f0008",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2663,
+      "generated": 20000,
+      "reserved_bytes": 2458144
+    },
+    {
+      "id": "gen-v2-330146-44c41505",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 11518,
+      "generated": 20000,
+      "reserved_bytes": 2456776
+    },
+    {
+      "id": "gen-v2-330146-44c41505",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 9765,
+      "generated": 20000,
+      "reserved_bytes": 2456776
+    },
+    {
+      "id": "gen-v2-330146-44c41505",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 3076,
+      "generated": 20000,
+      "reserved_bytes": 2456776
+    },
+    {
+      "id": "gen-v2-340106-b3558338",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 10676,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340106-b3558338",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 8613,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340106-b3558338",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2729,
+      "generated": 20000,
+      "reserved_bytes": 2459404
+    },
+    {
+      "id": "gen-v2-340048-b5d312a6",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 5608,
+      "generated": 20000,
+      "reserved_bytes": 2457352
+    },
+    {
+      "id": "gen-v2-340048-b5d312a6",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 3691,
+      "generated": 20000,
+      "reserved_bytes": 2457352
+    },
+    {
+      "id": "gen-v2-340048-b5d312a6",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2039,
+      "generated": 20000,
+      "reserved_bytes": 2457352
+    },
+    {
+      "id": "gen-v2-340046-c9f5ef3b",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 6263,
+      "generated": 20000,
+      "reserved_bytes": 2460196
+    },
+    {
+      "id": "gen-v2-340046-c9f5ef3b",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5685,
+      "generated": 20000,
+      "reserved_bytes": 2460196
+    },
+    {
+      "id": "gen-v2-340046-c9f5ef3b",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1950,
+      "generated": 20000,
+      "reserved_bytes": 2460196
+    },
+    {
+      "id": "gen-v2-350108-80cb0432",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 3937,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-350108-80cb0432",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 2158,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-350108-80cb0432",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1368,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-340272-fd819d0e",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8129,
+      "generated": 20000,
+      "reserved_bytes": 2460316
+    },
+    {
+      "id": "gen-v2-340272-fd819d0e",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4582,
+      "generated": 20000,
+      "reserved_bytes": 2460316
+    },
+    {
+      "id": "gen-v2-340272-fd819d0e",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1680,
+      "generated": 20000,
+      "reserved_bytes": 2460316
+    },
+    {
+      "id": "gen-v2-350250-5b361f8b",
+      "mode": "fast",
+      "moves": 326,
+      "proven": false,
+      "expanded": 2761,
+      "generated": 10611,
+      "reserved_bytes": 2461216
+    },
+    {
+      "id": "gen-v2-350250-5b361f8b",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 3874,
+      "generated": 20000,
+      "reserved_bytes": 2461216
+    },
+    {
+      "id": "gen-v2-350250-5b361f8b",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1674,
+      "generated": 20000,
+      "reserved_bytes": 2461216
+    },
+    {
+      "id": "gen-v2-350070-6be05c02",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 9229,
+      "generated": 20000,
+      "reserved_bytes": 2457632
+    },
+    {
+      "id": "gen-v2-350070-6be05c02",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 6331,
+      "generated": 20000,
+      "reserved_bytes": 2457632
+    },
+    {
+      "id": "gen-v2-350070-6be05c02",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 3582,
+      "generated": 20000,
+      "reserved_bytes": 2457632
+    },
+    {
+      "id": "gen-v2-350108-b13869bc",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 6575,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-350108-b13869bc",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 5569,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-350108-b13869bc",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1649,
+      "generated": 20000,
+      "reserved_bytes": 2462680
+    },
+    {
+      "id": "gen-v2-360313-16158b3b",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 2483,
+      "generated": 20000,
+      "reserved_bytes": 2478352
+    },
+    {
+      "id": "gen-v2-360313-16158b3b",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 1720,
+      "generated": 20000,
+      "reserved_bytes": 2478352
+    },
+    {
+      "id": "gen-v2-360313-16158b3b",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 628,
+      "generated": 20000,
+      "reserved_bytes": 2478352
+    },
+    {
+      "id": "gen-v2-370002-8ea0b852",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 5658,
+      "generated": 20000,
+      "reserved_bytes": 2472616
+    },
+    {
+      "id": "gen-v2-370002-8ea0b852",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 1852,
+      "generated": 20000,
+      "reserved_bytes": 2472616
+    },
+    {
+      "id": "gen-v2-370002-8ea0b852",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1060,
+      "generated": 20000,
+      "reserved_bytes": 2472616
+    },
+    {
+      "id": "gen-v2-370193-88873f15",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 5718,
+      "generated": 20000,
+      "reserved_bytes": 2472112
+    },
+    {
+      "id": "gen-v2-370193-88873f15",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 4115,
+      "generated": 20000,
+      "reserved_bytes": 2472112
+    },
+    {
+      "id": "gen-v2-370193-88873f15",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 1890,
+      "generated": 20000,
+      "reserved_bytes": 2472112
+    },
+    {
+      "id": "gen-v2-350001-a996dcbc",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 10105,
+      "generated": 20000,
+      "reserved_bytes": 2474456
+    },
+    {
+      "id": "gen-v2-350001-a996dcbc",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 2783,
+      "generated": 20000,
+      "reserved_bytes": 2474456
+    },
+    {
+      "id": "gen-v2-350001-a996dcbc",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 2112,
+      "generated": 20000,
+      "reserved_bytes": 2474456
+    },
+    {
+      "id": "gen-v2-360372-b5687375",
+      "mode": "fast",
+      "moves": null,
+      "proven": false,
+      "expanded": 8063,
+      "generated": 20000,
+      "reserved_bytes": 2466496
+    },
+    {
+      "id": "gen-v2-360372-b5687375",
+      "mode": "quality",
+      "moves": null,
+      "proven": false,
+      "expanded": 6246,
+      "generated": 20000,
+      "reserved_bytes": 2466496
+    },
+    {
+      "id": "gen-v2-360372-b5687375",
+      "mode": "optimal",
+      "moves": null,
+      "proven": false,
+      "expanded": 4002,
+      "generated": 20000,
+      "reserved_bytes": 2466496
+    }
+  ]
+}

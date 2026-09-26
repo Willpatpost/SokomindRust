@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game, MAX_ROUTE};
-use sokomind_search::{Mode, Proof, Search, Status};
+use sokomind_search::{Mode, Proof, Search, Status, StopReason};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -15,22 +15,22 @@ impl WasmGame {
         })
     }
     pub fn width(&self) -> u32 {
-        self.game.board().width as u32
+        self.game.board().width() as u32
     }
     pub fn height(&self) -> u32 {
-        self.game.board().height as u32
+        self.game.board().height() as u32
     }
     pub fn tiles(&self) -> Vec<u8> {
-        self.game.board().tiles.clone()
+        self.game.board().tiles().to_vec()
     }
     pub fn labels(&self) -> Vec<u8> {
-        self.game.board().labels.clone()
+        self.game.board().labels().to_vec()
     }
     /// Snapshot ABI: player, moves, pushes, solved, then box cells. Labels are static.
     pub fn snapshot(&self) -> Vec<u32> {
         let game = &self.game;
         let state = game.state();
-        let boxes = &state.boxes[..game.board().labels.len()];
+        let boxes = &state.boxes[..game.board().labels().len()];
         let mut out = Vec::with_capacity(4 + boxes.len());
         out.extend([
             u32::from(state.player),
@@ -63,7 +63,7 @@ impl WasmGame {
     /// solved boxes from this, so no game rule lives in JavaScript.
     pub fn on_goal(&self, index: usize) -> bool {
         let board = self.game.board();
-        index < board.labels.len() && board.on_goal(index, self.game.state().boxes[index])
+        index < board.labels().len() && board.on_goal(index, self.game.state().boxes[index])
     }
 }
 
@@ -94,7 +94,7 @@ impl WasmSearch {
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
         let (board, start) = game.into_parts();
         let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)
-            .map_err(|e| JsError::new(&e))?;
+            .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(Self { search })
     }
     /// Runs up to `pops` queue pops; true while the search is still running.
@@ -104,9 +104,9 @@ impl WasmSearch {
     }
     pub fn stop(&mut self, timeout: bool) {
         self.search.stop(if timeout {
-            Status::TimeLimit
+            StopReason::TimeLimit
         } else {
-            Status::Cancelled
+            StopReason::Cancelled
         });
     }
     pub fn status(&self) -> String {
@@ -133,5 +133,25 @@ impl WasmSearch {
     }
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {
         self.search.solution().map_err(|e| JsError::new(&e))
+    }
+
+    /// Diagnostic ABI: unique states, duplicate improvements, reopenings,
+    /// stale pops, peak queue, then dead-cell/deadlock/duplicate/assignment/
+    /// bound prunes. f64 exactly represents all counters under the node cap.
+    /// Kept separate from the small six-value progress ABI.
+    pub fn diagnostics(&self) -> Vec<f64> {
+        let stats = self.search.stats();
+        vec![
+            stats.unique_states as f64,
+            stats.duplicate_improvements as f64,
+            stats.reopened_states as f64,
+            stats.stale_pops as f64,
+            stats.peak_queue as f64,
+            stats.pruned_dead_cells as f64,
+            stats.pruned_deadlocks as f64,
+            stats.pruned_duplicates as f64,
+            stats.pruned_assignment as f64,
+            stats.pruned_bound as f64,
+        ]
     }
 }

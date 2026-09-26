@@ -13,20 +13,118 @@ pub struct State {
 
 #[derive(Clone)]
 pub struct Board {
-    pub width: usize,
-    pub height: usize,
+    width: usize,
+    height: usize,
     /// `puzzle-v1:{fnv1a}` over the canonical row form, matching the reference.
-    pub fingerprint: String,
-    pub neighbors: Vec<[Cell; 4]>,
+    fingerprint: String,
+    neighbors: Vec<[Cell; 4]>,
     /// 0 = floor, `WALL` = wall, A..Z = matching goal label.
-    pub tiles: Vec<u8>,
+    tiles: Vec<u8>,
     /// Boxes are grouped by label; equal-label boxes are interchangeable in search.
-    pub labels: Vec<u8>,
-    pub goals: Vec<(Cell, u8)>,
-    pub initial: State,
+    labels: Vec<u8>,
+    goals: Vec<(Cell, u8)>,
+    initial: State,
 }
 
+/// An external position violates the parsed board's geometry or occupancy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StateError {
+    PlayerOutOfBounds {
+        cell: Cell,
+    },
+    PlayerOnWall {
+        cell: Cell,
+    },
+    BoxOutOfBounds {
+        index: usize,
+        cell: Cell,
+    },
+    BoxOnWall {
+        index: usize,
+        cell: Cell,
+    },
+    PlayerOnBox {
+        index: usize,
+        cell: Cell,
+    },
+    OverlappingBoxes {
+        first: usize,
+        second: usize,
+        cell: Cell,
+    },
+    InactiveBox {
+        index: usize,
+        cell: Cell,
+    },
+}
+impl std::fmt::Display for StateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid state: {self:?}")
+    }
+}
+impl std::error::Error for StateError {}
+
 impl Board {
+    pub fn width(&self) -> usize {
+        self.width
+    }
+    pub fn height(&self) -> usize {
+        self.height
+    }
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+    pub fn neighbors(&self) -> &[[Cell; 4]] {
+        &self.neighbors
+    }
+    pub fn tiles(&self) -> &[u8] {
+        &self.tiles
+    }
+    pub fn labels(&self) -> &[u8] {
+        &self.labels
+    }
+    pub fn goals(&self) -> &[(Cell, u8)] {
+        &self.goals
+    }
+    pub fn initial(&self) -> State {
+        self.initial
+    }
+
+    /// Validate once before handing a caller-created state to search. Box order
+    /// need not be canonical: equal-label boxes are sorted by search afterward.
+    pub fn validate_state(&self, state: &State) -> Result<(), StateError> {
+        if state.player as usize >= self.tiles.len() {
+            return Err(StateError::PlayerOutOfBounds { cell: state.player });
+        }
+        if self.tiles[state.player as usize] == WALL {
+            return Err(StateError::PlayerOnWall { cell: state.player });
+        }
+        for (index, &cell) in state.boxes.iter().enumerate() {
+            if index >= self.labels.len() {
+                if cell != NONE {
+                    return Err(StateError::InactiveBox { index, cell });
+                }
+                continue;
+            }
+            if cell as usize >= self.tiles.len() {
+                return Err(StateError::BoxOutOfBounds { index, cell });
+            }
+            if self.tiles[cell as usize] == WALL {
+                return Err(StateError::BoxOnWall { index, cell });
+            }
+            if cell == state.player {
+                return Err(StateError::PlayerOnBox { index, cell });
+            }
+            if let Some(first) = state.boxes[..index].iter().position(|&other| other == cell) {
+                return Err(StateError::OverlappingBoxes {
+                    first,
+                    second: index,
+                    cell,
+                });
+            }
+        }
+        Ok(())
+    }
     pub fn parse(text: &str) -> Result<Self, String> {
         // A one-column board of MAX_CELLS rows needs a newline after every cell.
         if text.len() > MAX_CELLS * 2 {

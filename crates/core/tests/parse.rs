@@ -7,12 +7,18 @@ const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
 fn fingerprints_match_the_reference() {
     // Values produced by SokomindSolver's puzzleRevisionFingerprint.
     assert_eq!(
-        Board::parse(FIRST).unwrap().fingerprint,
+        Board::parse(FIRST).unwrap().fingerprint(),
         "puzzle-v1:5ae6cd46"
     );
-    assert_eq!(Board::parse(TWO).unwrap().fingerprint, "puzzle-v1:0d758a96");
+    assert_eq!(
+        Board::parse(TWO).unwrap().fingerprint(),
+        "puzzle-v1:0d758a96"
+    );
     let moved = Board::parse("OOOOO\nO R O\nO a O\nO A O\nOOOOO").unwrap();
-    assert_ne!(moved.fingerprint, Board::parse(FIRST).unwrap().fingerprint);
+    assert_ne!(
+        moved.fingerprint(),
+        Board::parse(FIRST).unwrap().fingerprint()
+    );
 }
 
 #[test]
@@ -22,17 +28,17 @@ fn rejects_carriage_returns_and_empty_rows() {
     assert!(Board::parse("OOOOO\nO R O\nOOOOO\n\n").is_err());
     // One trailing newline is a paste artifact, not a row.
     let board = Board::parse("OOOOO\nO R O\nO A O\nO a O\nOOOOO\n").unwrap();
-    assert_eq!(board.height, 5);
-    assert_eq!(board.fingerprint, "puzzle-v1:5ae6cd46");
+    assert_eq!(board.height(), 5);
+    assert_eq!(board.fingerprint(), "puzzle-v1:5ae6cd46");
 }
 
 #[test]
 fn ragged_rows_are_padded_with_walls() {
     let board = Board::parse("OOOOOO\nOR XS\nOO").unwrap();
-    assert_eq!((board.width, board.height), (6, 3));
-    assert_eq!([board.tiles[11], board.tiles[17]], [WALL; 2]);
+    assert_eq!((board.width(), board.height()), (6, 3));
+    assert_eq!([board.tiles()[11], board.tiles()[17]], [WALL; 2]);
     // The padding blocks movement like any other wall.
-    assert_eq!(board.neighbors[10][3], NONE);
+    assert_eq!(board.neighbors()[10][3], NONE);
 }
 
 /// The rejection message, panicking if the text parses.
@@ -55,7 +61,7 @@ fn room(count: usize) -> String {
 fn cell_limit_is_4096() {
     let mut rows = vec!["O".repeat(64); 64];
     rows[1] = format!("ORXS{}", "O".repeat(60));
-    assert_eq!(Board::parse(&rows.join("\n")).unwrap().tiles.len(), 4096);
+    assert_eq!(Board::parse(&rows.join("\n")).unwrap().tiles().len(), 4096);
     // Ragged rows pad to the widest one: 65 x 64 cells.
     rows[63].push('O');
     assert!(rejection(&rows.join("\n")).contains("1..4096 cells"));
@@ -66,7 +72,7 @@ fn text_limit_is_8192_bytes() {
     let mut text = "R\nX\nS\n".to_string();
     text.push_str(&"O\n".repeat(4093));
     assert_eq!(text.len(), 8192);
-    assert_eq!(Board::parse(&text).unwrap().height, 4096);
+    assert_eq!(Board::parse(&text).unwrap().height(), 4096);
     text.push('O');
     assert!(rejection(&text).contains("too large"));
 }
@@ -74,7 +80,7 @@ fn text_limit_is_8192_bytes() {
 #[test]
 fn box_count_is_1_to_32() {
     assert_eq!(
-        Board::parse(&room(MAX_BOXES)).unwrap().labels.len(),
+        Board::parse(&room(MAX_BOXES)).unwrap().labels().len(),
         MAX_BOXES
     );
     assert!(rejection(&room(MAX_BOXES + 1)).contains("1..32 boxes"));

@@ -80,7 +80,7 @@ impl Heuristic {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
-        for run in board.labels.chunk_by(|a, b| a == b) {
+        for run in board.labels().chunk_by(|a, b| a == b) {
             group_of[start..start + run.len()].fill(groups.len() as u8);
             groups.push(Group {
                 start,
@@ -90,11 +90,11 @@ impl Heuristic {
         }
         // Labels are sorted and every label has as many goals as boxes, so a
         // stable sort by label lays the goal columns out in group order.
-        let mut columns = board.goals.clone();
+        let mut columns = board.goals().to_vec();
         columns.sort_by_key(|&(_, label)| label);
         let goals = columns.len();
-        let mut distances = vec![NONE; board.tiles.len() * goals];
-        let mut queue = Vec::with_capacity(board.tiles.len());
+        let mut distances = vec![NONE; board.tiles().len() * goals];
+        let mut queue = Vec::with_capacity(board.tiles().len());
         for (column, &(goal, _)) in columns.iter().enumerate() {
             let at = |cell: Cell| cell as usize * goals + column;
             queue.clear();
@@ -105,11 +105,11 @@ impl Heuristic {
                 let cell = queue[head];
                 head += 1;
                 for direction in OPPOSITE {
-                    let previous = board.neighbors[cell as usize][direction];
+                    let previous = board.neighbors()[cell as usize][direction];
                     if previous == NONE {
                         continue;
                     }
-                    let support = board.neighbors[previous as usize][direction];
+                    let support = board.neighbors()[previous as usize][direction];
                     if support != NONE && distances[at(previous)] == NONE {
                         distances[at(previous)] = distances[at(cell)] + 1;
                         queue.push(previous);
@@ -117,7 +117,7 @@ impl Heuristic {
                 }
             }
         }
-        let dead = (0..board.tiles.len())
+        let dead = (0..board.tiles().len())
             .map(|cell| {
                 let row = &distances[cell * goals..(cell + 1) * goals];
                 groups
@@ -384,11 +384,11 @@ mod tests {
     /// path: singleton, re-solve, dual repair.
     fn walk(board: &Board, steps: usize, rng: &mut Lcg, counts: &mut [[u32; 2]; 3]) {
         let heuristic = Heuristic::new(board);
-        let boxes = board.labels.len();
-        let mut state = board.initial;
+        let boxes = board.labels().len();
+        let mut state = board.initial();
         for step in 0..steps {
             if step.is_multiple_of(25) {
-                state = board.initial;
+                state = board.initial();
             }
             let parent_h = heuristic.estimate(&state).unwrap();
             let mut cache = ParentGroup::EMPTY;
@@ -402,7 +402,7 @@ mod tests {
                 } else {
                     2
                 };
-                for to in board.neighbors[state.boxes[i] as usize] {
+                for to in board.neighbors()[state.boxes[i] as usize] {
                     if to == NONE || state.boxes[..boxes].contains(&to) {
                         continue;
                     }
@@ -419,7 +419,7 @@ mod tests {
                 }
             }
             state = if options.is_empty() {
-                board.initial
+                board.initial()
             } else {
                 options[rng.below(options.len())]
             };
@@ -440,9 +440,9 @@ mod tests {
             "OOOOOOO",
         ))
         .unwrap();
-        assert_eq!(board.labels, [b'A', b'B']);
+        assert_eq!(board.labels(), [b'A', b'B']);
         let heuristic = Heuristic::new(&board);
-        let at = |x: usize, y: usize| (y * board.width + x) as Cell;
+        let at = |x: usize, y: usize| (y * board.width() + x) as Cell;
         let (a, b) = (0, 1);
         // A corner is dead for every label.
         assert!(heuristic.dead(a, at(1, 1)) && heuristic.dead(b, at(1, 1)));

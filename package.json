@@ -3,18 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "wasm": "node scripts/build-wasm.mjs",
     "dev": "npm run wasm && vite web",
     "dev:web": "vite web",
     "server": "node scripts/rust.mjs run -p sokomind-server --release",
-    "check": "tsc -p web",
+    "check": "npm run wasm && npm run check:web",
+    "check:web": "tsc -p web",
     "check:rust": "node scripts/rust.mjs check --workspace",
+    "fmt:check": "node scripts/rust.mjs fmt --all -- --check",
+    "lint:rust": "node scripts/rust.mjs clippy --workspace --all-targets -- -D warnings",
     "test:rust": "node scripts/rust.mjs test -p sokomind-core -p sokomind-search -p sokomind-server",
+    "test:release": "node scripts/rust.mjs test --release -p sokomind-core -p sokomind-search",
+    "test:web": "node --test web/tests/*.test.ts",
+    "test:browser": "playwright test",
+    "test:db": "node scripts/rust.mjs test -p sokomind-server live_postgres -- --ignored",
+    "test:parity": "npm run wasm && node scripts/parity.mjs",
+    "bench": "node scripts/benchmark.mjs",
+    "bench:check": "node scripts/benchmark.mjs --check",
     "build": "npm run wasm && npm run build:web",
-    "build:web": "tsc -p web && vite build web",
+    "build:web": "npm run check:web && vite build web",
     "preview": "vite preview web --host 127.0.0.1"
   },
-  "devDependencies": { "typescript": "~5.9.3", "vite": "8.3.1" }
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "typescript": "~5.9.3",
+    "vite": "8.3.1"
+  }
 }

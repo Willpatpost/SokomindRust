@@ -29,7 +29,7 @@ pub fn decode_direction(action: u8) -> Result<usize, String> {
 impl Game {
     pub fn new(board: Board) -> Self {
         Self {
-            state: board.initial,
+            state: board.initial(),
             board,
             pushes: 0,
             history: Vec::new(),
@@ -89,7 +89,7 @@ impl Game {
         true
     }
     pub fn reset(&mut self) {
-        self.state = self.board.initial;
+        self.state = self.board.initial();
         self.history.clear();
         self.actions.clear();
         self.pushes = 0;
