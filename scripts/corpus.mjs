@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { MODES } from './bench-gate.mjs';
 import { env, root, run } from './toolchain.mjs';
 
 export const catalog = JSON.parse(readFileSync(resolve(root, 'data/puzzles.json'), 'utf8'));
@@ -15,9 +16,11 @@ export const diagnosticFields = [
   'pruned_dead_cells', 'pruned_deadlocks', 'pruned_duplicates', 'pruned_assignment', 'pruned_bound',
 ];
 
-/** Compile once, then return the example's verified JSON-line records. */
+let built = false;
+/** Compile once per process, then return the example's verified JSON-line records. */
 export function nativeCorpus(args = []) {
-  run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
+  if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
+  built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
   const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw result.error;
@@ -25,8 +28,20 @@ export function nativeCorpus(args = []) {
   return result.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
 }
 
+/** Short HEAD sha, marked +dirty when tracked files outside benchmarks/ differ from it. */
+export function sourceRevision() {
+  const git = args => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  const head = git(['rev-parse', '--short=12', 'HEAD']);
+  const dirty = git(['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)benchmarks']);
+  if (head.error || head.status !== 0 || dirty.error || dirty.status !== 0) {
+    console.warn('git is unavailable; recording sourceRevision "unknown"');
+    return 'unknown';
+  }
+  return head.stdout.trim() + (dirty.stdout.trim() ? '+dirty' : '');
+}
+
 export function summarize(records) {
-  return ['fast', 'quality', 'optimal'].map(mode => {
+  return MODES.map(mode => {
     const cases = records.filter(r => r.mode === mode);
     const times = cases.map(r => r.search_us / 1000).sort((a, b) => a - b);
     return {

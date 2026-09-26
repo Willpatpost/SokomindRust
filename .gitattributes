@@ -1,3 +1,5 @@
 # The benchmark baseline hashes catalog text after CRLF normalization;
 # keep data files LF in every working copy.
 data/*.json text eol=lf
+# Baselines are compared byte-for-byte after bench:update.
+benchmarks/*.json text eol=lf

@@ -102,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 let setup_us = started.elapsed().as_micros();
                 let mut first_route_us = None;
+                let mut first_route_expanded = None;
+                let mut first_route_generated = None;
                 while search.status() == Status::Running {
                     if options.time.is_some_and(|limit| started.elapsed() >= limit) {
                         search.stop(StopReason::TimeLimit);
@@ -110,6 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if first_route_us.is_none() && search.best_moves().is_some() {
                         first_route_us = Some(started.elapsed().as_micros());
+                        first_route_expanded = Some(search.expanded());
+                        first_route_generated = Some(search.generated());
                     }
                 }
                 let search_us = started.elapsed().as_micros();
@@ -134,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "status": search.status().as_str(), "moves": search.best_moves(), "pushes": pushes,
                         "route": route, "proof": proof_value(search.proof()), "lower_bound": search.lower_bound(),
                         "expanded": search.expanded(), "generated": search.generated(), "reserved_bytes": search.reserved_bytes(),
+                        "first_route_expanded": first_route_expanded, "first_route_generated": first_route_generated,
                         "setup_us": setup_us, "first_route_us": first_route_us, "search_us": search_us, "reconstruct_us": reconstruct_us,
                         "stats": { "unique_states": stats.unique_states, "duplicate_improvements": stats.duplicate_improvements,
                             "reopened_states": stats.reopened_states, "stale_pops": stats.stale_pops, "peak_queue": stats.peak_queue,
