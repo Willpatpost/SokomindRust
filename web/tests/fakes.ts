@@ -1,4 +1,5 @@
-import type { Scheduler, WorkerPort } from '../src/solver-client.ts';
+import type { Scheduler } from '../src/scheduler.ts';
+import type { WorkerPort } from '../src/solver-client.ts';
 import type { WorkerRequest } from '../src/protocol.ts';
 export class Clock implements Scheduler {
   time = 0;

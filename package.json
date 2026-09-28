@@ -12,7 +12,7 @@
     "dev:web": "vite web",
     "server": "node scripts/rust.mjs run -p sokomind-server --release",
     "check": "npm run wasm && npm run check:web",
-    "check:web": "tsc -p web",
+    "check:web": "tsc -p web && tsc -p web/tests",
     "check:rust": "node scripts/rust.mjs check --workspace",
     "fmt:check": "node scripts/rust.mjs fmt --all -- --check",
     "lint:rust": "node scripts/rust.mjs clippy --workspace --all-targets -- -D warnings",

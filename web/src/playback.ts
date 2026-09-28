@@ -1,4 +1,4 @@
-import { browserScheduler, type Scheduler } from './solver-client.ts';
+import { browserScheduler, type Scheduler } from './scheduler.ts';
 export type PlaybackState =
   | { kind: 'idle' }
   | { kind: 'playing'; route: string; index: number; timer: number }

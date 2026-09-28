@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "erasableSyntaxOnly": true
+  },
+  "include": ["*.ts", "browser/*.ts", "../../playwright.config.ts"]
+}

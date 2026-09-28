@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SolverClient } from '../src/solver-client.ts';
-import { MAX_ROUTE } from '../src/protocol.ts';
+import { MAX_ROUTE, type SolveRequest } from '../src/protocol.ts';
 import { Clock, Worker, brandCheckedFetch, deferred, native, progress, withGlobalFetch } from './fakes.ts';
-const request = { rows: 'rows', actions: '', mode: 'optimal', maxStates: 1000000, memoryMiB: 64, timeMs: 10 };
+const request: SolveRequest = { rows: 'rows', actions: '', mode: 'optimal', maxStates: 1000000, memoryMiB: 64, timeMs: 10 };
 function setup(overrides: Partial<ConstructorParameters<typeof SolverClient>[0]> = {}) {
   const clock = new Clock(), worker = new Worker(), statuses: string[] = [], updates: unknown[] = [], verified: string[] = [];
   const client = new SolverClient({ worker: () => worker, scheduler: clock, changed() {}, elapsed() {},

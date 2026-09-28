@@ -3,6 +3,10 @@ export const MAX_ROUTE = 100_000;
 /** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
  * At 64 MiB the memory budget binds first on boards with 14 or more boxes. */
 export const MAX_STATES = 1_000_000;
+/** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
+ * apply to `mode`; also the values of the #mode select. */
+export const MODES = ['fast', 'quality', 'optimal'] as const;
+export type Mode = typeof MODES[number];
 /** Matches sokomind_search::Status::as_str. */
 export type SearchStatus =
   'running' | 'solved' | 'exhausted' | 'state_limit' | 'memory_limit' | 'time_limit' | 'cancelled';
@@ -27,7 +31,7 @@ export interface Snapshot { player: number; moves: number; pushes: number; solve
 export interface SolveRequest {
   rows: string;
   actions: string;
-  mode: string;
+  mode: Mode;
   maxStates: number;
   memoryMiB: number;
   timeMs: number;

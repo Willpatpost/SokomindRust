@@ -1,4 +1,5 @@
 import { MAX_ROUTE, errorMessage, type SearchUpdate, type SolveRequest, type WorkerRequest } from './protocol.ts';
+import { browserScheduler, type Scheduler } from './scheduler.ts';
 import { decodeNativeReply, decodeWorkerReply, errorText, unboundFetch } from './transport.ts';
 
 export interface WorkerPort {
@@ -7,18 +8,10 @@ export interface WorkerPort {
   postMessage(message: WorkerRequest): void;
   terminate(): void;
 }
-export interface Scheduler {
-  now(): number;
-  interval(callback: () => void, ms: number): number;
-  timeout(callback: () => void, ms: number): number;
-  clearInterval(handle: number): void;
-  clearTimeout(handle: number): void;
-}
-export const browserScheduler: Scheduler = {
-  now: () => performance.now(), interval: (fn, ms) => window.setInterval(fn, ms),
-  timeout: (fn, ms) => window.setTimeout(fn, ms),
-  clearInterval: handle => window.clearInterval(handle), clearTimeout: handle => window.clearTimeout(handle),
-};
+/** Where a search runs: the WASM worker in this tab or the server's native
+ * solver. The values of the #engine select. */
+export const ENGINES = ['browser', 'native'] as const;
+export type Engine = typeof ENGINES[number];
 interface Result { prefix: string; route?: string }
 interface Running extends Result { timer: number; watchdog: number }
 export type SolverState =
@@ -100,7 +93,7 @@ export class SolverClient {
     if (update.type === 'done') { this.finish(active); this.options.elapsed(update.elapsedMs); }
     else this.options.changed();
   }
-  async solve(engine: string, request: SolveRequest): Promise<void> {
+  async solve(engine: Engine, request: SolveRequest): Promise<void> {
     if (this.busy) return;
     this.reset();
     const started = this.clock.now();

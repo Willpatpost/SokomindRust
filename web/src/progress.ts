@@ -1,6 +1,6 @@
 import * as storage from './storage.ts';
 import { counter, errorText, route, unboundFetch } from './transport.ts';
-import { browserScheduler, type Scheduler } from './solver-client.ts';
+import { browserScheduler, type Scheduler } from './scheduler.ts';
 
 interface Context { id: string; rows: string }
 interface Score { moves: number; pushes: number }

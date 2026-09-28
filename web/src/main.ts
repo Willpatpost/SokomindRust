@@ -3,25 +3,43 @@ import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
 import catalog from '../../data/puzzles.json';
 import { BoardView } from './board';
+import { bindInput } from './input';
 import * as storage from './storage';
 import {
   MAX_ROUTE,
   MAX_STATES,
+  MODES,
   errorMessage,
   type SearchStatus,
   type SearchUpdate,
   type Snapshot,
   type SolveRequest,
 } from './protocol';
-import { SolverClient } from './solver-client';
+import { ENGINES, SolverClient } from './solver-client';
 import { decodeSnapshot } from './transport';
 import { Playback } from './playback';
 import { ProgressClient } from './progress';
 
 interface Puzzle { id: string; title: string; difficulty: string; rows: string[]; hint?: string }
+/** The loaded puzzle. load() replaces it whole; render() refreshes `state`
+ * from the game after every change. */
+interface Session {
+  game: WasmGame;
+  puzzle: Puzzle & { text: string };
+  tiles: Uint8Array;
+  labels: Uint8Array;
+  state: Snapshot;
+}
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
 const select = (id: string) => $<HTMLSelectElement>(id);
+/** The selected value of a select whose options are exactly `values`. */
+function choice<T extends string>(id: string, values: readonly T[]): T {
+  const value = select(id).value;
+  const known = values.find(item => item === value);
+  if (known === undefined) throw new Error(`Unknown #${id} option: ${value}`);
+  return known;
+}
 // role=status re-announces every write, so identical text is left alone.
 function setText(id: string, value: string) {
   const el = $(id);
@@ -38,21 +56,24 @@ const customPuzzle = (text: string): Puzzle => ({
   rows: text.split('\n'),
 });
 const board = new BoardView($<HTMLCanvasElement>('board'));
-let game: WasmGame;
-let current: Puzzle & { text: string };
-let tiles: Uint8Array;
-let labels: Uint8Array;
-let state: Snapshot;
+/** Undefined until start() loads the first puzzle. */
+let session: Session | undefined;
+/** The session, for code that only runs once a puzzle is loaded: event
+ * handlers bound after the first load, and playback and search callbacks. */
+function loaded(): Session {
+  if (!session) throw new Error('No puzzle is loaded');
+  return session;
+}
 const solver = new SolverClient({
   worker: () => new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' }),
   changed: updateButtons,
   elapsed: ms => setText('elapsed', seconds(ms)),
   update: applyUpdate,
   status: setStatus,
-  verify: (prefix, route) => { verify(current.text, prefix + route); },
+  verify: (prefix, route) => { verify(loaded().puzzle.text, prefix + route); },
 });
 const playback = new Playback(
-  direction => game.step(direction), changed,
+  direction => loaded().game.step(direction), changed,
   blocked => {
     solver.dropRoute();
     updateButtons();
@@ -66,12 +87,13 @@ const progress = new ProgressClient({
 
 function updateButtons() {
   const busy = solver.busy;
-  button('solve').disabled = busy || !game || state.solved;
+  const state = session?.state;
+  button('solve').disabled = busy || !state || state.solved;
   button('cancel').disabled = !busy && !playback.active;
   button('play').disabled = busy || (solver.route === undefined && !playback.active);
   setText('play', !playback.active ? 'Play route' : playback.state.kind === 'paused' ? 'Resume' : 'Pause');
   button('copy').disabled = solver.route === undefined;
-  button('undo').disabled = !game || state.moves === 0;
+  button('undo').disabled = !state || state.moves === 0;
 }
 function animate(route: string) { playback.play(route); updateButtons(); }
 function invalidate() {
@@ -80,15 +102,20 @@ function invalidate() {
   updateButtons();
   setStatus('Ready when you are.');
 }
+/** Reads the game's position into the session, then paints it. */
 function render() {
-  state = decodeSnapshot(game.snapshot(), labels.length);
+  const current = loaded();
+  current.state = decodeSnapshot(current.game.snapshot(), current.labels.length);
+  paint(current);
+}
+function paint({ game, tiles, labels, state }: Session) {
   board.draw(game.width(), game.height(), tiles, labels, state, Array.from(labels, (_, i) => game.on_goal(i)));
   setText('moves', String(state.moves));
   setText('pushes', String(state.pushes));
   updateButtons();
 }
 function saveSession() {
-  if (game) progress.session(game.actions());
+  if (session) progress.session(session.game.actions());
 }
 function showBest(best: storage.Best | null) {
   button('best').disabled = !best;
@@ -108,6 +135,7 @@ function verify(rows: string, route: string): Snapshot {
 }
 function changed() {
   render();
+  const { game, state } = loaded();
   if (!state.solved) {
     message(MOVE_HINT);
     progress.session(game.actions(), true);
@@ -121,31 +149,34 @@ function changed() {
 }
 function load(puzzle: Puzzle, actions = '') {
   const text = puzzle.rows.join('\n');
-  const next = new WasmGame(text);
+  const game = new WasmGame(text);
+  let next: Session;
   try {
-    if (actions) next.replay(actions);
+    if (actions) game.replay(actions);
+    const tiles = game.tiles(), labels = game.labels();
+    next = { game, puzzle: { ...puzzle, text }, tiles, labels, state: decodeSnapshot(game.snapshot(), labels.length) };
   } catch (error) {
-    next.free();
+    game.free();
     throw error;
   }
-  if (game) invalidate();
-  game?.free();
-  game = next;
-  current = { ...puzzle, text };
-  tiles = game.tiles();
-  labels = game.labels();
+  if (session) {
+    invalidate();
+    session.game.free();
+  }
+  session = next;
   select('puzzles').value = puzzle.id;
   setText('title', puzzle.title);
   setText('difficulty', puzzle.difficulty);
   setText('hint', puzzle.hint || 'Match every box to its goal.');
   $<HTMLTextAreaElement>('rows').value = text;
-  render();
-  progress.select(current.id, current.text);
+  paint(next);
+  progress.select(next.puzzle.id, next.puzzle.text);
   message(actions ? 'Session restored by replaying your moves.' : MOVE_HINT);
   saveSession();
 }
 function move(direction: number) {
-  if (!game) return;
+  if (!session) return;
+  const { game } = session;
   if (solver.busy || solver.route !== undefined || playback.active) invalidate();
   if (game.step(direction)) changed();
   else if (game.moves() >= MAX_ROUTE)
@@ -179,17 +210,18 @@ function applyUpdate(update: SearchUpdate, route: string | undefined) {
 function solve() {
   if (solver.busy) return;
   invalidate();
+  const { game, puzzle } = loaded();
   const request: SolveRequest = {
-    rows: current.text,
+    rows: puzzle.text,
     actions: game.actions(),
-    mode: select('mode').value,
+    mode: choice('mode', MODES),
     timeMs: Number(select('seconds').value) * 1000,
     memoryMiB: Number(select('memory').value),
     maxStates: MAX_STATES,
   };
   for (const metric of ['expanded', 'generated', 'reserved', 'elapsed']) setText(metric, '—');
   setStatus('Preparing search…');
-  void solver.solve(select('engine').value, request);
+  void solver.solve(choice('engine', ENGINES), request);
 }
 
 async function start() {
@@ -219,7 +251,7 @@ async function start() {
   }
   selector.onchange = () => {
     if (selector.value === 'custom') {
-      selector.value = current.id;
+      selector.value = loaded().puzzle.id;
       $<HTMLTextAreaElement>('rows').closest('details')!.open = true;
       return;
     }
@@ -229,23 +261,24 @@ async function start() {
     selector.blur();
   };
   button('next').onclick = () => {
-    const index = catalog.findIndex(p => p.id === current.id);
+    const { id } = loaded().puzzle;
+    const index = catalog.findIndex(p => p.id === id);
     load(catalog[(index + 1) % catalog.length]);
   };
   button('undo').onclick = () => {
     invalidate();
-    if (game.undo()) changed();
+    if (loaded().game.undo()) changed();
   };
   button('reset').onclick = () => {
     invalidate();
-    game.reset();
+    loaded().game.reset();
     changed();
   };
   button('best').onclick = () => {
     const best = progress.best();
     if (!best) return;
     invalidate();
-    game.reset();
+    loaded().game.reset();
     render();
     animate(best.route);
   };
@@ -264,77 +297,18 @@ async function start() {
     }
     try {
       // Rust validates the whole replay atomically before replacing the current state.
-      game.replay(actions);
+      loaded().game.replay(actions);
       invalidate();
       changed();
     } catch (error) {
       message(errorMessage(error));
     }
   };
-  for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]'))
-    control.onclick = () => move(Number(control.dataset.direction));
-  // Swipe on the board moves the robot; taps stay with the on-screen buttons.
-  // Only a clean one-finger swipe counts: a second finger (pinch), a cancelled
-  // touch, or any scroll during the gesture discards it, and an oversized
-  // board that must pan takes no swipes at all.
-  const canvas = $<HTMLCanvasElement>('board');
-  const scrollOffsets = () =>
-    `${scrollX},${scrollY},${canvas.parentElement!.scrollLeft},${canvas.parentElement!.scrollTop}`;
-  let swipe: { id: number; x: number; y: number; scroll: string } | undefined;
-  canvas.addEventListener('touchstart', event => {
-    const touch = event.changedTouches[0];
-    swipe = event.touches.length === 1 && board.fits
-      ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, scroll: scrollOffsets() }
-      : undefined;
-  }, { passive: true });
-  // A second finger that lands off the board still makes this a pinch.
-  document.addEventListener('touchstart', event => {
-    if (event.touches.length > 1) swipe = undefined;
-  }, { passive: true });
-  canvas.addEventListener('touchcancel', () => {
-    swipe = undefined;
-  }, { passive: true });
-  canvas.addEventListener('touchend', event => {
-    const gesture = swipe;
-    swipe = undefined;
-    const touch = event.changedTouches[0];
-    if (
-      !gesture
-      || event.touches.length !== 0
-      || touch.identifier !== gesture.id
-      || scrollOffsets() !== gesture.scroll
-    ) return;
-    const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
-    const ax = Math.abs(dx), ay = Math.abs(dy);
-    // A swipe travels 24 px and at least twice as far along one axis as the other.
-    if (Math.max(ax, ay) < 24 || Math.max(ax, ay) < 2 * Math.min(ax, ay)) return;
-    move(ax > ay ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0));
-  }, { passive: true });
-  document.addEventListener('keydown', event => {
-    if (
-      event.ctrlKey
-      || event.metaKey
-      || event.altKey
-      || (event.target as HTMLElement).matches('input,textarea,select')
-    ) return;
-    const key = event.key.toLowerCase();
-    const directions: Record<string, number> = {
-      arrowup: 0,
-      w: 0,
-      arrowdown: 1,
-      s: 1,
-      arrowleft: 2,
-      a: 2,
-      arrowright: 3,
-      d: 3,
-    };
-    if (key in directions) {
-      event.preventDefault();
-      move(directions[key]);
-    } else if (key === 'z') {
-      event.preventDefault();
-      button('undo').click();
-    }
+  bindInput($<HTMLCanvasElement>('board'), {
+    move,
+    // A click does nothing while the Undo button is disabled.
+    undo: () => button('undo').click(),
+    swipeable: () => board.fits,
   });
   button('solve').onclick = () => { void solve(); };
   button('cancel').onclick = () => {
