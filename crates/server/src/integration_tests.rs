@@ -15,6 +15,7 @@ fn app_state(db: Option<PgPool>) -> api::App {
         proxies: Arc::new(TrustedProxies::default()),
         saves: Arc::new(RateLimiter::new(100, RATE_WINDOW)),
         solves: Arc::new(RateLimiter::new(100, RATE_WINDOW)),
+        health: Arc::default(),
     }
 }
 
@@ -163,6 +164,34 @@ fn aborted_save_retains_admission_until_queued_replay_finishes() {
         .await
         .unwrap();
     });
+}
+
+#[tokio::test]
+async fn health_reports_unreachable_databases_quickly_and_caches_the_answer() {
+    let refused = PgPoolOptions::new()
+        .acquire_timeout(database::ACQUIRE_TIMEOUT)
+        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
+        .unwrap();
+    let closed = PgPoolOptions::new()
+        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
+        .unwrap();
+    closed.close().await;
+    for db in [refused, closed] {
+        let app = test_router(app_state(Some(db)));
+        let offline = json!({ "status": "ok", "persistence": false });
+        // sqlx keeps retrying a refused connection until its acquire
+        // timeout; the probe's own deadline answers inside the frontend's
+        // 1.5 s health timeout.
+        let started = Instant::now();
+        let (status, health) = request(app.clone(), "GET", "/api/health", Value::Null).await;
+        assert_eq!((status, health), (StatusCode::OK, offline.clone()));
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        // The failure is cached, so an immediate repeat does not probe again.
+        let started = Instant::now();
+        let (status, health) = request(app, "GET", "/api/health", Value::Null).await;
+        assert_eq!((status, health), (StatusCode::OK, offline));
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
 }
 
 /// Explicitly ignored so an ordinary test run never connects to a user's
@@ -336,7 +365,8 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
     assert!(started.elapsed() < Duration::from_secs(3));
 
     // One save owns progress admission while waiting on SQL. Another request
-    // is rejected immediately, health degrades, and native solving still runs.
+    // is rejected immediately, health still reports persistence (it takes no
+    // progress permit), and native solving still runs.
     let mut single = state.clone();
     single.progress_slots = Arc::new(Semaphore::new(1));
     let single_app = test_router(single.clone());
@@ -366,8 +396,9 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
         StatusCode::TOO_MANY_REQUESTS
     );
     assert!(started.elapsed() < Duration::from_millis(200));
-    let (_, health) = request(single_app.clone(), "GET", "/api/health", Value::Null).await;
-    assert_eq!(health["persistence"], false);
+    let (status, health) = request(single_app.clone(), "GET", "/api/health", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health, json!({ "status": "ok", "persistence": true }));
     assert_eq!(
         request(single_app.clone(), "POST", "/api/solve", solve_body())
             .await
@@ -376,6 +407,16 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
     );
     assert_eq!(saving.await.unwrap().0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(single.progress_slots.available_permits(), 1);
+    // The save above may already have finished; here every progress slot is
+    // held for certain, and health, whose own cache has no answer yet,
+    // probes the database and reports it.
+    let mut held = app_state(Some(db.clone()));
+    held.progress_slots = Arc::new(Semaphore::new(1));
+    let permit = held.progress_slots.clone().try_acquire_owned().unwrap();
+    let (status, health) = request(test_router(held), "GET", "/api/health", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health, json!({ "status": "ok", "persistence": true }));
+    drop(permit);
     lock.rollback().await.unwrap();
     assert_eq!(
         request(app.clone(), "GET", "/api/progress/ultra-tiny", Value::Null)

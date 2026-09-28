@@ -9,11 +9,18 @@ use axum::{
 use serde::{Deserialize, de::DeserializeOwned};
 use sokomind_core::Board;
 use sqlx::PgPool;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
+};
 use tokio::sync::Semaphore;
 
 /// Under the frontend's 1.5 s health timeout even when the database hangs.
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(900);
+/// How long one database probe answers /api/health, so the database sees at
+/// most one probe a second however often health is polled.
+const HEALTH_TTL: Duration = Duration::from_secs(1);
 /// Bodies are at most 128 KiB; a client still sending after this long is
 /// holding a connection and a handler open, not uploading.
 const BODY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -27,6 +34,7 @@ pub struct App {
     pub proxies: Arc<TrustedProxies>,
     pub saves: Arc<RateLimiter>,
     pub solves: Arc<RateLimiter>,
+    pub health: Arc<Health>,
 }
 impl App {
     pub fn progress_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
@@ -165,19 +173,108 @@ impl IntoResponse for Error {
     }
 }
 pub async fn health(State(app): State<App>) -> Json<serde_json::Value> {
-    // A slow probe is indistinguishable from a dead one to the frontend.
-    let persistence = if let Some(db) = &app.db {
-        let Ok(_permit) = app.progress_permit() else {
-            return Json(serde_json::json!({ "status": "ok", "persistence": false }));
-        };
-        tokio::time::timeout(HEALTH_TIMEOUT, sqlx::query("SELECT 1").execute(db))
-            .await
-            .map(|result| result.is_ok())
-            .unwrap_or(false)
-    } else {
-        false
+    let persistence = match &app.db {
+        Some(db) => app.health.persistence(db).await,
+        None => false,
     };
     Json(serde_json::json!({ "status": "ok", "persistence": persistence }))
+}
+
+/// /api/health's cached answer to whether PostgreSQL responds. Probes take no
+/// progress permit, so busy saves no longer read as persistence being off,
+/// and they run at most once per `HEALTH_TTL` whatever the request rate.
+#[derive(Default)]
+pub struct Health {
+    state: Mutex<Probe>,
+}
+#[derive(Clone, Copy, Default)]
+struct Probe {
+    /// When the last probe finished, and whether the database answered.
+    last: Option<(Instant, bool)>,
+    /// A probe is in flight; other callers answer from `last` meanwhile.
+    running: bool,
+}
+impl Health {
+    /// Whether `db` answered `SELECT 1` on a pool connection within
+    /// `HEALTH_TIMEOUT`, as of the last probe.
+    pub async fn persistence(self: &Arc<Self>, db: &PgPool) -> bool {
+        self.check(|| {
+            let db = db.clone();
+            // A slow probe is indistinguishable from a dead one to the frontend.
+            async move {
+                let probe = sqlx::query("SELECT 1").execute(&db);
+                matches!(tokio::time::timeout(HEALTH_TIMEOUT, probe).await, Ok(Ok(_)))
+            }
+        })
+        .await
+    }
+    /// Answers from the cache while it is fresh. Otherwise one caller runs
+    /// `probe` and waits for it, and every concurrent caller answers at once
+    /// from the previous probe (false before the first one lands) instead of
+    /// waiting too. The probe runs in its own task, so it finishes and is
+    /// recorded even if the request that started it is dropped.
+    async fn check<F>(self: &Arc<Self>, probe: impl FnOnce() -> F) -> bool
+    where
+        F: Future<Output = bool> + Send + 'static,
+    {
+        if let Some(answer) = self.cached(Instant::now()) {
+            return answer;
+        }
+        let health = Arc::clone(self);
+        let probe = probe();
+        tokio::spawn(async move {
+            let mut refresh = Refresh { health, up: None };
+            refresh.finish(probe.await)
+        })
+        .await
+        .unwrap_or(false)
+    }
+    /// The answer to give without probing, or `None` when the caller must
+    /// probe: it then owns the refresh until [`Health::record`].
+    fn cached(&self, now: Instant) -> Option<bool> {
+        let mut state = self.lock();
+        let Probe { last, running } = *state;
+        match last {
+            Some((at, up)) if now.saturating_duration_since(at) < HEALTH_TTL => Some(up),
+            _ if running => Some(last.is_some_and(|(_, up)| up)),
+            _ => {
+                state.running = true;
+                None
+            }
+        }
+    }
+    /// Ends the refresh; `None` (the probe task unwound) keeps the previous
+    /// answer and lets the next caller probe again.
+    fn record(&self, now: Instant, up: Option<bool>) {
+        let mut state = self.lock();
+        state.running = false;
+        if let Some(up) = up {
+            state.last = Some((now, up));
+        }
+    }
+    /// Nothing panics while holding the lock, but a poisoned cache must
+    /// never take health down with it.
+    fn lock(&self) -> MutexGuard<'_, Probe> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+/// Records a probe when its task ends, even by unwinding, so a failed probe
+/// cannot leave `running` set and freeze the cached answer.
+struct Refresh {
+    health: Arc<Health>,
+    up: Option<bool>,
+}
+impl Refresh {
+    /// Sets the answer that dropping `self` records.
+    fn finish(&mut self, up: bool) -> bool {
+        self.up = Some(up);
+        up
+    }
+}
+impl Drop for Refresh {
+    fn drop(&mut self) {
+        self.health.record(Instant::now(), self.up);
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +330,71 @@ mod tests {
                 .values()
                 .all(|board| !board.fingerprint().is_empty())
         );
+    }
+
+    #[test]
+    fn health_answers_from_cache_between_probes() {
+        let health = Health::default();
+        let start = Instant::now();
+        // The first caller probes; the others answer at once, false until a
+        // probe lands.
+        assert_eq!(health.cached(start), None);
+        assert_eq!(health.cached(start), Some(false));
+        health.record(start, Some(true));
+        assert_eq!(health.cached(start + HEALTH_TTL / 2), Some(true));
+        // A stale answer is refreshed by one caller while the rest reuse it.
+        let stale = start + HEALTH_TTL;
+        assert_eq!(health.cached(stale), None);
+        assert_eq!(health.cached(stale), Some(true));
+        health.record(stale, Some(false));
+        assert_eq!(health.cached(stale + HEALTH_TTL / 2), Some(false));
+        // A probe that unwound records nothing, and the next caller retries.
+        let later = stale + HEALTH_TTL;
+        assert_eq!(health.cached(later), None);
+        health.record(later, None);
+        assert_eq!(health.cached(later), None);
+    }
+
+    async fn until(condition: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !condition() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn health_probes_once_and_callers_never_wait_for_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let health = Arc::new(Health::default());
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn({
+            let health = Arc::clone(&health);
+            async move {
+                health
+                    .check(|| async move { answered.await.unwrap_or(false) })
+                    .await
+            }
+        });
+        until(|| health.lock().running).await;
+        let probes = AtomicUsize::new(0);
+        let counted = || {
+            probes.fetch_add(1, Ordering::Relaxed);
+            std::future::ready(true)
+        };
+        // While the first probe runs, callers answer at once, without probing.
+        let busy = tokio::time::timeout(Duration::from_millis(500), health.check(&counted));
+        assert!(!busy.await.unwrap());
+        // Dropping the request that started the probe does not drop the probe.
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        answer.send(true).unwrap();
+        until(|| !health.lock().running).await;
+        // Its answer is reused while fresh.
+        assert!(health.check(&counted).await);
+        assert_eq!(probes.load(Ordering::Relaxed), 0);
     }
 
     #[test]

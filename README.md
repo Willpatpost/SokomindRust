@@ -122,7 +122,13 @@ setup/reconstruction can add latency.
 
 ## HTTP
 
-* `GET /api/health` — API and persistence availability.
+* `GET /api/health` — `{status: "ok", persistence: bool}`: API and persistence
+  availability. `persistence` comes from a `SELECT 1` probe (900 ms deadline)
+  whose answer is reused for 1 s and which takes no progress slot, so busy saves
+  do not read as persistence being off. Requests that arrive while a probe runs
+  answer from the previous probe instead of waiting, so those that race the
+  server's first probe report `false` even with the database up; the web app
+  asks again (below) and picks persistence up then.
 * `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 1000000, memory_mib: 64}`.
 * `GET /api/progress/{id}` — one saved route.
 * `POST /api/progress/{id}` — `{route: "UDLR..."}`; server replay validates counters
@@ -155,8 +161,9 @@ connection cap and no idle or header timeout (axum gives hyper no timer), and it
 sends no security headers: nginx, which must sit in front of it, bounds slow
 clients and open connections and adds `X-Content-Type-Options: nosniff` and
 `Referrer-Policy: same-origin` to every response. nginx also limits `/api/` to 10
-requests per second per address (burst 20), answers excess with a JSON 429, and
-exempts `/api/health`.
+requests per second per address (burst 20) and answers excess with a JSON 429;
+`/api/health` has its own budget of 2 per second (burst 10) instead, so polling it
+never drains the `/api/` limit.
 
 Stored progress is keyed by layout fingerprint (`puzzle-v1:{fnv1a}`, identical to
 the reference): a changed catalog layout starts fresh records instead of returning

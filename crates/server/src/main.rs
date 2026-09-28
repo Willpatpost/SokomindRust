@@ -83,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         proxies: Arc::new(proxies),
         saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
         solves: Arc::new(RateLimiter::new(solve_rate, RATE_WINDOW)),
+        health: Arc::default(),
     };
     eprintln!("Sokomind API listening at http://{bind}");
     // axum's serve() gives hyper no timer, so hyper's 30 s header read
@@ -324,6 +325,7 @@ mod tests {
             proxies: Arc::new(TrustedProxies::default()),
             saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
             solves: Arc::new(RateLimiter::new(20, RATE_WINDOW)),
+            health: Arc::default(),
         };
         let app = router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
         let not_found = json!({ "error": "Unknown API endpoint" });
