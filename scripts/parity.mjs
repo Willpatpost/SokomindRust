@@ -2,9 +2,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 import { decodeMetricTuple, decodeSnapshot } from '../web/src/transport.ts';
-import { catalog, diagnosticFields, nativeCorpus } from './corpus.mjs';
+import { MODES } from './bench-gate.mjs';
+import { catalog, catalogHash, diagnosticFields, nativeCorpus } from './corpus.mjs';
 import { root } from './toolchain.mjs';
+
+// `--native <file>` checks WASM against native records already on disk instead
+// of running the native corpus again. CI passes target/bench/catalog.json right
+// after bench:check wrote it, so the corpus runs once per CI run.
+const { values: options } = parseArgs({ options: { native: { type: 'string' } }, strict: true, allowPositionals: false });
+function recorded(path) {
+  const file = JSON.parse(readFileSync(resolve(root, path), 'utf8'));
+  assert.equal(file.catalogHash, catalogHash, `${path} was recorded for another catalog; rerun npm run bench:check`);
+  assert(!file.features, `${path} was measured with cargo features "${file.features}"; parity needs the default build`);
+  const cases = Array.isArray(file.records) ? file.records.map(record => `${record.id}/${record.mode}`) : [];
+  assert.deepEqual(cases, catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
+    `${path} must hold one record per catalog puzzle and mode, as bench:check writes it`);
+  return file.records;
+}
 
 /** Runs one of the web app's own WASM decoders, naming the case that fails it. */
 function decode(context, run) {
@@ -13,7 +29,7 @@ function decode(context, run) {
 
 const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')));
 const wasm = await init({ module_or_path: readFileSync(resolve(root, 'web/wasm/sokomind_bg.wasm')) });
-const native = nativeCorpus();
+const native = options.native ? recorded(options.native) : nativeCorpus();
 const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')]));
 let verified = 0;
 for (const reference of native) {

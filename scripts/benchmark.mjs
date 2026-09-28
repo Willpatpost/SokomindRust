@@ -60,9 +60,10 @@ function report(fields) {
 function check() {
   assert.equal(rest.length, 0, 'Baseline checks always use the reviewed configuration');
   const stored = read(BASELINE), baseline = upgrade(stored), config = { maxStates: baseline.maxStates, memoryMiB: baseline.memoryMiB };
+  // Before the build and the corpus run, so a changed catalog fails in seconds.
+  assert.equal(catalogHash, baseline.catalogHash, 'Catalog changed: review, then run npm run bench:update');
   const records = corpus(config);
   raw(records);
-  assert.equal(catalogHash, baseline.catalogHash, 'Catalog changed: review, then run npm run bench:update');
   const cases = records.map(toCase), failures = invariants(cases, evidence(stored));
   const diff = compare(baseline.cases, cases, { sameConfig: true });
   console.table(scoreboard(cases));

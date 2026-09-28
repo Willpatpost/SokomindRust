@@ -2,9 +2,13 @@ FROM rust:1.98.1-bookworm AS rust-build
 WORKDIR /app
 # Manifests first: the toolchain install survives crate and web edits.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-# wasm-bindgen-cli must equal wasm-bindgen's version in Cargo.lock, as
-# scripts/build-wasm.mjs requires; this stage has no node, so it is a literal.
-RUN rustup target add wasm32-unknown-unknown && cargo install wasm-bindgen-cli --version 0.2.128 --locked
+# wasm-bindgen-cli must equal wasm-bindgen's version in Cargo.lock. This stage
+# runs wasm-bindgen without scripts/build-wasm.mjs, which checks that, so it
+# reads the version from Cargo.lock the way CI does (tr drops CRLF endings).
+RUN version=$(tr -d '\r' < Cargo.lock | grep -m1 -A1 -x 'name = "wasm-bindgen"' | sed -n 's/^version = "\(.*\)"$/\1/p') \
+    && if [ -z "$version" ]; then echo 'Cargo.lock does not list wasm-bindgen' >&2; exit 1; fi \
+    && rustup target add wasm32-unknown-unknown \
+    && cargo install wasm-bindgen-cli --version "$version" --locked
 # Dependencies alone, against stub sources (and no build.rs), so crate edits
 # reuse this layer. Deleting the stubs' outputs and fingerprints makes the real
 # build below recompile the workspace crates whatever the copied files' mtimes.

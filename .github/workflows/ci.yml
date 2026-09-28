@@ -22,6 +22,8 @@ jobs:
           node-version: '24.14.0'
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
+      # After the toolchain step: the cache key includes the active rustc version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: npm run fmt:check
       - run: npm run lint:rust
       - run: npm run test:rust
@@ -49,14 +51,35 @@ jobs:
         with:
           node-version: '24.14.0'
           cache: npm
-      - run: rustup show active-toolchain
-      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Cargo.lock is the only wasm-bindgen version pin; build-wasm.mjs checks the CLI against it.
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
+        run: |
+          version=$(grep -m1 -A1 -x 'name = "wasm-bindgen"' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          if [ -z "$version" ]; then
+            echo "::error file=Cargo.lock::Cargo.lock does not list wasm-bindgen"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install prebuilt wasm-bindgen
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          fallback: none
       - run: npm ci
-      - run: npm run build
+      # Cheap checks first. bench:check compares the catalog hash before it builds anything.
       - run: npm run test:web
       - run: npm run test:scripts
-      - run: npm run test:parity
       - run: npm run bench:check
+      # The only WASM build. `npm run build` and `npm run test:parity` would each
+      # rebuild it, so their second halves run directly.
+      - run: npm run wasm
+      - run: npm run build:web
+      # Reuses the native records bench:check just wrote instead of rerunning the corpus.
+      - run: node scripts/parity.mjs --native target/bench/catalog.json
       - run: npm run bench:observe
       - run: npm run test:db
       - run: npx playwright install --with-deps chromium
