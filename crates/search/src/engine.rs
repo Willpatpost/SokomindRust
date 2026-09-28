@@ -27,7 +27,13 @@ pub(crate) struct Policy {
     /// Exact leaves it off: there a goal pops before any such node, and the
     /// check stays out of the kernel that proves.
     prune_popped_estimate: bool,
+    /// Where a goal stop hands over instead of ending the search: the
+    /// search continues in the same arena under that policy, with the queue
+    /// re-keyed at its weight.
+    then: Option<&'static Policy>,
 }
+// Exact soundness assumes one admissible weight for the whole search.
+const _: () = assert!(Policy::EXACT.then.is_none());
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
     pub(crate) const EXACT: Self = Self {
@@ -36,6 +42,7 @@ impl Policy {
         stop_on_goal_push: false,
         reopen_closed: true,
         prune_popped_estimate: false,
+        then: None,
     };
     /// First route wins. Without reopening, weighted A* keeps its
     /// suboptimality bound under a consistent h, and never proves anyway.
@@ -45,6 +52,7 @@ impl Policy {
         stop_on_goal_push: true,
         reopen_closed: false,
         prune_popped_estimate: true,
+        then: None,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -53,6 +61,15 @@ impl Policy {
         stop_on_goal_push: false,
         reopen_closed: true,
         prune_popped_estimate: true,
+        then: None,
+    };
+    /// Experiment 5.1 (O5), behind the `o5` feature: exactly [`Self::FAST`]
+    /// until its first route, then [`Self::QUALITY`] in the same arena. The
+    /// incumbent only improves, so the result is never longer than Fast's,
+    /// and its bound prunes from the first Quality pop.
+    pub(crate) const FAST_THEN_QUALITY: Self = Self {
+        then: Some(&Self::QUALITY),
+        ..Self::FAST
     };
 }
 
@@ -166,6 +183,16 @@ impl Engine {
             };
         }
     }
+    /// Hands a goal stop over to the policy's next phase, re-keying the queue
+    /// for its weight. False when there is none and the search ends.
+    fn next_phase(&mut self) -> bool {
+        let Some(&next) = self.policy.then else {
+            return false;
+        };
+        self.arena.reweight(self.policy.weight, next.weight);
+        self.policy = next;
+        true
+    }
     /// The arena is full while expanding a node whose g + queued h is `f`.
     fn stop_at_limit(&mut self, f: u64) {
         self.interrupted_f = Some(f);
@@ -200,7 +227,7 @@ impl Engine {
                 if self.best_moves().is_none_or(|best| node.g < best) {
                     self.incumbent = Some(index);
                 }
-                if self.policy.stop_on_goal_pop {
+                if self.policy.stop_on_goal_pop && !self.next_phase() {
                     self.status = Status::Solved;
                     return;
                 }
@@ -315,7 +342,8 @@ impl Engine {
                     // Keep a solution even if a limit occurs before its pop.
                     if goal {
                         self.incumbent = Some(id);
-                        if self.policy.stop_on_goal_push {
+                        // A next phase takes over the rest of this expansion.
+                        if self.policy.stop_on_goal_push && !self.next_phase() {
                             self.status = Status::Solved;
                             return;
                         }
@@ -386,5 +414,74 @@ impl Engine {
                 .map(|&direction| ACTIONS[direction as usize] as char)
                 .collect(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Engine, Policy};
+    use crate::Status;
+    use sokomind_core::Board;
+
+    /// Small enough for debug builds. At this limit Fast finds 28 catalog
+    /// routes and the second phase shortens 13 of them.
+    const STATES: usize = 1_000;
+    const MIN_IMPROVED: usize = 10;
+
+    /// Runs `policy` to a terminal status one pop at a time. Also returns
+    /// the moves and expanded count when a route first appeared.
+    fn run(board: &Board, policy: Policy, max_states: usize) -> (Engine, Option<(u32, u32)>) {
+        let mut engine =
+            Engine::new(board.clone(), board.initial(), policy, max_states, 16).unwrap();
+        let mut first = None;
+        while engine.status() == Status::Running {
+            engine.advance(1);
+            if first.is_none() {
+                first = engine.best_moves().map(|moves| (moves, engine.expanded()));
+            }
+        }
+        (engine, first)
+    }
+
+    /// Experiment 5.1 (O5) on the whole catalog: the first phase is Fast
+    /// itself, and the second only improves on Fast's route.
+    #[test]
+    fn fast_then_quality_starts_as_fast_and_never_ends_longer() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../data/puzzles.json")).unwrap();
+        let mut improved = 0;
+        for puzzle in catalog.as_array().unwrap() {
+            let id = puzzle["id"].as_str().unwrap();
+            let rows: Vec<&str> = puzzle["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row.as_str().unwrap())
+                .collect();
+            let board = Board::parse(&rows.join("\n")).unwrap();
+            let (fast, _) = run(&board, Policy::FAST, STATES);
+            let (mut both, first) = run(&board, Policy::FAST_THEN_QUALITY, STATES);
+            let Some(moves) = fast.best_moves() else {
+                // No route, no second phase: the runs are the same.
+                assert_eq!(
+                    (both.status(), both.best_moves()),
+                    (fast.status(), None),
+                    "{id}"
+                );
+                assert_eq!(
+                    (both.expanded(), both.generated()),
+                    (fast.expanded(), fast.generated()),
+                    "{id}"
+                );
+                continue;
+            };
+            assert_eq!(first, Some((moves, fast.expanded())), "{id}");
+            let best = both.best_moves().unwrap();
+            assert!(best <= moves, "{id}: {best} > {moves}");
+            improved += usize::from(best < moves);
+            let route = both.solution().unwrap().unwrap();
+            assert_eq!(route.len(), best as usize, "{id}");
+        }
+        assert!(improved >= MIN_IMPROVED, "{improved}");
     }
 }

@@ -18,8 +18,11 @@ export const diagnosticFields = [
 
 let built = false;
 /** Compile once per process, then return the example's verified JSON-line records. */
-export function nativeCorpus(args = []) {
-  if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
+export function nativeCorpus(args = [], features = '') {
+  if (!built) {
+    run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog',
+      ...(features ? ['--features', features] : [])]);
+  }
   built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
   const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });

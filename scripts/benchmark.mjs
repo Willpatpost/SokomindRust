@@ -7,6 +7,7 @@
 //   npm run bench:observe [-- --states N --memory M --repeat K --update]
 //                                                   hard boards at production scale, median of K;
 //                                                   --update rewrites benchmarks/observe-reference.json
+// BENCH_FEATURES=<cargo features> measures an experiment switched on; such runs are never recorded.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -22,6 +23,7 @@ const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
 const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
 const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
+const FEATURES = process.env.BENCH_FEATURES ?? '';
 const order = catalog.map(puzzle => puzzle.id);
 
 const [action, ...rest] = process.argv.slice(2);
@@ -33,13 +35,14 @@ const count = (text, name) => {
 };
 const options = spec => parseArgs({ args: rest, options: spec, strict: true, allowPositionals: false }).values;
 const corpus = (config, extra = []) =>
-  nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra]);
+  nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra], FEATURES);
+const unrecorded = () => assert(!FEATURES, `BENCH_FEATURES=${FEATURES} runs are measurements; unset it to record`);
 function save(name, text) {
   mkdirSync(resolve(root, 'target/bench'), { recursive: true });
   writeFileSync(resolve(root, 'target/bench', name), text);
 }
 function raw(records) {
-  save('catalog.json', JSON.stringify({ catalogHash, records }, null, 2) + '\n');
+  save('catalog.json', JSON.stringify({ catalogHash, features: FEATURES || undefined, records }, null, 2) + '\n');
   console.table(summarize(records));
 }
 // v1 files carry no fingerprints, so their routes count as evidence only for the same catalog.
@@ -72,6 +75,7 @@ function check() {
 
 function update() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, 'accept-regressions': { type: 'boolean' } });
+  unrecorded();
   const stored = existsSync(BASELINE) ? read(BASELINE) : null, previous = stored && upgrade(stored);
   const config = {
     maxStates: values.states ? count(values.states, 'states') : previous?.maxStates ?? DEFAULTS.maxStates,
@@ -112,6 +116,7 @@ function update() {
 // the deltas against the committed reference are for review.
 function observe() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, repeat: { type: 'string' }, update: { type: 'boolean' } });
+  if (values.update) unrecorded();
   const config = {
     maxStates: values.states ? count(values.states, 'states') : OBSERVE.maxStates,
     memoryMiB: values.memory ? count(values.memory, 'memory') : OBSERVE.memoryMiB,
@@ -153,7 +158,7 @@ function observe() {
   const state = !reference ? 'none' : comparable ? reference.sourceRevision : 'config-differs';
   console.log(`OBSERVE v${SCHEMA_VERSION}: boards=${OBSERVE.puzzles.length} config=${config.maxStates}/${config.memoryMiB}`
     + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} reference=${state}`);
-  save('observe.json', JSON.stringify({ catalogHash, ...config, repeat, records }, null, 2) + '\n');
+  save('observe.json', JSON.stringify({ catalogHash, features: FEATURES || undefined, ...config, repeat, records }, null, 2) + '\n');
   if (failures.length) return false;
   if (values.update) {
     const source = sourceRevision();
@@ -165,10 +170,11 @@ function observe() {
 }
 
 function passThrough() {
-  raw(nativeCorpus(process.argv.slice(2)));
+  raw(nativeCorpus(process.argv.slice(2), FEATURES));
   console.log('Raw measurements: target/bench/catalog.json; timings are observational and exclude compilation.');
   return true;
 }
 
 const actions = { '--check': check, '--update': update, '--observe': observe };
+if (FEATURES) console.log(`*** Measuring with cargo features: ${FEATURES} ***`);
 if (!(actions[action] ?? passThrough)()) process.exitCode = 1;

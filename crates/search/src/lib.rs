@@ -144,7 +144,12 @@ impl Search {
             Mode::Quality => Kind::Bounded(Engine::new(
                 board,
                 start,
-                Policy::QUALITY,
+                // Experiment 5.1 (O5); off by default.
+                if cfg!(feature = "o5") {
+                    Policy::FAST_THEN_QUALITY
+                } else {
+                    Policy::QUALITY
+                },
                 max_states,
                 memory_mib,
             )?),

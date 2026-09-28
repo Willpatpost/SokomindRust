@@ -90,6 +90,30 @@ mod tests {
             assert_eq!(arena.stats.reopened_states, 1);
         }
     }
+
+    #[test]
+    fn reweight_orders_the_queue_as_if_queued_at_the_new_weight() {
+        let mut arena = Arena::new(100, 1, 10, 4).unwrap();
+        // (g, h) per id: the order at weight 5 differs from the order at 3.
+        let queued: [(u64, u32); 6] = [(0, 4), (9, 1), (4, 3), (12, 0), (7, 2), (1, 4)];
+        for (id, &(g, h)) in queued.iter().enumerate() {
+            arena.enqueue(g + 5 * h as u64, h, id as u32);
+        }
+        let capacity = arena.heap.capacity();
+        arena.reweight(5, 3);
+        assert_eq!(arena.heap.capacity(), capacity);
+        let mut expected: Vec<_> = queued
+            .iter()
+            .enumerate()
+            .map(|(id, &(g, h))| (g + 3 * h as u64, h, id as u32))
+            .collect();
+        expected.sort();
+        assert_eq!(arena.min_f(), Some(expected[0].0));
+        let order: Vec<_> = std::iter::from_fn(|| arena.dequeue()).collect();
+        let wanted: Vec<_> = expected.iter().map(|&(_, h, id)| (id, h)).collect();
+        assert_eq!(order, wanted);
+        assert_eq!(arena.stats.peak_queue, queued.len() as u32);
+    }
 }
 impl Node {
     pub(crate) const CLOSED: u8 = 1;
@@ -312,5 +336,15 @@ impl Arena {
     /// Lowest queued f, stale entries included.
     pub(crate) fn min_f(&self) -> Option<u64> {
         self.heap.peek().map(|Reverse((f, _, _))| *f)
+    }
+    /// Re-keys every queued `g + from * h` as `g + to * h`, in the reserved
+    /// allocation, so the order is as if each entry had been queued at `to`.
+    pub(crate) fn reweight(&mut self, from: u32, to: u32) {
+        let mut entries = std::mem::take(&mut self.heap).into_vec();
+        for Reverse((f, h, _)) in &mut entries {
+            let g = *f - from as u64 * *h as u64;
+            *f = g + to as u64 * *h as u64;
+        }
+        self.heap = BinaryHeap::from(entries);
     }
 }

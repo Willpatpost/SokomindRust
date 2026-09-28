@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Experiment 5.1 (O5): Quality starts as Fast. Off by default; the benchmark
+# measures it with BENCH_FEATURES=o5.
+o5 = []
+
 [dependencies]
 sokomind-core.workspace = true
 
