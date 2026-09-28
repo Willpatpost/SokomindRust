@@ -1,0 +1,29 @@
+# `npm run format` / `format:check` run `prettier .`, scoped by this file to
+# web/ (TS, CSS, HTML, tsconfig JSON), scripts/*.mjs and the root config files
+# (package.json, playwright.config.ts, .prettierrc.json). Prettier also reads
+# .gitignore; the build output is repeated here so this file shows the scope.
+
+# Generated or installed output
+node_modules/
+target/
+.tools/
+dist/
+web/wasm/
+playwright-report/
+test-results/
+package-lock.json
+
+# Bytes that are hashed or compared: catalogHash covers data/, and the
+# benchmark gate compares benchmarks/*.json byte for byte after bench:update.
+data/
+benchmarks/
+
+# Outside the TS/JS/CSS/HTML/JSON scope: the Rust workspace, SQL migrations,
+# deployment config, CI workflows, compose and docs.
+crates/
+migrations/
+deploy/
+.github/
+*.md
+*.yml
+*.yaml
