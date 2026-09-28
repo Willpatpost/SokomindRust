@@ -83,6 +83,26 @@ async fn router_solves_valid_invalid_and_busy_requests() {
     assert_eq!(state.slots.available_permits(), 1);
 }
 
+#[tokio::test]
+async fn solve_limits_follow_the_state_cap() {
+    let state = app_state(None);
+    let app = test_router(state.clone());
+    let mut over = solve_body();
+    over["max_states"] = json!(sokomind_search::MAX_STATES + 1);
+    let (status, body) = request(app.clone(), "POST", "/api/solve", over).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("1..1000000 states"), "{error}");
+    // At the cap, the 4 MiB budget sizes the arena down instead of failing.
+    let mut at_cap = solve_body();
+    at_cap["max_states"] = json!(sokomind_search::MAX_STATES);
+    let (status, body) = request(app, "POST", "/api/solve", at_cap).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["route"], "D");
+    assert_eq!(body["moves"], 1);
+    assert_eq!(state.slots.available_permits(), 1);
+}
+
 #[test]
 fn aborted_save_retains_admission_until_queued_replay_finishes() {
     // Occupy the runtime's sole blocking thread, so the real save handler's

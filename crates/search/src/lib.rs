@@ -13,6 +13,10 @@ pub use exact::ExactSearch;
 pub use proof::Proof;
 use sokomind_core::{Board, State, StateError};
 
+/// Largest per-search state limit accepted anywhere. At 64 MiB the memory
+/// budget binds first on boards with 14 or more boxes.
+pub const MAX_STATES: usize = 1_000_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Fast,

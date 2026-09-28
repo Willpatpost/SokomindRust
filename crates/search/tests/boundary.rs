@@ -1,5 +1,7 @@
 use sokomind_core::{Board, NONE, StateError};
-use sokomind_search::{ExactSearch, Mode, Proof, Search, SearchError, Status, StopReason};
+use sokomind_search::{
+    ExactSearch, MAX_STATES, Mode, Proof, Search, SearchError, Status, StopReason,
+};
 
 const BOARD: &str = "OOOOOO\nOR   O\nO XX O\nO SS O\nOOOOOO";
 
@@ -61,6 +63,18 @@ fn malformed_positions_return_structured_errors_in_every_mode() {
         }
         assert!(matches!(ExactSearch::new(board.clone(), state, 100, 4),
             Err(SearchError::InvalidState(error)) if error == expected));
+    }
+}
+
+#[test]
+fn state_cap_matches_the_exported_constant() {
+    let board = Board::parse(BOARD).unwrap();
+    for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
+        assert!(Search::new(board.clone(), board.initial(), mode, MAX_STATES, 4).is_ok());
+        assert!(matches!(
+            Search::new(board.clone(), board.initial(), mode, MAX_STATES + 1, 4),
+            Err(SearchError::Configuration(_))
+        ));
     }
 }
 

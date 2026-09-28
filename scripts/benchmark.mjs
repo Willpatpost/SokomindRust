@@ -20,7 +20,7 @@ import { root } from './toolchain.mjs';
 const BASELINE = resolve(root, 'benchmarks/catalog-baseline.json');
 const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
 const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
-const OBSERVE = { maxStates: 500_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
+const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
 const order = catalog.map(puzzle => puzzle.id);
 

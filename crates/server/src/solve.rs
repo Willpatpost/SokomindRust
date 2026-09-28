@@ -18,7 +18,7 @@ use std::{
 };
 
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
-const MAX_STATES: RangeInclusive<usize> = 1..=500_000;
+const MAX_STATES: RangeInclusive<usize> = 1..=sokomind_search::MAX_STATES;
 const MEMORY_MIB: RangeInclusive<usize> = 4..=64;
 
 fn limits() -> Error {
@@ -56,7 +56,7 @@ fn default_ms() -> u64 {
     5000
 }
 fn default_states() -> usize {
-    200_000
+    sokomind_search::MAX_STATES
 }
 fn default_memory() -> usize {
     64

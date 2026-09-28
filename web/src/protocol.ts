@@ -1,7 +1,8 @@
 /** sokomind_core::MAX_ROUTE: the longest route Rust replays. */
 export const MAX_ROUTE = 100_000;
-/** States per search; must stay within the server's MAX_STATES cap in solve.rs. */
-export const MAX_STATES = 500_000;
+/** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
+ * At 64 MiB the memory budget binds first on boards with 14 or more boxes. */
+export const MAX_STATES = 1_000_000;
 /** Matches sokomind_search::Status::as_str. */
 export type SearchStatus =
   'running' | 'solved' | 'exhausted' | 'state_limit' | 'memory_limit' | 'time_limit' | 'cancelled';

@@ -1,4 +1,6 @@
-use crate::{SearchStats, Status, deadlock::Deadlock, heuristic::Heuristic, reach::Reach};
+use crate::{
+    MAX_STATES, SearchStats, Status, deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
+};
 use sokomind_core::{Cell, MAX_BOXES, MAX_ROUTE, NONE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
@@ -149,8 +151,8 @@ impl Arena {
         max_states: usize,
         memory_mib: usize,
     ) -> Result<Self, String> {
-        if !(1..=1_000_000).contains(&max_states) || !(4..=256).contains(&memory_mib) {
-            return Err("Use 1..1000000 states and 4..256 MiB".into());
+        if !(1..=MAX_STATES).contains(&max_states) || !(4..=256).contains(&memory_mib) {
+            return Err(format!("Use 1..{MAX_STATES} states and 4..256 MiB"));
         }
         // Flood and deadlock buffers and the heuristic tables per cell, plus
         // the route and its string.

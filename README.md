@@ -105,10 +105,12 @@ and route-repair strategies are not yet ported; Grand Hall performance parity
 is not claimed.
 
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
-are limited to 100,000 moves. Native requests cap at 30 seconds, 500,000 states,
+are limited to 100,000 moves. Native requests cap at 30 seconds, 1,000,000 states,
 64 MiB accounted search storage, and one concurrent CPU job by default (see
-`SOLVE_CONCURRENCY` under Configuration). The search memory metric is computed
-from reserved buffer sizes (arena, queue, table, and per-cell flood, deadlock,
+`SOLVE_CONCURRENCY` under Configuration). At 64 MiB the memory budget, not the
+state cap, binds on boards with 14 or more boxes (the catalog's 15-22 box
+boards stop at about 0.77-0.94M records), and such a run reports a memory
+limit. The search memory metric is computed from reserved buffer sizes (arena, queue, table, and per-cell flood, deadlock,
 dead-cell, and distance buffers), not process RSS, allocator overhead, WASM
 runtime, or frontend memory. Deadline checks occur between bounded expansion batches;
 setup/reconstruction can add latency.
@@ -116,7 +118,7 @@ setup/reconstruction can add latency.
 ## HTTP
 
 * `GET /api/health` — API and persistence availability.
-* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 200000, memory_mib: 64}`.
+* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 1000000, memory_mib: 64}`.
 * `GET /api/progress/{id}` — one saved route.
 * `POST /api/progress/{id}` — `{route: "UDLR..."}`; server replay validates counters
   and completion, then atomically keeps a better moves/pushes pair.
@@ -171,7 +173,7 @@ database wait.
 | `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
-| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena |
+| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 64 MiB accounted search storage |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
 | `PROGRESS_RETENTION_DAYS` | `0` | 0 keeps progress forever; 1..36500 deletes records whose best route was stored longer ago (equal or worse saves do not refresh it), at startup and hourly |
 | `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
