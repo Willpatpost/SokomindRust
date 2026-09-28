@@ -31,9 +31,19 @@ pub(crate) struct Policy {
     /// search continues in the same arena under that policy, with the queue
     /// re-keyed at its weight.
     then: Option<&'static Policy>,
+    /// Where filling the arena with no route starts over instead of ending
+    /// the search: the arena is emptied in place and the start re-seeded
+    /// under that policy, which then runs exactly as a fresh search.
+    restart: Option<&'static Policy>,
 }
-// Exact soundness assumes one admissible weight for the whole search.
-const _: () = assert!(Policy::EXACT.then.is_none());
+// Exact soundness assumes one admissible weight for the whole search. A
+// restarted policy runs to the end, so a search restarts at most once.
+const _: () = {
+    assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
+    if let Some(next) = Policy::FAST_THEN_QUALITY_RESTART.restart {
+        assert!(next.then.is_none() && next.restart.is_none());
+    }
+};
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
     pub(crate) const EXACT: Self = Self {
@@ -43,6 +53,7 @@ impl Policy {
         reopen_closed: true,
         prune_popped_estimate: false,
         then: None,
+        restart: None,
     };
     /// First route wins. Without reopening, weighted A* keeps its
     /// suboptimality bound under a consistent h, and never proves anyway.
@@ -53,6 +64,7 @@ impl Policy {
         reopen_closed: false,
         prune_popped_estimate: true,
         then: None,
+        restart: None,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -62,6 +74,7 @@ impl Policy {
         reopen_closed: true,
         prune_popped_estimate: true,
         then: None,
+        restart: None,
     };
     /// Experiment 5.1 (O5), behind the `o5` feature: exactly [`Self::FAST`]
     /// until its first route, then [`Self::QUALITY`] in the same arena. The
@@ -70,6 +83,14 @@ impl Policy {
     pub(crate) const FAST_THEN_QUALITY: Self = Self {
         then: Some(&Self::QUALITY),
         ..Self::FAST
+    };
+    /// Experiment 5.1 with restart, behind the `o5r` feature:
+    /// [`Self::FAST_THEN_QUALITY`], except that when Fast fills the arena
+    /// without a route the search starts over as plain [`Self::QUALITY`].
+    /// Each result is then the O5 result or today's Quality result.
+    pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
+        restart: Some(&Self::QUALITY),
+        ..Self::FAST_THEN_QUALITY
     };
 }
 
@@ -88,6 +109,8 @@ pub(crate) struct Engine {
     expanded: u32,
     stats: SearchStats,
     incumbent: Option<u32>,
+    /// Records a restart discarded; they still count as generated.
+    discarded: u32,
     /// g + queued h (at least 1) of a node whose expansion a limit cut short.
     /// Under an admissible h, no route through its unpushed successors along
     /// this path is shorter, so the exact frontier must include it.
@@ -111,7 +134,6 @@ impl Engine {
             .map_err(SearchError::Configuration)?;
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
-        let h = heuristic.estimate(&start);
         let mut search = Self {
             policy,
             reach: Reach::new(cells),
@@ -124,12 +146,20 @@ impl Engine {
             expanded: 0,
             stats: SearchStats::default(),
             incumbent: None,
+            discarded: 0,
             interrupted_f: None,
         };
-        let (slot, _) = search.arena.find(&start);
-        let root = search.arena.insert(
+        search.seed();
+        Ok(search)
+    }
+    /// Inserts and queues the start in an empty arena, or ends the search
+    /// when the start has no goal assignment.
+    fn seed(&mut self) {
+        let h = self.heuristic.estimate(&self.start);
+        let (slot, _) = self.arena.find(&self.start);
+        let root = self.arena.insert(
             Node {
-                state: start,
+                state: self.start,
                 g: 0,
                 parent: NIL,
                 direction: 0,
@@ -139,14 +169,12 @@ impl Engine {
             slot,
         );
         if let Some(h) = h {
-            let total_h = search.root_estimate(&start, h);
-            search
-                .arena
-                .enqueue(total_h as u64 * policy.weight as u64, total_h, root);
+            let total_h = self.root_estimate(&self.start, h);
+            self.arena
+                .enqueue(total_h as u64 * self.policy.weight as u64, total_h, root);
         } else {
-            search.status = Status::Exhausted;
+            self.status = Status::Exhausted;
         }
-        Ok(search)
     }
     pub fn status(&self) -> Status {
         self.status
@@ -157,8 +185,9 @@ impl Engine {
     pub fn expanded(&self) -> u32 {
         self.expanded
     }
+    /// Records inserted, including any a restart discarded.
     pub fn generated(&self) -> u32 {
-        self.arena.len() as u32
+        self.discarded + self.arena.len() as u32
     }
     pub fn reserved_bytes(&self) -> usize {
         self.arena.reserved_bytes()
@@ -193,6 +222,19 @@ impl Engine {
         self.policy = next;
         true
     }
+    /// Starts over under the policy's restart while there is no route: the
+    /// arena is emptied in place, so the rest of the run is a fresh search
+    /// whose records add to the discarded ones. False when there is none.
+    fn restart(&mut self) -> bool {
+        let (None, Some(&next)) = (self.incumbent, self.policy.restart) else {
+            return false;
+        };
+        self.discarded += self.arena.len() as u32;
+        self.arena.clear();
+        self.policy = next;
+        self.seed();
+        true
+    }
     /// The arena is full while expanding a node whose g + queued h is `f`.
     fn stop_at_limit(&mut self, f: u64) {
         self.interrupted_f = Some(f);
@@ -205,7 +247,7 @@ impl Engine {
         if self.status != Status::Running {
             return;
         }
-        for _ in 0..pops {
+        'pops: for _ in 0..pops {
             let Some((index, queued_h)) = self.arena.dequeue() else {
                 // The queue emptied: every state was popped, dominated, or
                 // pruned by an admissible rule. Under the exact policy that
@@ -328,6 +370,10 @@ impl Engine {
                         h: Node::store_h(h),
                     };
                     if self.arena.is_full() {
+                        // The rest of this expansion belongs to the discarded arena.
+                        if !goal && self.restart() {
+                            continue 'pops;
+                        }
                         // Keep a solution discovered at the exact limit.
                         if goal {
                             self.incumbent = Some(self.arena.insert(child, slot));
@@ -428,6 +474,27 @@ mod tests {
     const STATES: usize = 1_000;
     const MIN_IMPROVED: usize = 10;
 
+    /// Every catalog board with its id.
+    fn catalog() -> Vec<(String, Board)> {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../data/puzzles.json")).unwrap();
+        catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|puzzle| {
+                let rows: Vec<&str> = puzzle["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row.as_str().unwrap())
+                    .collect();
+                let board = Board::parse(&rows.join("\n")).unwrap();
+                (puzzle["id"].as_str().unwrap().to_owned(), board)
+            })
+            .collect()
+    }
+
     /// Runs `policy` to a terminal status one pop at a time. Also returns
     /// the moves and expanded count when a route first appeared.
     fn run(board: &Board, policy: Policy, max_states: usize) -> (Engine, Option<(u32, u32)>) {
@@ -443,22 +510,22 @@ mod tests {
         (engine, first)
     }
 
+    /// The result and counters two equivalent runs share.
+    fn outcome(engine: &Engine) -> (Status, Option<u32>, u32, u32) {
+        (
+            engine.status(),
+            engine.best_moves(),
+            engine.expanded(),
+            engine.generated(),
+        )
+    }
+
     /// Experiment 5.1 (O5) on the whole catalog: the first phase is Fast
     /// itself, and the second only improves on Fast's route.
     #[test]
     fn fast_then_quality_starts_as_fast_and_never_ends_longer() {
-        let catalog: serde_json::Value =
-            serde_json::from_str(include_str!("../../../data/puzzles.json")).unwrap();
         let mut improved = 0;
-        for puzzle in catalog.as_array().unwrap() {
-            let id = puzzle["id"].as_str().unwrap();
-            let rows: Vec<&str> = puzzle["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| row.as_str().unwrap())
-                .collect();
-            let board = Board::parse(&rows.join("\n")).unwrap();
+        for (id, board) in catalog() {
             let (fast, _) = run(&board, Policy::FAST, STATES);
             let (mut both, first) = run(&board, Policy::FAST_THEN_QUALITY, STATES);
             let Some(moves) = fast.best_moves() else {
@@ -483,5 +550,90 @@ mod tests {
             assert_eq!(route.len(), best as usize, "{id}");
         }
         assert!(improved >= MIN_IMPROVED, "{improved}");
+    }
+
+    /// Checks experiment 5.1 with restart against its sources at one limit:
+    /// the O5 run when Fast finds a route, otherwise Fast's discarded arena
+    /// followed by a fresh Quality run. Returns the restarted run.
+    fn check_restart(context: &str, board: &Board, max_states: usize) -> Engine {
+        let (fast, _) = run(board, Policy::FAST, max_states);
+        let (mut restart, _) = run(board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
+        let stats = restart.stats();
+        assert_eq!(
+            stats.unique_states + stats.duplicate_improvements,
+            restart.generated(),
+            "{context}"
+        );
+        if let Some(moves) = restart.best_moves() {
+            let route = restart.solution().unwrap().unwrap();
+            assert_eq!(route.len(), moves as usize, "{context}");
+        }
+        if fast.best_moves().is_some() {
+            let (o5, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
+            assert_eq!(outcome(&restart), outcome(&o5), "{context}");
+        } else if fast.status() == Status::Exhausted {
+            // No route is reachable, so there is nothing to restart for.
+            assert_eq!(outcome(&restart), outcome(&fast), "{context}");
+        } else {
+            let (quality, _) = run(board, Policy::QUALITY, max_states);
+            assert_eq!(
+                outcome(&restart),
+                (
+                    quality.status(),
+                    quality.best_moves(),
+                    fast.expanded() + quality.expanded(),
+                    fast.generated() + quality.generated()
+                ),
+                "{context}"
+            );
+        }
+        restart
+    }
+
+    /// Experiment 5.1 with restart on the whole catalog. Fast misses 29
+    /// boards at this limit; the restarted Quality run still finds
+    /// gen-v2-320041-e16f5a47, where Fast has no route even at 1M states.
+    #[test]
+    fn restart_is_o5_until_the_limit_then_a_fresh_quality() {
+        let mut rescued = Vec::new();
+        for (id, board) in catalog() {
+            let restart = check_restart(&id, &board, STATES);
+            if restart.best_moves().is_some() && restart.generated() as usize > STATES + 1 {
+                rescued.push(id);
+            }
+        }
+        assert!(
+            rescued.iter().any(|id| id == "gen-v2-320041-e16f5a47"),
+            "{rescued:?}"
+        );
+    }
+
+    /// Sweeps every limit on a small board, through the one where Fast's
+    /// route takes the spare node, in slices of one pop and of 2^20.
+    #[test]
+    fn restart_survives_state_limit_boundaries() {
+        let (id, board) = catalog().into_iter().find(|(id, _)| id == "tiny").unwrap();
+        let (fast, _) = run(&board, Policy::FAST, STATES);
+        let (mut restarted, mut spare) = (0, 0);
+        for max_states in 1..=fast.generated() as usize + 2 {
+            let context = format!("{id} at {max_states} states");
+            let sliced = check_restart(&context, &board, max_states);
+            let mut bulk = Engine::new(
+                board.clone(),
+                board.initial(),
+                Policy::FAST_THEN_QUALITY_RESTART,
+                max_states,
+                16,
+            )
+            .unwrap();
+            while bulk.status() == Status::Running {
+                bulk.advance(1 << 20);
+            }
+            assert_eq!(outcome(&bulk), outcome(&sliced), "{context}");
+            let generated = sliced.generated() as usize;
+            restarted += usize::from(generated > max_states + 1);
+            spare += usize::from(sliced.best_moves().is_some() && generated == max_states + 1);
+        }
+        assert!(restarted > 0 && spare > 0, "{restarted} {spare}");
     }
 }

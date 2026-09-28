@@ -114,6 +114,45 @@ mod tests {
         assert_eq!(order, wanted);
         assert_eq!(arena.stats.peak_queue, queued.len() as u32);
     }
+
+    #[test]
+    fn clear_forgets_every_state_and_keeps_the_reservation() {
+        let mut arena = Arena::new(100, 1, 10, 4).unwrap();
+        let mut state = State {
+            player: 1,
+            boxes: [NONE; MAX_BOXES],
+        };
+        state.boxes[0] = 10;
+        let node = Node {
+            state,
+            g: 0,
+            parent: NIL,
+            direction: 0,
+            flags: 0,
+            h: 1,
+        };
+        let (slot, _) = arena.find(&state);
+        let id = arena.insert(node, slot);
+        arena.enqueue(1, 1, id);
+        let reserved = |arena: &Arena| {
+            (
+                arena.nodes.capacity(),
+                arena.box_cells.capacity(),
+                arena.heap.capacity(),
+                arena.table.len(),
+                arena.reserved_bytes(),
+            )
+        };
+        let before = reserved(&arena);
+        arena.clear();
+        assert_eq!(reserved(&arena), before);
+        assert_eq!((arena.len(), arena.dequeue()), (0, None));
+        let (slot, found) = arena.find(&state);
+        assert_eq!(found, None);
+        // Ids restart at 0; the stats keep counting.
+        assert_eq!(arena.insert(node, slot), 0);
+        assert_eq!(arena.stats.unique_states, 2);
+    }
 }
 impl Node {
     pub(crate) const CLOSED: u8 = 1;
@@ -336,6 +375,14 @@ impl Arena {
     /// Lowest queued f, stale entries included.
     pub(crate) fn min_f(&self) -> Option<u64> {
         self.heap.peek().map(|Reverse((f, _, _))| *f)
+    }
+    /// Forgets every node and queued entry in place. The reservation, limit
+    /// and stats are kept.
+    pub(crate) fn clear(&mut self) {
+        self.nodes.clear();
+        self.box_cells.clear();
+        self.heap.clear();
+        self.table.fill(NIL);
     }
     /// Re-keys every queued `g + from * h` as `g + to * h`, in the reserved
     /// allocation, so the order is as if each entry had been queued at `to`.
