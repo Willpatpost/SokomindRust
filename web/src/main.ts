@@ -61,6 +61,7 @@ const playback = new Playback(
 );
 const progress = new ProgressClient({
   verify, show: showBest, status: value => setText('storage', value),
+  connected: persistence => setText('connection', persistence ? 'PostgreSQL connected' : 'Native solver connected'),
 });
 
 function updateButtons() {
@@ -361,16 +362,8 @@ async function start() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') saveSession();
   });
-  try {
-    const response = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
-    if (response.ok) {
-      const health = await response.json();
-      progress.persistence = health.persistence === true;
-      setText('connection', progress.persistence ? 'PostgreSQL connected' : 'Native solver connected');
-      if (progress.persistence) void progress.pull();
-    }
-  } catch {
-    /* Static hosting needs no backend. */
-  }
+  // Static hosting needs no backend. A server that is busy, restarting or not
+  // yet started is asked again with backoff until it reports persistence.
+  await progress.probe();
 }
 start().catch(error => message(`Could not start WebAssembly: ${errorMessage(error)}. Run npm run wasm and reload.`));

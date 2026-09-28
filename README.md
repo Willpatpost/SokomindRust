@@ -133,6 +133,12 @@ This is an anonymous local profile capability, not an account/login system. Losi
 browser storage loses the profile token. Custom puzzles stay local. No database
 credentials or SQL cross into the frontend. Saved routes are capped at 10,000 moves.
 
+The web app calls the progress endpoints only after `/api/health` has reported
+`persistence: true`. Until it does, the app asks again after 2 s and doubles the
+wait up to 5 minutes, so a server that was busy, restarting, or started after the
+page was opened is picked up once it answers. A 404, or a 200 reply that is not
+JSON (static hosting), stops the probing.
+
 Every API error body is `{"error": "..."}` (nginx's own 413 and 5xx pages are
 not): 400 invalid input, a missing or malformed profile, a route that does not
 replay or solve, or a solve position plus route over the 100,000-move replay

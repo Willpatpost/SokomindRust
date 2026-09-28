@@ -93,3 +93,52 @@ test('default and injected transports call fetch unbound (browser brand check)',
   const injected = setup(undefined, { fetch: stub }); connect(injected.client); await injected.client.sync('D');
   assert.equal(injected.statuses.at(-1), SAVED);
 });
+// Lets an unawaited pull finish without hanging the suite if it never does.
+async function settle(done: () => boolean) {
+  for (let i = 0; i < 50 && !done(); i++) await new Promise(resolve => setImmediate(resolve));
+}
+test('health probe asks again with backoff until the server reports persistence, then pulls', async () => {
+  const clock = new Clock(), connected: boolean[] = [];
+  const health = [Response.json({ status: 'ok', persistence: false }), Response.json({ error: 'busy' }, { status: 503 }),
+    Response.json({ status: 'ok', persistence: true })];
+  const { client, calls } = setup(async url => url === '/api/health' ? health.shift()!
+    : Response.json({ puzzle_id: 'p', route: 'DD', moves: 2, pushes: 1 }),
+  { scheduler: clock, connected: value => connected.push(value) });
+  client.select('p', 'rows'); await client.probe();
+  assert.equal(client.persistence, false); assert.deepEqual(connected, [false]);
+  assert.deepEqual([...clock.tasks.values()].map(task => task.at), [2000]);
+  clock.advance(2000); await client.probe();
+  assert.equal(client.persistence, false); assert.deepEqual([...clock.tasks.values()].map(task => task.at), [6000]);
+  clock.advance(4000); await client.probe();
+  assert.equal(client.persistence, true); assert.deepEqual(connected, [false, true]); assert.equal(clock.tasks.size, 0);
+  assert.deepEqual(calls.map(call => call.url), ['/api/health', '/api/health', '/api/health', '/api/progress/p']);
+  await settle(() => client.best() !== null); assert.equal(client.best()?.route, 'DD');
+});
+test('health probe backs off from 2 s to a 5 minute cap', async () => {
+  const clock = new Clock(), delays: number[] = [];
+  const { client } = setup(async () => Response.json({ status: 'ok', persistence: false }), { scheduler: clock });
+  await client.probe();
+  for (let i = 0; i < 10; i++) {
+    const wait = [...clock.tasks.values()][0].at - clock.time;
+    delays.push(wait); clock.advance(wait); await client.probe();
+  }
+  assert.deepEqual(delays, [2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 300000, 300000]);
+});
+test('health probe stops without the API, retries offline, and shares one request', async () => {
+  for (const reply of [missing, async () => new Response('<!doctype html>', { status: 200 })]) {
+    const clock = new Clock(), connected: boolean[] = [];
+    const { client, calls } = setup(reply, { scheduler: clock, connected: value => connected.push(value) });
+    await client.probe();
+    assert.equal(calls.length, 1); assert.equal(clock.tasks.size, 0); assert.equal(client.persistence, false);
+    assert.deepEqual(connected, []);
+  }
+  const offlineClock = new Clock();
+  const offline = setup(() => Promise.reject(new TypeError('offline')), { scheduler: offlineClock });
+  await offline.client.probe(); assert.equal(offline.client.persistence, false); assert.equal(offlineClock.tasks.size, 1);
+  const clock = new Clock(), pending = deferred<Response>();
+  const shared = setup(() => pending.promise, { scheduler: clock });
+  const first = shared.client.probe();
+  assert.equal(shared.client.probe(), first); assert.equal(shared.calls.length, 1);
+  pending.resolve(Response.json({ error: 'busy' }, { status: 503 })); await first;
+  assert.equal(clock.tasks.size, 1); assert.equal(shared.calls.length, 1);
+});

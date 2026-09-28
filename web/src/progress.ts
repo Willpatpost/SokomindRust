@@ -8,11 +8,17 @@ interface Options {
   verify(rows: string, route: string): Score;
   show(best: storage.Best | null): void;
   status(message: string): void;
+  /** Called with `persistence` whenever /api/health answers. */
+  connected?(persistence: boolean): void;
   fetch?: typeof fetch;
   scheduler?: Scheduler;
   profile?: string | null;
 }
+/** Health re-probe backoff: the first retry waits 2 s, and each further miss
+ * doubles the wait up to 5 minutes. */
+const PROBE_FIRST_MS = 2000, PROBE_MAX_MS = 300_000;
 export class ProgressClient {
+  /** Whether /api/health last reported PostgreSQL; set by probe(). */
   persistence = false;
   private context: Context | undefined;
   private options: Options;
@@ -20,9 +26,43 @@ export class ProgressClient {
   private request: typeof fetch;
   private clock: Scheduler;
   private saveTimer: number | undefined;
+  private probeTimer: number | undefined;
+  private probeDelay = PROBE_FIRST_MS;
+  private probing: Promise<void> | undefined;
   constructor(options: Options) {
     this.options = options; this.profile = options.profile === undefined ? storage.profile() : options.profile;
     this.request = unboundFetch(options.fetch); this.clock = options.scheduler ?? browserScheduler;
+  }
+  /** Asks /api/health whether saves reach PostgreSQL and pulls the selected
+   * puzzle's server best when persistence turns on. Until an answer says yes, a
+   * busy, restarting or database-less server is asked again with backoff instead
+   * of being written off for the session; a host without the API (a 404, or an
+   * app page instead of JSON) is not. Concurrent calls share one request. */
+  probe(): Promise<void> {
+    return this.probing ??= this.checkHealth().finally(() => { this.probing = undefined; });
+  }
+  private async checkHealth() {
+    if (this.probeTimer !== undefined) this.clock.clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    const was = this.persistence;
+    let retry = true;
+    try {
+      const response = await this.request('/api/health', { signal: AbortSignal.timeout(1500) });
+      const health: unknown = response.ok ? await response.json().catch(() => null) : null;
+      if (health && typeof health === 'object') {
+        this.persistence = (health as { persistence?: unknown }).persistence === true;
+        this.options.connected?.(this.persistence);
+      } else if (response.ok || response.status === 404) retry = false;
+    } catch { /* Offline or timed out: ask again later. */ }
+    if (this.persistence) {
+      this.probeDelay = PROBE_FIRST_MS;
+      if (!was) void this.pull();
+      return;
+    }
+    if (!retry) return;
+    const delay = this.probeDelay;
+    this.probeDelay = Math.min(2 * delay, PROBE_MAX_MS);
+    this.probeTimer = this.clock.timeout(() => { this.probeTimer = undefined; void this.probe(); }, delay);
   }
   select(id: string, rows: string) {
     if (this.saveTimer !== undefined) this.clock.clearTimeout(this.saveTimer);

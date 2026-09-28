@@ -54,3 +54,20 @@ test('a verified server best is pulled on load', async ({ page }) => {
   await expect(page.locator('#best-score')).toHaveText('Best: 1 moves · 1 pushes');
   await expect(page.locator('#best')).toBeEnabled();
 });
+
+test('a server that first reports no persistence is asked again', async ({ page }) => {
+  let persistence = false;
+  await page.route('**/api/health', route => {
+    const reply = route.fulfill({ json: { status: 'ok', persistence } });
+    persistence = true;
+    return reply;
+  });
+  await page.route('**/api/progress/**', route => route.fulfill({ json: {
+    puzzle_id: 'ultra-tiny', route: 'D', moves: 1, pushes: 1,
+  } }));
+  await page.goto('/');
+  await expect(page.locator('#connection')).toHaveText('Native solver connected');
+  // The first re-probe runs 2 s later, inside the default 5 s expect timeout.
+  await expect(page.locator('#connection')).toHaveText('PostgreSQL connected');
+  await expect(page.locator('#best-score')).toHaveText('Best: 1 moves · 1 pushes');
+});

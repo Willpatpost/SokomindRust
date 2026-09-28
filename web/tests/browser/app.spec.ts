@@ -7,6 +7,10 @@ const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys o
 const SOLVED = 'Solved in 1 moves and 1 pushes.';
 
 async function loaded(page: import('@playwright/test').Page) {
+  // vite preview proxies /api to 127.0.0.1:3000, where the suite runs no API, so
+  // the health probe would retry every proxy 500 with backoff. A 404 is a host
+  // without the API, which the probe accepts once and never asks again.
+  await page.route('**/api/health', (health) => health.fulfill({ status: 404 }));
   await page.goto('/');
   await expect(page.locator('#title')).toHaveText('First Steps');
 }
