@@ -39,6 +39,7 @@ const RATE_WINDOW: Duration = Duration::from_secs(60);
 const RETENTION_SWEEP: Duration = Duration::from_secs(3600);
 const MAX_RETENTION_DAYS: i32 = 36_500;
 const RETENTION_MAX_BATCHES: usize = 20;
+const MAX_PROGRESS_CONCURRENCY: u32 = 32;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,8 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = TrustedProxies::parse(&env_value("TRUSTED_PROXIES").unwrap_or_default())?;
     let concurrency = env_setting("SOLVE_CONCURRENCY", 1..=8, 1);
     let solve_rate = env_setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
-    let progress_concurrency = env_setting("PROGRESS_CONCURRENCY", 1..=32, 4);
-    let db_pool_size = env_setting("DB_POOL_SIZE", 1..=32, 5);
+    let progress_concurrency = env_setting("PROGRESS_CONCURRENCY", 1..=MAX_PROGRESS_CONCURRENCY, 4);
+    let (db_pool_size, warnings) = pool_size(
+        &env_value("DB_POOL_SIZE").unwrap_or_default(),
+        progress_concurrency,
+    );
+    for warning in warnings {
+        eprintln!("{warning}");
+    }
     let retention_batch_size = env_setting("PROGRESS_RETENTION_BATCH_SIZE", 1..=5000, 500);
     let retention = retention(env_setting(
         "PROGRESS_RETENTION_DAYS",
@@ -79,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db,
         catalog: Arc::new(catalog),
         slots: Arc::new(Semaphore::new(concurrency)),
-        progress_slots: Arc::new(Semaphore::new(progress_concurrency)),
+        progress_slots: Arc::new(Semaphore::new(progress_concurrency as usize)),
         proxies: Arc::new(proxies),
         saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
         solves: Arc::new(RateLimiter::new(solve_rate, RATE_WINDOW)),
@@ -114,7 +121,8 @@ fn router(state: api::App) -> Router {
         .with_state(state)
 }
 
-/// Reads `name` from the environment; an empty value counts as unset.
+/// Reads `name` from the environment; an empty value counts as unset, which
+/// is what compose's `${X:-}` passes for a setting `.env` leaves out.
 fn env_value(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.is_empty())
 }
@@ -157,6 +165,24 @@ fn parse_setting<T: FromStr + PartialOrd + Copy + Display>(
             (default, Some(warning))
         }
     }
+}
+
+/// DB_POOL_SIZE, read as by [`parse_setting`]. Empty means one connection per
+/// progress slot plus a spare for the health probe and the retention sweep.
+/// A smaller pool is allowed but warned about: a save holding a progress slot
+/// can then wait for a connection and fail with 503 after
+/// `database::ACQUIRE_TIMEOUT`.
+fn pool_size(value: &str, progress_concurrency: u32) -> (u32, Vec<String>) {
+    let wanted = progress_concurrency + 1;
+    let range = 1..=MAX_PROGRESS_CONCURRENCY + 1;
+    let (size, warning) = parse_setting("DB_POOL_SIZE", value, range, wanted);
+    let below = (size < wanted).then(|| {
+        format!(
+            "DB_POOL_SIZE={size} is below PROGRESS_CONCURRENCY + 1 = {wanted}; \
+             saves can wait for a connection and fail with 503"
+        )
+    });
+    (size, warning.into_iter().chain(below).collect())
 }
 
 /// PROGRESS_RETENTION_DAYS: 0, the default, keeps progress forever.
@@ -291,6 +317,50 @@ mod tests {
         for (value, expected, warning) in cases {
             let (n, message) = parse_setting::<usize>("N", value, 1..=8, 1);
             assert_eq!((n, message.as_deref()), (expected, warning), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn pool_defaults_to_progress_slots_plus_one_and_warns_below() {
+        let below = |size: u32| {
+            format!(
+                "DB_POOL_SIZE={size} is below PROGRESS_CONCURRENCY + 1 = 5; \
+                 saves can wait for a connection and fail with 503"
+            )
+        };
+        let cases = [
+            // compose passes an empty value for a setting .env leaves out.
+            ("", 4, 5, vec![]),
+            ("", 1, 2, vec![]),
+            ("", 32, 33, vec![]),
+            ("5", 4, 5, vec![]),
+            ("12", 4, 12, vec![]),
+            ("3", 4, 3, vec![below(3)]),
+            (
+                "0",
+                4,
+                1,
+                vec![
+                    "DB_POOL_SIZE=0 is outside 1..33; using 1".to_owned(),
+                    below(1),
+                ],
+            ),
+            (
+                "99",
+                32,
+                33,
+                vec!["DB_POOL_SIZE=99 is outside 1..33; using 33".to_owned()],
+            ),
+            (
+                "many",
+                4,
+                5,
+                vec!["DB_POOL_SIZE=\"many\" is not a number; using 5".to_owned()],
+            ),
+        ];
+        for (value, progress, size, warnings) in cases {
+            let result = pool_size(value, progress);
+            assert_eq!(result, (size, warnings), "{value:?} with {progress}");
         }
     }
 

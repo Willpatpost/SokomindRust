@@ -40,7 +40,9 @@ Use `npm run dev:web` when the WASM package is already built. Rust changes requi
 ## Full stack with Docker
 
 Copy `.env.example` to `.env`, choose a PostgreSQL password, then run
-`docker compose up --build`. Open `http://127.0.0.1:8080`. The database uses a
+`docker compose up --build`. Open `http://127.0.0.1:8080`. To change a server
+setting (see Configuration), uncomment it in `.env`; compose passes one left
+commented or empty as unset, so the server's default applies. The database uses a
 named volume; only NGINX is exposed. NGINX is required in front of the API
 binary, which serves only `/api`: NGINX serves the web app and supplies the
 security and cache headers, gzip, and the bounds on slow clients and open
@@ -60,6 +62,14 @@ fingerprint. Back up with `pg_dump` first if you need the old rows. Browsers kee
 their profile token and local best routes, but the server only receives a route
 when that browser solves the puzzle again; opening a puzzle and letting Replay
 best play to the end re-uploads its local best.
+
+Compose pins its network to `172.16.57.0/24` (`TRUSTED_SUBNET` in `.env` changes
+it), the range the API trusts (see `TRUSTED_PROXIES` under Configuration). After
+upgrading a stack created before the pin, or changing `TRUSTED_SUBNET`, run
+`docker compose down` once before `up` (the database volume is kept) so Compose
+recreates the network with the new subnet. Were the old network left in place,
+nginx's address would fall outside `TRUSTED_PROXIES` and every client would share
+one rate-limit bucket.
 
 ## Layout and boundaries
 
@@ -183,10 +193,12 @@ rebuild.
 
 ## Configuration
 
-The server reads these environment variables. Empty counts as unset. The three
-numeric settings clamp an out-of-range value and replace a non-number with the
-default, each with a warning; every other invalid value stops startup before the
-database wait.
+The server reads these environment variables. Empty counts as unset. The defaults
+below are the server's and are written nowhere else: compose sets
+`DATABASE_PASSWORD` and `TRUSTED_PROXIES` and passes the budget, rate and
+retention settings through from `.env`, where they start commented out. The numeric settings clamp an out-of-range value and
+replace a non-number with the default, each with a warning; every other invalid
+value stops startup before the database wait.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -199,7 +211,10 @@ database wait.
 | `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 64 MiB accounted search storage |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
+| `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
+| `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
 | `PROGRESS_RETENTION_DAYS` | `0` | 0 keeps progress forever; 1..36500 deletes records whose best route was stored longer ago (equal or worse saves do not refresh it), at startup and hourly |
+| `PROGRESS_RETENTION_BATCH_SIZE` | `500` | Records deleted per retention batch, one short transaction each, 1..5000; a sweep runs at most 20 batches |
 | `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
 
 libpq's `PG*` variables (such as `PGSSLMODE`) also apply as defaults. Migrations run
@@ -215,12 +230,17 @@ fail immediately.
 When the peer is a trusted proxy, the client is the rightmost untrusted
 `X-Forwarded-For` entry; an unparseable entry ends the walk at the last trusted
 hop, and a chain of only trusted hops yields the leftmost. `::ffff:` addresses
-count as IPv4. Compose trusts `172.16.0.0/12`, Docker's bridge range, because nginx
-is the API's only peer and overwrites `X-Forwarded-For` with its own client
-address. If Docker gives your networks another range, set that instead; otherwise
-every client shares one rate-limit bucket. Behind another proxy, such as TLS on the
-host, also enable the commented `real_ip` block in `deploy/nginx.conf` so both
-limits see real clients.
+count as IPv4. Compose trusts its own network, because nginx is the API's only
+peer and overwrites `X-Forwarded-For` with its own client address. It pins that
+network to `172.16.57.0/24` rather than leave the range to Docker, and one YAML
+anchor in `compose.yaml`, `x-trusted-subnet`, sets both the network and
+`TRUSTED_PROXIES`, so the two cannot drift apart. `172.16.0.0/16` lies outside
+Docker's default address pools, so no network Docker allocates by itself can take
+it; if it clashes with a network on your host, set `TRUSTED_SUBNET` in `.env` to
+another IPv4 CIDR, which the anchor then uses for both. If nginx's range
+and `TRUSTED_PROXIES` ever differ, every client shares one rate-limit bucket.
+Behind another proxy, such as TLS on the host, also enable the commented `real_ip`
+block in `deploy/nginx.conf` so both limits see real clients.
 
 ## Small validation surface
 

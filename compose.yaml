@@ -1,3 +1,10 @@
+# The API believes X-Forwarded-For only from TRUSTED_PROXIES. This anchor sets
+# both that and the project network's range (networks, at the bottom), so the
+# two cannot drift apart. 172.16.0.0/16 is outside Docker's default address
+# pools, so no network Docker allocates on its own can take this range; if it
+# clashes with a network on your host, set TRUSTED_SUBNET in .env to another
+# IPv4 CIDR and run docker compose down once, so the network is recreated.
+x-trusted-subnet: &trusted-subnet "${TRUSTED_SUBNET:-172.16.57.0/24}"
 services:
   db:
     image: postgres:18-alpine
@@ -19,20 +26,22 @@ services:
       target: server
     restart: unless-stopped
     environment:
-      # Passed to the driver as-is, so any characters are safe. Other
-      # settings: README's Configuration table.
+      # Passed to the driver as-is, so any characters are safe.
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      # Budgets apply to each API process. Recheck aggregate CPU, memory and
-      # PostgreSQL connections before adding replicas.
-      SOLVE_CONCURRENCY: ${SOLVE_CONCURRENCY:-1}
-      PROGRESS_CONCURRENCY: ${PROGRESS_CONCURRENCY:-4}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      PROGRESS_RETENTION_DAYS: ${PROGRESS_RETENTION_DAYS:-0}
-      PROGRESS_RETENTION_BATCH_SIZE: ${PROGRESS_RETENTION_BATCH_SIZE:-500}
+      # Set these in .env or the shell. One left unset arrives empty, which
+      # the server reads as unset, so its defaults apply: they live only in
+      # the server and README's Configuration table. Budgets apply to each
+      # API process. Recheck aggregate CPU, memory and PostgreSQL connections
+      # before adding replicas.
+      SOLVE_CONCURRENCY: ${SOLVE_CONCURRENCY:-}
+      SOLVE_RATE_PER_MINUTE: ${SOLVE_RATE_PER_MINUTE:-}
+      PROGRESS_CONCURRENCY: ${PROGRESS_CONCURRENCY:-}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-}
+      PROGRESS_RETENTION_DAYS: ${PROGRESS_RETENTION_DAYS:-}
+      PROGRESS_RETENTION_BATCH_SIZE: ${PROGRESS_RETENTION_BATCH_SIZE:-}
       # nginx is the API's only peer and overwrites X-Forwarded-For with its
-      # client, so trust Docker's bridge range. If your networks come from
-      # another pool (docker network inspect), list that instead.
-      TRUSTED_PROXIES: "172.16.0.0/12"
+      # client, so trust this project's network (x-trusted-subnet).
+      TRUSTED_PROXIES: *trusted-subnet
     depends_on:
       db:
         condition: service_healthy
@@ -49,5 +58,10 @@ services:
       - "127.0.0.1:8080:80"
     depends_on:
       - api
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: *trusted-subnet
 volumes:
   postgres-data:
