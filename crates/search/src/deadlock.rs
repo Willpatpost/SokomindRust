@@ -132,8 +132,8 @@ impl Deadlock {
 #[cfg(test)]
 mod tests {
     use super::{Deadlock, EMPTY};
-    use crate::heuristic::Heuristic;
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State};
+    use crate::{engine::canonicalize, heuristic::Heuristic};
+    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
     use std::collections::HashMap;
 
     /// D is frozen on its goal once pushed down; pushing A left then freezes A
@@ -228,7 +228,7 @@ mod tests {
         // The first push of the 4-move solution.
         assert!(!deadlock.is_dead_after_push(&board, upper, below));
         let mut child = state(upper, &[below, lower]);
-        board.canonicalize(&mut child);
+        canonicalize(&board, &mut child);
         assert_eq!(child.boxes[..2], [lower, below]);
     }
 
@@ -284,7 +284,7 @@ mod tests {
     /// under 44k states.
     fn solvable_states(board: &Board) -> HashMap<(Cell, [Cell; MAX_BOXES]), bool> {
         let key = |mut state: State| {
-            board.canonicalize(&mut state);
+            canonicalize(board, &mut state);
             (state.player, state.boxes)
         };
         let mut ids = HashMap::from([(key(board.initial()), 0)]);
@@ -339,19 +339,17 @@ mod tests {
                         player,
                         boxes: cells,
                     };
-                    let Some(i) = board.step(&mut child, d) else {
+                    let Some(Step::Push(i)) = board.step(&mut child, d) else {
                         continue;
                     };
-                    if i == MAX_BOXES
-                        || !deadlock.is_dead_after_push(&board, cells[i], child.boxes[i])
-                    {
+                    if !deadlock.is_dead_after_push(&board, cells[i], child.boxes[i]) {
                         continue;
                     }
                     flagged += 1;
                     if parent_solvable {
                         from_solvable += 1;
                     }
-                    board.canonicalize(&mut child);
+                    canonicalize(&board, &mut child);
                     assert!(!solvable[&(child.player, child.boxes)], "{rows:?}");
                 }
             }

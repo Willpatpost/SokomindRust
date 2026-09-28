@@ -331,6 +331,7 @@ fn cost(distance: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
+    use crate::engine::canonicalize;
     use sokomind_core::{Board, Cell, NONE};
     use std::mem::size_of;
 
@@ -419,7 +420,7 @@ mod tests {
                     }
                     let mut child = state;
                     child.boxes[i] = to;
-                    board.canonicalize(&mut child);
+                    canonicalize(board, &mut child);
                     let fresh = heuristic.estimate(&child);
                     let incremental = heuristic.child_estimate(parent_h, &mut cache, &state, i, to);
                     assert_eq!(incremental, fresh, "{state:?} box {i} to {to}");

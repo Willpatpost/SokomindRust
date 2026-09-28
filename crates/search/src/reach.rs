@@ -91,7 +91,7 @@ impl Reach {
 #[cfg(test)]
 mod tests {
     use super::Reach;
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
+    use sokomind_core::{Board, Cell, NONE, Step};
 
     /// Walls and two boxes split the floor into branching corridors.
     const ROOM: &str = "OOOOOOOO\nOR  O  O\nO AOO  O\nO  B   O\nOa b   O\nOOOOOOOO";
@@ -117,7 +117,7 @@ mod tests {
             assert_eq!(route.len(), distance as usize, "cell {cell}");
             let mut state = start;
             for &d in &route {
-                assert_eq!(board.step(&mut state, d as usize), Some(MAX_BOXES));
+                assert_eq!(board.step(&mut state, d as usize), Some(Step::Walk));
             }
             assert_eq!(state.player, cell);
             assert_eq!(state.boxes, start.boxes);

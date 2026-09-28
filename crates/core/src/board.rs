@@ -5,10 +5,37 @@ pub const MAX_CELLS: usize = 4096;
 /// The tile value of a wall; floor is 0 and a goal is its label.
 pub const WALL: u8 = 255;
 
+/// A position on one parsed [`Board`], meaningful only with that board.
+///
+/// The fields are public for compact copies, so these invariants are a
+/// contract rather than enforced by the type. [`Board::initial`],
+/// [`Board::step`] and `Game` preserve them, and [`Board::validate_state`]
+/// checks a state built any other way (search runs it on every start state):
+///
+/// - `player` is an in-bounds floor or goal cell, never a wall or a box.
+/// - `boxes[i]` for `i < board.labels().len()` is an in-bounds non-wall cell,
+///   and no two boxes share a cell. Box `i` carries label
+///   `board.labels()[i]`, so labels stay grouped in slot order and a push
+///   never changes which slot holds which label.
+/// - Every slot at or past `board.labels().len()` is [`NONE`], so the derived
+///   equality depends only on the active boxes.
+/// - The order of equal-label boxes is free. A live `Game` keeps its own
+///   order, because undo records box indices; search sorts each label group
+///   of its own copies so equal positions compare equal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct State {
     pub player: Cell,
     pub boxes: [Cell; MAX_BOXES],
+}
+
+/// What one legal primitive step did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Step {
+    /// The player moved onto a free cell.
+    Walk,
+    /// The player pushed the box in this slot of [`State::boxes`] one cell
+    /// ahead; it came from the cell the player now stands on.
+    Push(usize),
 }
 
 #[derive(Clone)]
@@ -254,23 +281,9 @@ impl Board {
         self.tiles[cell as usize] == self.labels[index]
     }
 
-    /// Sorts interchangeable same-label boxes so states compare canonically.
-    /// Only call this on search-owned state copies: a live `Game` must keep
-    /// its box order, because undo records box indices.
-    pub fn canonicalize(&self, state: &mut State) {
-        let mut begin = 0;
-        while begin < self.labels.len() {
-            let mut end = begin + 1;
-            while end < self.labels.len() && self.labels[end] == self.labels[begin] {
-                end += 1;
-            }
-            state.boxes[begin..end].sort_unstable();
-            begin = end;
-        }
-    }
-
-    /// One legal primitive step; returns pushed box index, or MAX_BOXES for a walk.
-    pub fn step(&self, state: &mut State, direction: usize) -> Option<usize> {
+    /// One legal primitive step. Returns `None` and leaves `state` unchanged
+    /// when the direction is not 0..4 or a wall or an unpushable box blocks it.
+    pub fn step(&self, state: &mut State, direction: usize) -> Option<Step> {
         if direction >= 4 {
             return None;
         }
@@ -289,7 +302,7 @@ impl Board {
             state.boxes[i] = target;
         }
         state.player = next;
-        Some(index.unwrap_or(MAX_BOXES))
+        Some(index.map_or(Step::Walk, Step::Push))
     }
 }
 

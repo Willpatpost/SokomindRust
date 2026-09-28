@@ -1,4 +1,4 @@
-use sokomind_core::{Board, Cell, Game, MAX_ROUTE, decode_direction};
+use sokomind_core::{Board, Cell, Game, MAX_ROUTE, State, Step, decode_direction};
 
 /// The robot can pace left and right forever without touching the box.
 const CORRIDOR: &str = "OOOOOOO\nO R XSO\nOOOOOOO";
@@ -27,6 +27,46 @@ fn routes_stop_at_max_route_moves() {
     assert!(error.contains(&MAX_ROUTE.to_string()), "{error}");
     assert_eq!(game.moves() as usize, MAX_ROUTE);
     assert_eq!(game.actions(), full);
+}
+
+#[test]
+fn board_step_reports_walks_and_pushes() {
+    let board = Board::parse(CROSSING_PAIR).unwrap();
+    let at = |row: usize, column: usize| (row * board.width() + column) as Cell;
+    let start = board.initial();
+    assert_eq!(start.boxes[..2], [at(2, 3), at(3, 2)]);
+    // The wall above the robot and an out-of-range direction are refused,
+    // leaving the state untouched.
+    for direction in [0, 4] {
+        let mut state = start;
+        assert_eq!(board.step(&mut state, direction), None);
+        assert_eq!(state, start);
+    }
+    // D pushes the upper box, which keeps its slot.
+    let mut state = start;
+    assert_eq!(board.step(&mut state, 1), Some(Step::Push(0)));
+    let pushed = state;
+    assert_eq!(pushed.player, at(2, 3));
+    assert_eq!(pushed.boxes[..2], [at(3, 3), at(3, 2)]);
+    // Pushing it again would put it in the wall.
+    assert_eq!(board.step(&mut state, 1), None);
+    assert_eq!(state, pushed);
+    // A box cannot be pushed into another box either.
+    let jammed = State {
+        player: at(3, 4),
+        ..pushed
+    };
+    let mut state = jammed;
+    assert_eq!(board.step(&mut state, 2), None);
+    assert_eq!(state, jammed);
+    // The rest of DLDR: a walk, then a push of each box onto a goal.
+    let mut state = pushed;
+    assert_eq!(board.step(&mut state, 2), Some(Step::Walk));
+    assert_eq!((state.player, state.boxes), (at(2, 2), pushed.boxes));
+    assert_eq!(board.step(&mut state, 1), Some(Step::Push(1)));
+    assert_eq!(board.step(&mut state, 3), Some(Step::Push(0)));
+    assert_eq!(state.boxes[..2], [at(3, 4), at(4, 2)]);
+    assert!(board.solved(&state));
 }
 
 #[test]

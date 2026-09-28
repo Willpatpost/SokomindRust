@@ -1,11 +1,11 @@
-use crate::{ACTIONS, Board, Cell, MAX_BOXES, State};
+use crate::{ACTIONS, Board, Cell, State, Step};
 pub const MAX_ROUTE: usize = 100_000;
 
-/// The player's previous cell and the pushed box index, or MAX_BOXES for a
-/// walk. A pushed box came from the cell the player now stands on.
+/// The player's previous cell and what the step did. A pushed box came from
+/// the cell the player now stands on.
 struct Undo {
     player: Cell,
-    box_index: usize,
+    step: Step,
 }
 
 /// The fields are private: undo records box indices, so only `step`,
@@ -65,14 +65,11 @@ impl Game {
             return false;
         }
         let player = self.state.player;
-        let Some(i) = self.board.step(&mut self.state, direction) else {
+        let Some(step) = self.board.step(&mut self.state, direction) else {
             return false;
         };
-        self.history.push(Undo {
-            player,
-            box_index: i,
-        });
-        self.pushes += u32::from(i < MAX_BOXES);
+        self.history.push(Undo { player, step });
+        self.pushes += u32::from(matches!(step, Step::Push(_)));
         self.actions.push(ACTIONS[direction] as char);
         true
     }
@@ -80,8 +77,8 @@ impl Game {
         let Some(undo) = self.history.pop() else {
             return false;
         };
-        if undo.box_index < MAX_BOXES {
-            self.state.boxes[undo.box_index] = self.state.player;
+        if let Step::Push(index) = undo.step {
+            self.state.boxes[index] = self.state.player;
             self.pushes -= 1;
         }
         self.state.player = undo.player;

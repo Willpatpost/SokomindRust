@@ -93,6 +93,24 @@ impl Policy {
     };
 }
 
+/// Sorts interchangeable same-label boxes so states compare canonically.
+/// Labels are grouped in slot order (see [`State`]), so sorting each run of
+/// equal labels keeps every box on a slot of its own label. Only call this
+/// on search-owned state copies: a live `Game` must keep its box order,
+/// because undo records box indices.
+pub(crate) fn canonicalize(board: &Board, state: &mut State) {
+    let labels = board.labels();
+    let mut begin = 0;
+    while begin < labels.len() {
+        let mut end = begin + 1;
+        while end < labels.len() && labels[end] == labels[begin] {
+            end += 1;
+        }
+        state.boxes[begin..end].sort_unstable();
+        begin = end;
+    }
+}
+
 /// Push search over one reserved arena. Only [`crate::ExactSearch`] turns its
 /// state into bounds or a proof; with a weighted policy results are always
 /// optimality unknown.
@@ -127,7 +145,7 @@ impl Engine {
         board
             .validate_state(&start)
             .map_err(SearchError::InvalidState)?;
-        board.canonicalize(&mut start);
+        canonicalize(&board, &mut start);
         let cells = board.tiles().len();
         let arena = Arena::new(cells, board.labels().len(), max_states, memory_mib)
             .map_err(SearchError::Configuration)?;
@@ -337,7 +355,7 @@ impl Engine {
                     let mut next = node.state;
                     next.player = from;
                     next.boxes[i] = to;
-                    self.board.canonicalize(&mut next);
+                    canonicalize(&self.board, &mut next);
                     let (slot, previous) = self.arena.find(&next);
                     let previous = previous.map(|previous| self.arena.node(previous));
                     if previous.is_some_and(|previous| {
@@ -476,7 +494,7 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Policy};
+    use super::{Engine, Policy, canonicalize};
     use crate::Status;
     use sokomind_core::Board;
 
@@ -646,5 +664,20 @@ mod tests {
             spare += usize::from(sliced.best_moves().is_some() && generated == max_states + 1);
         }
         assert!(restarted > 0 && spare > 0, "{restarted} {spare}");
+    }
+
+    /// Sorting stays inside each label group: a global sort would interleave
+    /// the A and B boxes, and inactive slots keep `NONE`.
+    #[test]
+    fn canonicalize_sorts_each_label_group() {
+        let board = Board::parse("OOOOOOO\nOR    O\nOABAB O\nOaabb O\nOOOOOOO").unwrap();
+        assert_eq!(board.labels(), b"AABB");
+        let start = board.initial();
+        let [a1, a2, b1, b2] = [0, 1, 2, 3].map(|i| start.boxes[i]);
+        assert!(a1 < b1 && b1 < a2 && a2 < b2);
+        let mut state = start;
+        state.boxes[..4].copy_from_slice(&[a2, a1, b2, b1]);
+        canonicalize(&board, &mut state);
+        assert_eq!(state, start);
     }
 }
