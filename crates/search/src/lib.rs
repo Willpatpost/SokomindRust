@@ -90,10 +90,12 @@ impl std::error::Error for SearchError {
 
 /// Counters from the current search. Generated records include immutable
 /// improved versions of existing states; unique states count table entries.
-/// A search that restarts (experiment `o5r`) counts both runs.
+/// A Quality search that restarts counts both runs, so its generated records
+/// may exceed the state limit by up to one full arena.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
-    /// Distinct canonical box positions AND exact player positions retained.
+    /// Distinct canonical box positions AND exact player positions indexed,
+    /// including those of an arena a Quality restart discarded.
     pub unique_states: u32,
     /// Accepted cheaper versions of an already known state.
     pub duplicate_improvements: u32,
@@ -145,14 +147,7 @@ impl Search {
             Mode::Quality => Kind::Bounded(Engine::new(
                 board,
                 start,
-                // Experiment 5.1 (O5, and O5 with restart); off by default.
-                if cfg!(feature = "o5r") {
-                    Policy::FAST_THEN_QUALITY_RESTART
-                } else if cfg!(feature = "o5") {
-                    Policy::FAST_THEN_QUALITY
-                } else {
-                    Policy::QUALITY
-                },
+                Policy::FAST_THEN_QUALITY_RESTART,
                 max_states,
                 memory_mib,
             )?),

@@ -76,18 +76,17 @@ impl Policy {
         then: None,
         restart: None,
     };
-    /// Experiment 5.1 (O5), behind the `o5` feature: exactly [`Self::FAST`]
-    /// until its first route, then [`Self::QUALITY`] in the same arena. The
-    /// incumbent only improves, so the result is never longer than Fast's,
-    /// and its bound prunes from the first Quality pop.
+    /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
+    /// in the same arena. The incumbent only improves, so the result is never
+    /// longer than Fast's, and its bound prunes from the first Quality pop.
     pub(crate) const FAST_THEN_QUALITY: Self = Self {
         then: Some(&Self::QUALITY),
         ..Self::FAST
     };
-    /// Experiment 5.1 with restart, behind the `o5r` feature:
-    /// [`Self::FAST_THEN_QUALITY`], except that when Fast fills the arena
-    /// without a route the search starts over as plain [`Self::QUALITY`].
-    /// Each result is then the O5 result or today's Quality result.
+    /// Quality mode: [`Self::FAST_THEN_QUALITY`], except that when Fast
+    /// fills the arena without a route the search starts over as plain
+    /// [`Self::QUALITY`]. Each result is then the Fast-then-Quality result or
+    /// the plain Quality one, with the same reservation.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         restart: Some(&Self::QUALITY),
         ..Self::FAST_THEN_QUALITY
@@ -520,7 +519,7 @@ mod tests {
         )
     }
 
-    /// Experiment 5.1 (O5) on the whole catalog: the first phase is Fast
+    /// Fast then Quality on the whole catalog: the first phase is Fast
     /// itself, and the second only improves on Fast's route.
     #[test]
     fn fast_then_quality_starts_as_fast_and_never_ends_longer() {
@@ -552,8 +551,8 @@ mod tests {
         assert!(improved >= MIN_IMPROVED, "{improved}");
     }
 
-    /// Checks experiment 5.1 with restart against its sources at one limit:
-    /// the O5 run when Fast finds a route, otherwise Fast's discarded arena
+    /// Checks Quality mode against its sources at one limit: the Fast then
+    /// Quality run when Fast finds a route, otherwise Fast's discarded arena
     /// followed by a fresh Quality run. Returns the restarted run.
     fn check_restart(context: &str, board: &Board, max_states: usize) -> Engine {
         let (fast, _) = run(board, Policy::FAST, max_states);
@@ -569,8 +568,8 @@ mod tests {
             assert_eq!(route.len(), moves as usize, "{context}");
         }
         if fast.best_moves().is_some() {
-            let (o5, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
-            assert_eq!(outcome(&restart), outcome(&o5), "{context}");
+            let (both, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
+            assert_eq!(outcome(&restart), outcome(&both), "{context}");
         } else if fast.status() == Status::Exhausted {
             // No route is reachable, so there is nothing to restart for.
             assert_eq!(outcome(&restart), outcome(&fast), "{context}");
@@ -590,11 +589,11 @@ mod tests {
         restart
     }
 
-    /// Experiment 5.1 with restart on the whole catalog. Fast misses 29
-    /// boards at this limit; the restarted Quality run still finds
-    /// gen-v2-320041-e16f5a47, where Fast has no route even at 1M states.
+    /// Quality mode on the whole catalog. Fast misses 29 boards at this
+    /// limit; the restarted Quality run still finds gen-v2-320041-e16f5a47,
+    /// where Fast has no route even at 1M states.
     #[test]
-    fn restart_is_o5_until_the_limit_then_a_fresh_quality() {
+    fn quality_restarts_fresh_only_when_fast_fills_the_arena() {
         let mut rescued = Vec::new();
         for (id, board) in catalog() {
             let restart = check_restart(&id, &board, STATES);

@@ -86,9 +86,14 @@ remains part of state identity. Walks are reconstructed only for reported routes
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
-route and never re-expands a closed node. Quality (`g + 3h`) keeps improving the
-shortest verified incumbent until its queue empties or a limit hits. Neither
-ever proves anything. Optimal wraps the same engine as `ExactSearch`:
+route and never re-expands a closed node. Quality starts as Fast; from Fast's
+first route it continues in the same arena at `g + 3h` with reopenings, keeping
+the shortest verified incumbent until its queue empties or a limit hits. If Fast
+fills the arena without a route, Quality empties it in place and starts over at
+`g + 3h`, generating up to about twice the state limit in the same memory. Only
+a full arena restarts it: a time limit that hits first ends Quality in its Fast
+phase. Neither mode ever proves anything. Optimal wraps the same engine as
+`ExactSearch`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
 `optimal` when a goal pops or the frontier empties with a verified route, and
 `unsolvable` only when the frontier empties without one. When a limit or
@@ -105,12 +110,12 @@ and route-repair strategies are not yet ported; Grand Hall performance parity
 is not claimed.
 
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
-are limited to 100,000 moves. Native requests cap at 30 seconds, 1,000,000 states,
-64 MiB accounted search storage, and one concurrent CPU job by default (see
-`SOLVE_CONCURRENCY` under Configuration). At 64 MiB the memory budget, not the
-state cap, binds on boards with 14 or more boxes (the catalog's 15-22 box
-boards stop at about 0.77-0.94M records), and such a run reports a memory
-limit. The search memory metric is computed from reserved buffer sizes (arena, queue, table, and per-cell flood, deadlock,
+are limited to 100,000 moves. Native requests cap at 30 seconds, 1,000,000 states
+per arena, 64 MiB accounted search storage, and one concurrent CPU job by default
+(see `SOLVE_CONCURRENCY` under Configuration). At 64 MiB the memory budget, not
+the state cap, binds on boards with 14 or more boxes (the catalog's 15-22 box
+boards fill their arenas at about 0.77-0.94M records), and such a run reports a
+memory limit. The search memory metric is computed from reserved buffer sizes (arena, queue, table, and per-cell flood, deadlock,
 dead-cell, and distance buffers), not process RSS, allocator overhead, WASM
 runtime, or frontend memory. Deadline checks occur between bounded expansion batches;
 setup/reconstruction can add latency.

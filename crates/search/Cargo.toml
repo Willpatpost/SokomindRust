@@ -4,15 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-# Experiment 5.1 (O5): Quality starts as Fast. Off by default; the benchmark
-# measures it with BENCH_FEATURES=o5.
-o5 = []
-# Experiment 5.1 with restart: as o5, but when Fast fills the arena without a
-# route the search starts over as plain Quality. Off by default;
-# BENCH_FEATURES=o5r.
-o5r = []
-
 [dependencies]
 sokomind-core.workspace = true
 
