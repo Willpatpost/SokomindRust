@@ -21,6 +21,9 @@ export interface Metrics {
   proof: Proof;
   status: SearchStatus;
 }
+/** WasmGame.snapshot as decoded by transport's decodeSnapshot: the robot cell,
+ * the move counters, and a view of the box cells in label order. */
+export interface Snapshot { player: number; moves: number; pushes: number; solved: boolean; boxes: Uint32Array }
 export interface SolveRequest {
   rows: string;
   actions: string;

@@ -2,7 +2,7 @@ import './style.css';
 import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
 import catalog from '../../data/puzzles.json';
-import { BoardView, type Snapshot } from './board';
+import { BoardView } from './board';
 import * as storage from './storage';
 import {
   MAX_ROUTE,
@@ -10,9 +10,11 @@ import {
   errorMessage,
   type SearchStatus,
   type SearchUpdate,
+  type Snapshot,
   type SolveRequest,
 } from './protocol';
 import { SolverClient } from './solver-client';
+import { decodeSnapshot } from './transport';
 import { Playback } from './playback';
 import { ProgressClient } from './progress';
 
@@ -77,13 +79,8 @@ function invalidate() {
   updateButtons();
   setStatus('Ready when you are.');
 }
-// Snapshot ABI: player, moves, pushes, solved, then box cells.
-function snapshot(from: WasmGame): Snapshot {
-  const s = from.snapshot();
-  return { player: s[0], moves: s[1], pushes: s[2], solved: s[3] === 1, boxes: s.subarray(4) };
-}
 function render() {
-  state = snapshot(game);
+  state = decodeSnapshot(game.snapshot(), labels.length);
   board.draw(game.width(), game.height(), tiles, labels, state, Array.from(labels, (_, i) => game.on_goal(i)));
   setText('moves', String(state.moves));
   setText('pushes', String(state.pushes));
@@ -101,7 +98,7 @@ function verify(rows: string, route: string): Snapshot {
   const check = new WasmGame(rows);
   try {
     check.replay(route);
-    const result = snapshot(check);
+    const result = decodeSnapshot(check.snapshot(), check.labels().length);
     if (!result.solved) throw new Error('Route does not solve this puzzle');
     return result;
   } finally {

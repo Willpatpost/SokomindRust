@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeMetricTuple, decodeNativeReply, decodeWorkerReply } from '../src/transport.ts';
+import { decodeMetricTuple, decodeNativeReply, decodeSnapshot, decodeWorkerReply } from '../src/transport.ts';
 import { native, progress } from './fakes.ts';
 
 test('native proofs normalize without guessing unknown kinds', () => {
@@ -31,4 +31,20 @@ test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   for (const tuple of [[1], [1, 2, 3, 4, 99, 0], [1, 2, 3, 0xffffffff, 2, 0], [1, 2, 3, 2, 1, 3]])
     assert.throws(() => decodeMetricTuple(tuple, 'solved'));
   assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'));
+});
+test('snapshot ABI decodes the header and views the box cells', () => {
+  const raw = new Uint32Array([7, 5, 2, 1, 12, 13]);
+  const { boxes, ...header } = decodeSnapshot(raw, 2);
+  assert.deepEqual(header, { player: 7, moves: 5, pushes: 2, solved: true });
+  assert.deepEqual(Array.from(boxes), [12, 13]);
+  assert.equal(boxes.buffer, raw.buffer, 'box cells are a view, not a copy');
+  assert.equal(boxes.byteOffset, 4 * Uint32Array.BYTES_PER_ELEMENT);
+  assert.equal(decodeSnapshot(new Uint32Array([7, 0, 0, 0]), 0).solved, false);
+  assert.equal(decodeSnapshot(new Uint32Array([7, 100000, 0, 0, 9]), 1).moves, 100000);
+  const lengths: [number[], number][] = [[[7, 5, 2, 1, 12], 2], [[7, 5, 2, 1, 12, 13], 1], [[7, 5, 2], 0]];
+  for (const [values, count] of lengths)
+    assert.throws(() => decodeSnapshot(new Uint32Array(values), count), /Invalid WASM snapshot length/);
+  // A solved flag other than 0/1, more pushes than moves, or a count past MAX_ROUTE.
+  for (const values of [[7, 5, 2, 2, 12], [7, 2, 5, 0, 12], [7, 100001, 0, 0, 12]])
+    assert.throws(() => decodeSnapshot(new Uint32Array(values), 1), /Invalid WASM snapshot counters/);
 });

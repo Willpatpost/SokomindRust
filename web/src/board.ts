@@ -1,5 +1,4 @@
-/** WasmGame.snapshot decoded once: robot and box cells plus the move counters. */
-export interface Snapshot { player: number; moves: number; pushes: number; solved: boolean; boxes: Uint32Array }
+import type { Snapshot } from './protocol';
 const WALL = 255; // sokomind_core::WALL
 const PLAIN = 88; // 'X': the label of unlettered boxes and their goals
 export class BoardView {

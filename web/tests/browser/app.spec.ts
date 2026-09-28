@@ -55,6 +55,19 @@ test('finds a route through the in-browser engine', async ({ page }) => {
   await expect(page.locator('#expanded')).not.toHaveText('—');
 });
 
+// "The Detour" has a 24-move optimum (a move BFS agrees). The worker decodes
+// the WASM metrics tuple, so a misread proof kind would change this label.
+test('Optimal mode proves the route move-optimal in the browser', async ({ page }) => {
+  await loaded(page);
+  await page.selectOption('#puzzles', 'beginner-detour');
+  await expect(page.locator('#title')).toHaveText('The Detour');
+  await page.selectOption('#mode', 'optimal');
+  await page.click('#solve');
+  await expect(page.locator('#search-status'))
+    .toHaveText('24 remaining moves · proven move-optimal from this position. Search complete.');
+  await expect(page.locator('#play')).toBeEnabled();
+});
+
 test('restores the solved session after a reload', async ({ page }) => {
   await loaded(page);
   await page.keyboard.press('ArrowDown');

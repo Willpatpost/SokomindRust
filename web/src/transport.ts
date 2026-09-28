@@ -1,4 +1,4 @@
-import { MAX_ROUTE, type Metrics, type Proof, type SearchStatus, type SearchUpdate, type WorkerReply } from './protocol.ts';
+import { MAX_ROUTE, type Metrics, type Proof, type SearchStatus, type SearchUpdate, type Snapshot, type WorkerReply } from './protocol.ts';
 
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): ObjectValue {
@@ -116,6 +116,15 @@ export function decodeMetricTuple(values: ArrayLike<number>, searchStatus: unkno
   }
   return metrics({ expanded, generated, reservedBytes, best: best === absent ? undefined : best,
     lowerBound: lower === absent ? undefined : lower, proof: p, status: searchStatus });
+}
+/** WASM snapshot ABI (WasmGame.snapshot): player cell, moves, pushes, solved
+ * (0 or 1), then exactly `boxCount` box cells in label order. `boxes` is a view
+ * into `values`, not a copy. */
+export function decodeSnapshot(values: Uint32Array, boxCount: number): Snapshot {
+  if (values.length !== 4 + boxCount) throw new Error('Invalid WASM snapshot length');
+  const player = values[0], moves = values[1], pushes = values[2], solved = values[3];
+  if (solved > 1 || pushes > moves || moves > MAX_ROUTE) throw new Error('Invalid WASM snapshot counters');
+  return { player, moves, pushes, solved: solved === 1, boxes: values.subarray(4) };
 }
 export async function errorText(response: Response): Promise<string | undefined> {
   const value: unknown = await response.json().catch(() => null);
