@@ -14,6 +14,9 @@ pub(crate) struct Deadlock {
     /// Cell -> box index, or `EMPTY`. Box indices are below `MAX_BOXES`, so
     /// a byte holds one. Refreshed once per expansion.
     occupancy: Vec<u8>,
+    /// Cells written by the last refresh, the only ones not `EMPTY`.
+    placed: [Cell; MAX_BOXES],
+    placed_len: usize,
 }
 
 impl Deadlock {
@@ -22,14 +25,21 @@ impl Deadlock {
     pub(crate) fn new(board: &Board) -> Self {
         Self {
             occupancy: vec![EMPTY; board.tiles().len()],
+            placed: [NONE; MAX_BOXES],
+            placed_len: 0,
         }
     }
-    /// Rebuild occupancy for a state; call once per expansion, before its pushes.
+    /// Rebuild occupancy for a state; call once per expansion, before its
+    /// pushes. Resets only the cells the previous refresh wrote.
     pub(crate) fn refresh(&mut self, boxes: &[Cell]) {
-        self.occupancy.fill(EMPTY);
+        for &cell in &self.placed[..self.placed_len] {
+            self.occupancy[cell as usize] = EMPTY;
+        }
         for (i, &cell) in boxes.iter().enumerate() {
             self.occupancy[cell as usize] = i as u8;
         }
+        self.placed[..boxes.len()].copy_from_slice(boxes);
+        self.placed_len = boxes.len();
     }
     fn at(&self, cell: Cell) -> Option<usize> {
         if cell == NONE {
@@ -121,7 +131,7 @@ impl Deadlock {
 
 #[cfg(test)]
 mod tests {
-    use super::Deadlock;
+    use super::{Deadlock, EMPTY};
     use crate::heuristic::Heuristic;
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State};
     use std::collections::HashMap;
@@ -172,6 +182,21 @@ mod tests {
         assert!(!deadlock.is_dead_after_push(&board, a, at(&board, 1, 3)));
         assert!(!deadlock.is_dead_after_push(&board, a, at(&board, 2, 4)));
         assert!(board.solved(&state(a, &[at(&board, 2, 4), d])));
+    }
+
+    #[test]
+    fn refresh_resets_only_previous_boxes() {
+        let board = Board::parse(CHAIN).unwrap();
+        let d = at(&board, 2, 1);
+        let a = at(&board, 2, 3);
+        let mut deadlock = Deadlock::new(&board);
+        deadlock.refresh(&board.initial().boxes[..board.labels().len()]);
+        deadlock.refresh(&[a, d]);
+        let mut fresh = Deadlock::new(&board);
+        fresh.refresh(&[a, d]);
+        assert_eq!(deadlock.occupancy, fresh.occupancy);
+        deadlock.refresh(&[]);
+        assert!(deadlock.occupancy.iter().all(|&id| id == EMPTY));
     }
 
     #[test]
