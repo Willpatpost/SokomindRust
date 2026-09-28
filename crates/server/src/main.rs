@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&bind).await?;
     let db = match options {
         Some(options) => {
+            run_migrations(&options).await?;
             let pool = connect(database::bounded_options(options), db_pool_size).await?;
-            sqlx::migrate!("../../migrations").run(&pool).await?;
             if let Some(days) = retention {
                 tokio::spawn(expire_progress(pool.clone(), days, retention_batch_size));
             }
@@ -186,6 +186,14 @@ async fn connect(
         eprintln!("PostgreSQL is not reachable yet ({error}); retrying");
         tokio::time::sleep(DB_RETRY_PAUSE).await;
     }
+}
+
+/// Applies pending migrations before the bounded pool opens, on one
+/// connection without its statement and lock timeouts, and closes it.
+async fn run_migrations(options: &PgConnectOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let migrator = connect(database::migration_options(options.clone()), 1).await?;
+    database::migrate(migrator).await?;
+    Ok(())
 }
 
 /// Deletes records whose best route was last improved more than `days`

@@ -189,12 +189,11 @@ async fn live_postgres_persistence() {
         .execute(&mut admin)
         .await
         .unwrap();
+    let scoped = options.options([("search_path", schema.as_str())]);
     let pool_result = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(database::ACQUIRE_TIMEOUT)
-        .connect_with(
-            database::bounded_options(options).options([("search_path", schema.as_str())]),
-        )
+        .connect_with(database::bounded_options(scoped.clone()))
         .await;
     let pool = match pool_result {
         Ok(pool) => pool,
@@ -207,7 +206,7 @@ async fn live_postgres_persistence() {
         }
     };
     // Always clean up our own schema, including when assertions panic.
-    let result = tokio::spawn(live_checks(pool.clone())).await;
+    let result = tokio::spawn(live_checks(pool.clone(), scoped)).await;
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&mut admin)
@@ -221,15 +220,10 @@ async fn live_postgres_persistence() {
     }
 }
 
-async fn live_checks(db: PgPool) {
-    sqlx::migrate!("../../migrations").run(&db).await.unwrap();
-    // Reapplying must be a no-op and verifies historical checksums too.
-    sqlx::migrate!("../../migrations").run(&db).await.unwrap();
-    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
-        .fetch_one(&db)
-        .await
-        .unwrap();
-    assert_eq!(applied, 3);
+/// `options` reach the isolated schema without the request limits; `db` is
+/// the bounded pool built from them.
+async fn live_checks(db: PgPool, options: PgConnectOptions) {
+    migration_checks(&db, &options).await;
     let state = app_state(Some(db.clone()));
     let app = test_router(state.clone());
     let fingerprint = state.puzzle("ultra-tiny").unwrap().fingerprint().to_owned();
@@ -442,6 +436,49 @@ async fn live_checks(db: PgPool) {
     );
     assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(refused_state.progress_slots.available_permits(), 4);
+}
+
+/// Startup's migration path: its own unbounded connection, closed before the
+/// bounded pool is used, which keeps its limits.
+async fn migration_checks(db: &PgPool, options: &PgConnectOptions) {
+    run_migrations(options).await.unwrap();
+    // Reapplying must be a no-op and verifies historical checksums too.
+    run_migrations(options).await.unwrap();
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(applied, 3);
+    let limits = "SELECT current_setting('statement_timeout'), current_setting('lock_timeout')";
+    let pool_limits: (String, String) = sqlx::query_as(limits).fetch_one(db).await.unwrap();
+    assert_eq!(pool_limits, ("1500ms".to_owned(), "500ms".to_owned()));
+    // The zeros win over limits set earlier, as through PGOPTIONS.
+    let migration = database::migration_options(database::bounded_options(options.clone()));
+    let migrator = connect(migration, 1).await.unwrap();
+    let migration_limits: (String, String) =
+        sqlx::query_as(limits).fetch_one(&migrator).await.unwrap();
+    migrator.close().await;
+    assert_eq!(migration_limits, ("0".to_owned(), "0".to_owned()));
+
+    // Hold the migrations table past both request limits. Under the bounded
+    // settings, as before D1, migrating fails; startup's path waits it out.
+    let mut lock = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE _sqlx_migrations IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let bounded = connect(database::bounded_options(options.clone()), 1)
+        .await
+        .unwrap();
+    let error = database::migrate(bounded).await.unwrap_err();
+    assert!(error.to_string().contains("lock timeout"), "{error}");
+    let options = options.clone();
+    let waiting =
+        tokio::spawn(async move { run_migrations(&options).await.map_err(|e| e.to_string()) });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!waiting.is_finished(), "migrating gave up on the lock wait");
+    lock.rollback().await.unwrap();
+    waiting.await.unwrap().unwrap();
 }
 
 async fn upsert(db: &PgPool, puzzle: &str, fingerprint: &str, route: &str) {

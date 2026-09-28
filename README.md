@@ -190,9 +190,14 @@ database wait.
 | `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
 
 libpq's `PG*` variables (such as `PGSSLMODE`) also apply as defaults. Migrations run
-at startup. The API retries only transient database failures, for about 30 seconds;
-authentication failures (SQLSTATE 28P01/28000), a missing database (3D000), and
-other non-transient errors fail immediately.
+at startup, before the request pool opens, on one connection of their own that is
+closed afterwards. Request connections stop a statement after 1.5 s or a lock wait
+after 500 ms; the migration connection sets both limits to 0, overriding role,
+database and `PGOPTIONS` defaults, so a long migration, or a replica waiting for
+another's migration lock, delays startup instead of failing it. The API retries
+only transient database failures, for about 30 seconds; authentication failures
+(SQLSTATE 28P01/28000), a missing database (3D000), and other non-transient errors
+fail immediately.
 
 When the peer is a trusted proxy, the client is the rightmost untrusted
 `X-Forwarded-For` entry; an unparseable entry ends the walk at the last trusted

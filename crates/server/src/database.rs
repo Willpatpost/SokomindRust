@@ -1,5 +1,5 @@
 use crate::api::Error;
-use sqlx::{PgPool, postgres::PgConnectOptions};
+use sqlx::{PgPool, migrate::MigrateError, postgres::PgConnectOptions};
 use std::{future::Future, time::Duration};
 
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -9,6 +9,24 @@ pub const EXECUTION_TIMEOUT: Duration = Duration::from_millis(2500);
 /// Keep lock_timeout below statement_timeout, and both below our deadline.
 pub fn bounded_options(options: PgConnectOptions) -> PgConnectOptions {
     options.options([("statement_timeout", "1500ms"), ("lock_timeout", "500ms")])
+}
+
+/// Migrations run without the request limits: an index build or backfill can
+/// outlast statement_timeout, and sqlx's migration lock can wait for another
+/// replica longer than lock_timeout. Explicit zeros also override limits set
+/// through PGOPTIONS or as role or database defaults.
+pub fn migration_options(options: PgConnectOptions) -> PgConnectOptions {
+    options.options([("statement_timeout", "0"), ("lock_timeout", "0")])
+}
+
+/// Applies pending migrations through `migrator`, a one-connection pool
+/// opened with [`migration_options`], then closes it whatever the result.
+/// Closing ends the session, which releases sqlx's advisory lock even when a
+/// failed migration left it held.
+pub async fn migrate(migrator: PgPool) -> Result<(), MigrateError> {
+    let result = sqlx::migrate!("../../migrations").run(&migrator).await;
+    migrator.close().await;
+    result
 }
 
 /// Includes pool acquisition, execution and response decoding. There is no
@@ -42,6 +60,19 @@ pub async fn expire_batch(db: &PgPool, days: i32, batch_size: i64) -> Result<u64
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[test]
+    fn migration_limits_come_last_so_they_win() {
+        // PostgreSQL applies startup -c flags in order, so these zeros beat
+        // PGOPTIONS or any flags added before them.
+        let earlier = bounded_options(PgConnectOptions::new_without_pgpass());
+        let options = migration_options(earlier);
+        let flags = options.get_options().unwrap();
+        assert!(
+            flags.ends_with("-c statement_timeout=0 -c lock_timeout=0"),
+            "{flags}"
+        );
+    }
 
     #[tokio::test]
     async fn execution_deadline_is_service_unavailable() {
