@@ -5,7 +5,7 @@ use std::collections::{HashSet, VecDeque};
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
 /// The box is frozen against the top-right wall and can never reach its goal.
 const CORNERED: &str = "OOOOO\nOR XO\nOS  O\nOOOOO";
-/// Pushing both boxes against the wall forms a wall/box 2x2 square.
+/// Pushing both boxes side by side against the wall freezes them there.
 const WALL_PAIR: &str = "OOOOOOO\nOR    O\nO AB  O\nO     O\nOa b  O\nOOOOOOO";
 /// D can only be pushed down, where it freezes on its goal. A's goal is to its
 /// right, but the cell a right push needs is walled in by D and A, so every
@@ -25,12 +25,15 @@ const REORDERED: [(&str, u32); 5] = [
 ];
 /// Optimum 9; the same bug proved 17, and limits certified 15..=17.
 const CROSSING: &str = "OOOOOOO\nOOOR OO\nOO X  O\nOSX   O\nOOSOOOO\nOOOOOOO";
+/// Pushing B left at the start locks A and B against each other, a deadlock
+/// only the greatest-fixpoint freeze sees.
+const LOCKED_PAIR: &str = "OOOOOOOO\nO      O\nO  O   O\nO CA BRO\nO   O  O\nO abc  O\nOOOOOOOO";
 /// One label group of eight boxes, large enough for incremental dual repair.
 /// The optimum is one push, then seven times up, right, and push.
 const EIGHT_IN_A_ROW: &str = "OOOOOOOOOO\nOR       O\nOXXXXXXXXO\nOSSSSSSSSO\nOOOOOOOOOO";
 /// Hand-built boards with their BFS optima (`None` when unsolvable), besides
 /// [`REORDERED`]. Every mode must finish on each within the default limits.
-const BOARDS: [(&str, Option<u32>); 10] = [
+const BOARDS: [(&str, Option<u32>); 11] = [
     ("OOOOO\nO R O\nO A O\nO a O\nOOOOO", Some(1)),
     (TWO, Some(20)),
     ("OOOOOOO\nOR    O\nO XX  O\nO SS  O\nOOOOOOO", Some(5)),
@@ -41,6 +44,7 @@ const BOARDS: [(&str, Option<u32>); 10] = [
     (CORNERED, None),
     (CROSSING, Some(9)),
     (EIGHT_IN_A_ROW, Some(22)),
+    (LOCKED_PAIR, Some(51)),
 ];
 
 // Independent primitive-move BFS oracle (not a second push-search implementation).

@@ -100,7 +100,8 @@ pub struct SearchStats {
     pub peak_queue: u32,
     /// Geometrically legal pushes onto a label-specific dead cell.
     pub pruned_dead_cells: u64,
-    /// Legal pushes rejected by 2x2 or frozen-component deadlock rules.
+    /// Legal pushes rejected by the frozen-component (greatest-fixpoint)
+    /// deadlock rule.
     pub pruned_deadlocks: u64,
     /// Children rejected because an equal/cheaper version is known or closed.
     pub pruned_duplicates: u64,

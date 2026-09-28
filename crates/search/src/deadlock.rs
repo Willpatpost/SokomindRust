@@ -1,13 +1,15 @@
-use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, WALL};
+use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
 use std::mem::size_of;
 
 /// Occupancy marker for a cell without a box.
 const EMPTY: u8 = u8::MAX;
 
-/// Sound post-push deadlock detection, ported from the reference engine's
-/// `creates2x2Deadlock` and `createsFrozenComponentDeadlock`. It only ever
-/// answers "dead" for states from which no solution exists, so every mode
-/// may prune with it freely.
+/// Sound post-push deadlock detection: one greatest freeze fixpoint. On
+/// every state the engine expands it flags whatever the reference engine's
+/// `creates2x2Deadlock` and `createsFrozenComponentDeadlock` flag; the only
+/// 2x2 square it skips holds a box cornered off its goal, on a dead cell no
+/// expanded state has. It only ever answers "dead" for states from which no
+/// solution exists, so every mode may prune with it freely.
 pub(crate) struct Deadlock {
     /// Cell -> box index, or `EMPTY`. Box indices are below `MAX_BOXES`, so
     /// a byte holds one. Refreshed once per expansion.
@@ -48,68 +50,15 @@ impl Deadlock {
     }
     /// Whether pushing the box at `from` to `to` creates a deadlock in the
     /// state last given to `refresh`. A newly created deadlock always
-    /// involves the moved box, so only the four squares at `to` and the moved
-    /// box's component are analyzed.
+    /// involves the moved box, so only the moved box's component is analyzed.
     pub(crate) fn is_dead_after_push(&self, board: &Board, from: Cell, to: Cell) -> bool {
         let index = self.at(from).expect("refresh saw a box at from");
-        self.two_by_two(board, index, from, to) || self.frozen_component(board, index, from, to)
+        self.frozen_component(board, index, from, to)
     }
-    /// A completely blocked 2x2 square releases no participating box; it is
-    /// dead only when at least one contained box is off its matching goal.
-    fn square_dead(
-        &self,
-        board: &Board,
-        box_at: impl Fn(Cell) -> Option<usize>,
-        origin_row: isize,
-        origin_col: isize,
-    ) -> bool {
-        let mut blocked = true;
-        let mut unsolved = false;
-        for (dy, dx) in [(0isize, 0isize), (1, 0), (0, 1), (1, 1)] {
-            let cell =
-                ((origin_row + dy) as usize * board.width() + (origin_col + dx) as usize) as Cell;
-            match box_at(cell) {
-                Some(i) => {
-                    if !board.on_goal(i, cell) {
-                        unsolved = true;
-                    }
-                }
-                None => {
-                    if board.tiles()[cell as usize] != WALL {
-                        blocked = false;
-                        break;
-                    }
-                }
-            }
-        }
-        blocked && unsolved
-    }
-    fn two_by_two(&self, board: &Board, index: usize, from: Cell, to: Cell) -> bool {
-        let (mx, my) = ((to as usize) % board.width(), (to as usize) / board.width());
-        for row in [my as isize - 1, my as isize] {
-            for column in [mx as isize - 1, mx as isize] {
-                if row < 0
-                    || column < 0
-                    || row + 1 >= board.height() as isize
-                    || column + 1 >= board.width() as isize
-                {
-                    continue;
-                }
-                if self.square_dead(
-                    board,
-                    |cell| self.box_at(from, to, index, cell),
-                    row,
-                    column,
-                ) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    /// Freeze fixpoint over the moved box's box-adjacency component. A box is
-    /// frozen when each axis has a wall or an already-frozen box on it; a wall
-    /// on either side blocks its axis, because pushing toward the wall is
+    /// Greatest freeze fixpoint over the moved box's box-adjacency component:
+    /// start with every component box frozen and release any box with an axis
+    /// whose two sides are both free of walls and frozen boxes. A wall on
+    /// either side blocks its axis, because pushing toward the wall is
     /// illegal and pushing away needs the player standing on the wall cell.
     fn frozen_component(&self, board: &Board, index: usize, from: Cell, to: Cell) -> bool {
         // (box, cell) pairs after the push, seeded with the moved box.
@@ -136,11 +85,14 @@ impl Deadlock {
         }
         let component = &component[..size];
         let mut frozen = [false; MAX_BOXES];
+        for &(i, _) in component {
+            frozen[i] = true;
+        }
         let mut changed = true;
         while changed {
             changed = false;
             for &(i, cell) in component {
-                if frozen[i] {
+                if !frozen[i] {
                     continue;
                 }
                 let neighbors = board.neighbors()[cell as usize];
@@ -150,54 +102,44 @@ impl Deadlock {
                             .box_at(from, to, index, cell)
                             .is_some_and(|j| frozen[j])
                 };
-                if (blocker(neighbors[0]) || blocker(neighbors[1]))
-                    && (blocker(neighbors[2]) || blocker(neighbors[3]))
-                {
-                    frozen[i] = true;
+                let held = (blocker(neighbors[0]) || blocker(neighbors[1]))
+                    && (blocker(neighbors[2]) || blocker(neighbors[3]));
+                if !held {
+                    frozen[i] = false;
                     changed = true;
                 }
             }
         }
-        // A frozen box off its matching goal can never move again.
-        if component
+        // A box still frozen never moves: its first push would need both
+        // sides of one axis free, but each axis keeps a wall or a frozen box
+        // that has not moved either. Off its goal, it leaves no solution.
+        component
             .iter()
             .any(|&(i, cell)| frozen[i] && !board.on_goal(i, cell))
-        {
-            return true;
-        }
-        // If no component box can be pushed at all, none can ever move: every
-        // push cell of a component box is adjacent to it, so only component
-        // boxes — all currently immovable — could unblock it.
-        for &(_, cell) in component {
-            for (d, &opposite) in OPPOSITE.iter().enumerate() {
-                let destination = board.neighbors()[cell as usize][d];
-                let support = board.neighbors()[cell as usize][opposite];
-                if destination != NONE
-                    && support != NONE
-                    && self.box_at(from, to, index, destination).is_none()
-                    && self.box_at(from, to, index, support).is_none()
-                {
-                    return false;
-                }
-            }
-        }
-        component.iter().any(|&(i, cell)| !board.on_goal(i, cell))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Deadlock;
+    use crate::heuristic::Heuristic;
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State};
+    use std::collections::HashMap;
 
     /// D is frozen on its goal once pushed down; pushing A left then freezes A
     /// against it, while pushing A right puts it on its goal.
     const CHAIN: &str = "O    O\nODO  O\nOd AaO\nOOO RO\nOOOOOO";
-    /// Two boxes pushed against the wall form a wall/box 2x2 square.
+    /// Two boxes pushed side by side against the wall hold each other there.
     const WALL_PAIR: &str = "OOOOOOO\nOR    O\nO AB  O\nO     O\nOa b  O\nOOOOOOO";
     /// Pushing the upper X down lands it after the other X in row-major order,
     /// so the canonical child swaps their slots.
     const CROSSING_PAIR: &str = "OOOOOO\nOOOROO\nOO XOO\nOOX SO\nOOSOOO\nOOOOOO";
+    /// Pushing B left locks A and B against each other: A has a wall above,
+    /// B one below, and each blocks the other's row. C stays pushable and
+    /// neither starts with a frozen partner, so the old no-push rule and
+    /// least fixpoint both missed it.
+    const LOCKED_PAIR: &str =
+        "OOOOOOOO\nO      O\nO  O   O\nO CA BRO\nO   O  O\nO abc  O\nOOOOOOOO";
 
     fn at(board: &Board, row: usize, column: usize) -> Cell {
         (row * board.width() + column) as Cell
@@ -212,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn freeze_component_and_2x2_branches() {
+    fn freeze_chain_branches() {
         let board = Board::parse(CHAIN).unwrap();
         let d = at(&board, 2, 1);
         let a = at(&board, 2, 3);
@@ -224,7 +166,7 @@ mod tests {
         // With D staged on its goal, the same push completes a frozen component.
         deadlock.refresh(&[a, d]);
         assert!(deadlock.is_dead_after_push(&board, a, at(&board, 2, 2)));
-        // Pushing A down forms a wall/box 2x2 square.
+        // Pushing A down wedges it into a wall corner.
         assert!(deadlock.is_dead_after_push(&board, a, at(&board, 3, 3)));
         // Pushing A up, or right onto its goal, stays legal; the latter solves.
         assert!(!deadlock.is_dead_after_push(&board, a, at(&board, 1, 3)));
@@ -233,16 +175,16 @@ mod tests {
     }
 
     #[test]
-    fn wall_pair_2x2_deadlock() {
+    fn wall_pair_freezes() {
         let board = Board::parse(WALL_PAIR).unwrap();
         let a = at(&board, 2, 2);
         let b = at(&board, 2, 3);
         assert_eq!(board.initial().boxes[..2], [a, b]);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[a, b]);
-        // One box against the wall can still be pushed away from it.
+        // One box against the wall can still be pushed along it.
         assert!(!deadlock.is_dead_after_push(&board, a, at(&board, 1, 2)));
-        // The second box completes a fully blocked wall/box square.
+        // The second box freezes both against the wall.
         deadlock.refresh(&[at(&board, 1, 2), b]);
         assert!(deadlock.is_dead_after_push(&board, b, at(&board, 1, 3)));
     }
@@ -263,5 +205,137 @@ mod tests {
         let mut child = state(upper, &[below, lower]);
         board.canonicalize(&mut child);
         assert_eq!(child.boxes[..2], [lower, below]);
+    }
+
+    #[test]
+    fn mutually_locked_pair_freezes() {
+        let board = Board::parse(LOCKED_PAIR).unwrap();
+        let (a, b, c) = (at(&board, 3, 3), at(&board, 3, 5), at(&board, 3, 2));
+        assert_eq!(board.initial().boxes[..3], [a, b, c]);
+        let left = at(&board, 3, 4);
+        // B's destination is not a dead cell, so only the freeze prunes it.
+        assert!(!Heuristic::new(&board).dead(1, left));
+        let mut deadlock = Deadlock::new(&board);
+        deadlock.refresh(&[a, b, c]);
+        assert!(deadlock.is_dead_after_push(&board, b, left));
+        // With A one row lower instead, the same push leaves B's row free.
+        deadlock.refresh(&[at(&board, 4, 3), b, c]);
+        assert!(!deadlock.is_dead_after_push(&board, b, left));
+    }
+
+    /// Fixed-seed LCG, so every run sees the same rooms.
+    struct Lcg(u64);
+    impl Lcg {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as usize % n
+        }
+    }
+
+    /// A walled room with a 4x4 floor holding one box set with its goals,
+    /// the robot and up to two inner walls, all on distinct cells.
+    fn random_room(rng: &mut Lcg) -> String {
+        const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
+        let set = SETS[rng.below(SETS.len())];
+        let walls = &b"OO"[..rng.below(3)];
+        let mut floor = [b' '; 16];
+        let mut free: Vec<usize> = (0..floor.len()).collect();
+        for &symbol in set.iter().chain(b"R").chain(walls) {
+            floor[free.swap_remove(rng.below(free.len()))] = symbol;
+        }
+        let mut rows = vec!["OOOOOO".to_string()];
+        for row in floor.chunks(4) {
+            rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
+        }
+        rows.push("OOOOOO".to_string());
+        rows.join("\n")
+    }
+
+    /// Every state reachable by primitive moves, keyed canonically, mapped to
+    /// whether a solved state is reachable from it. A 4x4 floor keeps this
+    /// under 44k states.
+    fn solvable_states(board: &Board) -> HashMap<(Cell, [Cell; MAX_BOXES]), bool> {
+        let key = |mut state: State| {
+            board.canonicalize(&mut state);
+            (state.player, state.boxes)
+        };
+        let mut ids = HashMap::from([(key(board.initial()), 0)]);
+        let mut states = vec![board.initial()];
+        let mut parents: Vec<Vec<usize>> = vec![Vec::new()];
+        let mut head = 0;
+        while head < states.len() {
+            for d in 0..4 {
+                let mut next = states[head];
+                if board.step(&mut next, d).is_none() {
+                    continue;
+                }
+                let id = *ids.entry(key(next)).or_insert_with(|| {
+                    states.push(next);
+                    parents.push(Vec::new());
+                    states.len() - 1
+                });
+                parents[id].push(head);
+            }
+            head += 1;
+        }
+        let mut solvable: Vec<bool> = states.iter().map(|s| board.solved(s)).collect();
+        let mut stack: Vec<usize> = (0..states.len()).filter(|&s| solvable[s]).collect();
+        while let Some(s) = stack.pop() {
+            for &parent in &parents[s] {
+                if !solvable[parent] {
+                    solvable[parent] = true;
+                    stack.push(parent);
+                }
+            }
+        }
+        ids.into_iter().map(|(k, id)| (k, solvable[id])).collect()
+    }
+
+    /// Every push the rule flags, from any reachable state, leads to a state
+    /// with no solution. Flags from solvable parents are the ones that could
+    /// fail, so the test also requires enough of them.
+    #[test]
+    fn flagged_pushes_leave_no_solution() {
+        let mut rng = Lcg(0x5eed);
+        let (mut flagged, mut from_solvable) = (0, 0);
+        for _ in 0..150 {
+            let rows = random_room(&mut rng);
+            let board = Board::parse(&rows).unwrap();
+            let solvable = solvable_states(&board);
+            let boxes = board.labels().len();
+            let mut deadlock = Deadlock::new(&board);
+            for (&(player, cells), &parent_solvable) in &solvable {
+                deadlock.refresh(&cells[..boxes]);
+                for d in 0..4 {
+                    let mut child = State {
+                        player,
+                        boxes: cells,
+                    };
+                    let Some(i) = board.step(&mut child, d) else {
+                        continue;
+                    };
+                    if i == MAX_BOXES
+                        || !deadlock.is_dead_after_push(&board, cells[i], child.boxes[i])
+                    {
+                        continue;
+                    }
+                    flagged += 1;
+                    if parent_solvable {
+                        from_solvable += 1;
+                    }
+                    board.canonicalize(&mut child);
+                    assert!(!solvable[&(child.player, child.boxes)], "{rows:?}");
+                }
+            }
+        }
+        // A Python replica of this test counts 10_658 flags, 503 from
+        // solvable parents.
+        assert!(
+            flagged >= 10_000 && from_solvable >= 450,
+            "{flagged} {from_solvable}"
+        );
     }
 }
