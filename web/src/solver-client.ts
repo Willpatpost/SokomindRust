@@ -91,6 +91,11 @@ export class SolverClient {
     if (update.metrics.proof.kind === 'unsolvable' && active.route !== undefined) throw new Error('Unsolvable reply conflicts with verified route');
     if (active.route !== undefined && update.metrics.lowerBound !== undefined && update.metrics.lowerBound > active.route.length)
       throw new Error('Solver bound exceeds verified route');
+    // Progress routes are throttled, but the final reply resends any better route,
+    // so a final proof must certify exactly the route that will be displayed.
+    const proof = update.metrics.proof.kind;
+    if (update.type === 'done' && (proof === 'optimal' || proof === 'bounded') && update.metrics.best !== active.route?.length)
+      throw new Error('Final proof does not match the verified route length');
     this.options.update(update, active.route);
     if (update.type === 'done') { this.finish(active); this.options.elapsed(update.elapsedMs); }
     else this.options.changed();

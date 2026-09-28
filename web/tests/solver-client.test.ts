@@ -58,6 +58,27 @@ test('final worker reply keeps a previously delivered route and releases timers'
   worker.reply({ ...progress(), type: 'done', metrics: { ...progress('D').metrics, status: 'solved' } });
   assert.equal(client.state.kind, 'completed'); assert.equal(client.route, 'D'); assert.equal(clock.tasks.size, 0);
 });
+test('final optimal and bounded proofs must match the verified route length', async () => {
+  const done = (best: number, proof: object, status = 'solved') =>
+    ({ type: 'done', elapsedMs: 20, metrics: { ...progress().metrics, best, lowerBound: 1, proof, status } });
+  const optimal = setup(); await optimal.client.solve('browser', request); optimal.worker.reply(progress('DD'));
+  optimal.worker.reply(done(1, { kind: 'optimal', moves: 1 }));
+  assert.equal(optimal.client.state.kind, 'completed'); assert.equal(optimal.client.route, 'DD');
+  assert.match(optimal.statuses[0], /Final proof does not match/); assert.equal(optimal.updates.length, 1);
+  assert.equal(optimal.clock.tasks.size, 0);
+  const bounded = setup(); await bounded.client.solve('browser', request); bounded.worker.reply(progress('DD'));
+  bounded.worker.reply(done(3, { kind: 'bounded', lower: 1, upper: 3 }));
+  assert.equal(bounded.client.route, 'DD'); assert.match(bounded.statuses[0], /Final proof does not match/);
+  assert.equal(bounded.updates.length, 1);
+  const routeless = setup(); await routeless.client.solve('browser', request);
+  routeless.worker.reply(done(2, { kind: 'bounded', lower: 1, upper: 2 }, 'state_limit'));
+  assert.equal(routeless.client.route, undefined); assert.match(routeless.statuses[0], /Final proof does not match/);
+  assert.equal(routeless.updates.length, 0);
+  const matching = setup(); await matching.client.solve('browser', request); matching.worker.reply(progress('D'));
+  matching.worker.reply(done(1, { kind: 'optimal', moves: 1 }));
+  assert.equal(matching.client.state.kind, 'completed'); assert.equal(matching.client.route, 'D');
+  assert.deepEqual(matching.statuses, []); assert.equal(matching.updates.length, 2);
+});
 test('native cancellation ignores late successful responses', async () => {
   const pending = deferred<Response>(); let signal: AbortSignal | undefined;
   const { client, updates } = setup({ fetch: (async (_url, options) => {
