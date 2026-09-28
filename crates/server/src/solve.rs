@@ -135,18 +135,19 @@ pub async fn solve(
         return Err(limits());
     }
     let mode = Mode::parse(&request.mode).map_err(Error::bad)?;
-    // The busy slot only stops concurrent solves; this stops one client
-    // from taking every slot the moment it frees.
-    if !app.solves.allow(app.proxies.client(&headers, peer.ip())) {
-        return Err(Error::too_many(
-            "Too many solve requests; try again shortly",
-        ));
-    }
     let permit = app
         .slots
         .clone()
         .try_acquire_owned()
         .map_err(|_| Error::too_many("Solver busy; try the browser solver or retry later"))?;
+    // The busy slot only stops concurrent solves; this stops one client
+    // from taking every slot the moment it frees. Charged after the slot is
+    // taken, so a busy answer does not spend the budget.
+    if !app.solves.allow(app.proxies.client(&headers, peer.ip())) {
+        return Err(Error::too_many(
+            "Too many solve requests; try again shortly",
+        ));
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancel.clone());
     // CPU search never occupies an async Tokio worker; no unbounded job queue.

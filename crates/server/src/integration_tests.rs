@@ -1,36 +1,63 @@
 use super::*;
+use crate::api::App;
 use axum::{body::Body, extract::connect_info::MockConnectInfo, http::Request};
 use serde_json::{Value, json};
-use sqlx::{Connection, PgConnection};
+use sqlx::{
+    Connection, PgConnection, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
+use std::{
+    env,
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 use tower::ServiceExt;
 
 const PROFILE: &str = "0123456789abcdef0123456789abcdef";
+const CLIENT: [u8; 4] = [127, 0, 0, 1];
 
-fn app_state(db: Option<PgPool>) -> api::App {
-    api::App {
-        db,
-        catalog: Arc::new(api::load_catalog().unwrap()),
-        slots: Arc::new(Semaphore::new(1)),
-        progress_slots: Arc::new(Semaphore::new(4)),
-        proxies: Arc::new(TrustedProxies::default()),
-        saves: Arc::new(RateLimiter::new(100, RATE_WINDOW)),
-        solves: Arc::new(RateLimiter::new(100, RATE_WINDOW)),
-        health: Arc::default(),
-    }
+/// The App main builds from an empty environment after `adjust`, with `db`
+/// as its pool.
+fn app_with(db: Option<PgPool>, adjust: impl FnOnce(&mut Config)) -> App {
+    let mut config = Config::defaults();
+    adjust(&mut config);
+    App::new(config, api::load_catalog().unwrap(), db)
 }
 
-fn test_router(state: api::App) -> Router {
-    router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+fn app_state(db: Option<PgPool>) -> App {
+    app_with(db, |_| {})
+}
+
+fn test_router(state: App) -> Router {
+    router(state).layer(MockConnectInfo(SocketAddr::from((CLIENT, 0))))
+}
+
+/// A pool whose every connection attempt is refused.
+fn refused_pool() -> PgPool {
+    PgPoolOptions::new()
+        .acquire_timeout(database::ACQUIRE_TIMEOUT)
+        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
+        .unwrap()
 }
 
 async fn request(app: Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    request_as(app, PROFILE, method, path, body).await
+}
+
+async fn request_as(
+    app: Router,
+    profile: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let response = app
         .oneshot(
             Request::builder()
                 .method(method)
                 .uri(path)
                 .header("content-type", "application/json")
-                .header("x-profile-id", PROFILE)
+                .header("x-profile-id", profile)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -115,6 +142,65 @@ async fn solve_limits_follow_the_state_cap() {
     assert_eq!(state.slots.available_permits(), 1);
 }
 
+#[tokio::test]
+async fn busy_solves_keep_the_rate_budget() {
+    let state = app_with(None, |config| config.solve_rate = 1);
+    let app = test_router(state.clone());
+    let permit = state.slots.clone().acquire_owned().await.unwrap();
+    for _ in 0..3 {
+        let (status, body) = request(app.clone(), "POST", "/api/solve", solve_body()).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(body["error"].as_str().unwrap().contains("Solver busy"));
+    }
+    drop(permit);
+    // The busy answers spent nothing, so the one solve a minute still runs.
+    let (status, body) = request(app.clone(), "POST", "/api/solve", solve_body()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["route"], "D");
+    let (status, body) = request(app, "POST", "/api/solve", solve_body()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body["error"].as_str().unwrap().contains("Too many solve"));
+}
+
+#[tokio::test]
+async fn progress_reads_and_saves_check_in_the_same_order() {
+    let save = json!({"route":"D"});
+    let unknown = "/api/progress/no-such-puzzle";
+    let known = "/api/progress/ultra-tiny";
+    let bad_profile = "not-a-profile";
+    // Without persistence: the request, then the puzzle, then the database.
+    let offline = test_router(app_state(None));
+    for (method, body) in [("GET", Value::Null), ("POST", save.clone())] {
+        let cases = [
+            (bad_profile, unknown, StatusCode::BAD_REQUEST),
+            (PROFILE, unknown, StatusCode::NOT_FOUND),
+            (PROFILE, known, StatusCode::SERVICE_UNAVAILABLE),
+        ];
+        for (profile, path, status) in cases {
+            let (got, _) = request_as(offline.clone(), profile, method, path, body.clone()).await;
+            assert_eq!(got, status, "{method} {path} as {profile}");
+        }
+    }
+    // With every progress slot taken, both answer busy at once and a busy
+    // save spends none of the client's rate budget.
+    let state = app_with(Some(refused_pool()), |config| {
+        config.progress_concurrency = 1;
+    });
+    let app = test_router(state.clone());
+    let permit = state.progress_slots.clone().try_acquire_owned().unwrap();
+    let (status, body) = request(app.clone(), "GET", known, Value::Null).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], "Progress busy; retry later");
+    for _ in 0..=api::SAVES_PER_MINUTE {
+        let (status, body) = request(app.clone(), "POST", known, save.clone()).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error"], "Progress busy; retry later");
+    }
+    drop(permit);
+    assert!(state.saves.allow(IpAddr::from(CLIENT)));
+    assert_eq!(state.progress_slots.available_permits(), 1);
+}
+
 #[test]
 fn aborted_save_retains_admission_until_queued_replay_finishes() {
     // Occupy the runtime's sole blocking thread, so the real save handler's
@@ -136,8 +222,7 @@ fn aborted_save_retains_admission_until_queued_replay_finishes() {
         let db = PgPoolOptions::new()
             .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
             .unwrap();
-        let mut state = app_state(Some(db));
-        state.progress_slots = Arc::new(Semaphore::new(1));
+        let state = app_with(Some(db), |config| config.progress_concurrency = 1);
         let saving = tokio::spawn(request(
             test_router(state.clone()),
             "POST",
@@ -168,10 +253,7 @@ fn aborted_save_retains_admission_until_queued_replay_finishes() {
 
 #[tokio::test]
 async fn health_reports_unreachable_databases_quickly_and_caches_the_answer() {
-    let refused = PgPoolOptions::new()
-        .acquire_timeout(database::ACQUIRE_TIMEOUT)
-        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
-        .unwrap();
+    let refused = refused_pool();
     let closed = PgPoolOptions::new()
         .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
         .unwrap();
@@ -367,8 +449,7 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
     // One save owns progress admission while waiting on SQL. Another request
     // is rejected immediately, health still reports persistence (it takes no
     // progress permit), and native solving still runs.
-    let mut single = state.clone();
-    single.progress_slots = Arc::new(Semaphore::new(1));
+    let single = app_with(Some(db.clone()), |config| config.progress_concurrency = 1);
     let single_app = test_router(single.clone());
     let saving = tokio::spawn(request(
         single_app.clone(),
@@ -410,8 +491,7 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
     // The save above may already have finished; here every progress slot is
     // held for certain, and health, whose own cache has no answer yet,
     // probes the database and reports it.
-    let mut held = app_state(Some(db.clone()));
-    held.progress_slots = Arc::new(Semaphore::new(1));
+    let held = app_with(Some(db.clone()), |config| config.progress_concurrency = 1);
     let permit = held.progress_slots.clone().try_acquire_owned().unwrap();
     let (status, health) = request(test_router(held), "GET", "/api/health", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
@@ -458,11 +538,7 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(unavailable_state.progress_slots.available_permits(), 4);
-    let refused = PgPoolOptions::new()
-        .acquire_timeout(database::ACQUIRE_TIMEOUT)
-        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
-        .unwrap();
-    let refused_state = app_state(Some(refused));
+    let refused_state = app_state(Some(refused_pool()));
     let started = Instant::now();
     assert_eq!(
         request(
@@ -482,9 +558,9 @@ async fn live_checks(db: PgPool, options: PgConnectOptions) {
 /// Startup's migration path: its own unbounded connection, closed before the
 /// bounded pool is used, which keeps its limits.
 async fn migration_checks(db: &PgPool, options: &PgConnectOptions) {
-    run_migrations(options).await.unwrap();
+    database::run_migrations(options).await.unwrap();
     // Reapplying must be a no-op and verifies historical checksums too.
-    run_migrations(options).await.unwrap();
+    database::run_migrations(options).await.unwrap();
     let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
         .fetch_one(db)
         .await
@@ -495,7 +571,7 @@ async fn migration_checks(db: &PgPool, options: &PgConnectOptions) {
     assert_eq!(pool_limits, ("1500ms".to_owned(), "500ms".to_owned()));
     // The zeros win over limits set earlier, as through PGOPTIONS.
     let migration = database::migration_options(database::bounded_options(options.clone()));
-    let migrator = connect(migration, 1).await.unwrap();
+    let migrator = database::connect(migration, 1).await.unwrap();
     let migration_limits: (String, String) =
         sqlx::query_as(limits).fetch_one(&migrator).await.unwrap();
     migrator.close().await;
@@ -508,14 +584,17 @@ async fn migration_checks(db: &PgPool, options: &PgConnectOptions) {
         .execute(&mut *lock)
         .await
         .unwrap();
-    let bounded = connect(database::bounded_options(options.clone()), 1)
+    let bounded = database::connect(database::bounded_options(options.clone()), 1)
         .await
         .unwrap();
     let error = database::migrate(bounded).await.unwrap_err();
     assert!(error.to_string().contains("lock timeout"), "{error}");
     let options = options.clone();
-    let waiting =
-        tokio::spawn(async move { run_migrations(&options).await.map_err(|e| e.to_string()) });
+    let waiting = tokio::spawn(async move {
+        database::run_migrations(&options)
+            .await
+            .map_err(|e| e.to_string())
+    });
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!waiting.is_finished(), "migrating gave up on the lock wait");
     lock.rollback().await.unwrap();

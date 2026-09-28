@@ -166,13 +166,20 @@ not): 400 invalid input, a missing or malformed profile, a route that does not
 replay or solve, or a solve position plus route over the 100,000-move replay
 limit; 404 unknown endpoint, catalog puzzle, or saved route; 405 wrong method;
 408 a JSON body not received within 10 seconds; 413 a body over 128 KiB; 415 a
-missing or non-JSON content type; 422 JSON of the wrong shape; 429 rate limited
-or solver busy; 503 PostgreSQL not configured or unreachable, or a failed search
-allocation; 500 a server bug.
+missing or non-JSON content type; 422 JSON of the wrong shape; 429 rate limited,
+or solver or progress busy; 503 PostgreSQL not configured or unreachable, or a
+failed search allocation; 500 a server bug. Both progress endpoints check in the
+same order: profile and request shape (400), catalog puzzle (404), PostgreSQL
+(503), progress slot (429 busy); a save then checks its rate limit (429) before
+it replays the route.
 
 Rate limits are per client address (an IPv4 address or an IPv6 /64): 60 saves and
 `SOLVE_RATE_PER_MINUTE` solves per minute. A solve that finds every
-`SOLVE_CONCURRENCY` slot taken gets 429 at once; nothing queues. The binary has no
+`SOLVE_CONCURRENCY` slot taken, or a progress request that finds every
+`PROGRESS_CONCURRENCY` slot taken, gets 429 at once; nothing queues. A busy answer
+does not count against the rate limit, nor does a save turned away before replay
+(bad profile, over-long route, unknown puzzle, no PostgreSQL) or a solve with
+out-of-range limits or an unknown mode. The binary has no
 connection cap and no idle or header timeout (axum gives hyper no timer), and it
 sends no security headers: nginx, which must sit in front of it, bounds slow
 clients and open connections and adds `X-Content-Type-Options: nosniff` and

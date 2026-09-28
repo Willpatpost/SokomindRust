@@ -49,16 +49,20 @@ SET moves = EXCLUDED.moves,
     updated_at = now()
 WHERE (EXCLUDED.moves, EXCLUDED.pushes) < (progress.moves, progress.pushes)";
 
+// Both handlers check in the same order, cheapest and most client-caused
+// first: the request itself (400), the catalog puzzle (404), persistence
+// (503), a progress slot (429 busy), then, for saves, the rate budget (429).
+
 pub async fn get(
     State(app): State<App>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<Record>, Error> {
     let profile = profile(&headers)?;
-    let db = app.db()?;
     // A catalog layout change retires old records: they cannot be beaten by
     // fresh saves and their routes no longer replay.
     let fingerprint = app.puzzle(&id)?.fingerprint();
+    let db = app.db()?;
     let _permit = app.progress_permit()?;
     let record = database::run(
         sqlx::query_as::<_, Record>(FETCH)
@@ -84,12 +88,12 @@ pub async fn save(
     }
     let board = app.puzzle(&id)?.clone();
     let db = app.db()?;
-    // Charged after the cheap checks: the budget guards replays and writes,
-    // so malformed or misaddressed saves should not spend it.
+    let permit = app.progress_permit()?;
+    // Charged last: the budget guards replays and writes, so malformed,
+    // misaddressed or busy saves should not spend it.
     if !app.saves.allow(app.proxies.client(&headers, peer.ip())) {
         return Err(Error::too_many("Too many saves; try again shortly"));
     }
-    let permit = app.progress_permit()?;
     let route = body.route;
     // Replay is pure CPU: keep it off the async runtime, like the solver.
     let (_permit, moves, pushes, fingerprint, route) = tokio::task::spawn_blocking(move || {

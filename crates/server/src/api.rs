@@ -1,4 +1,6 @@
 use crate::client::TrustedProxies;
+use crate::config::Config;
+use crate::database;
 use crate::limit::RateLimiter;
 use axum::{
     Json,
@@ -24,6 +26,9 @@ const HEALTH_TTL: Duration = Duration::from_secs(1);
 /// Bodies are at most 128 KiB; a client still sending after this long is
 /// holding a connection and a handler open, not uploading.
 const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Saves each client address may make per `RATE_WINDOW`.
+pub const SAVES_PER_MINUTE: u32 = 60;
+const RATE_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct App {
@@ -37,6 +42,20 @@ pub struct App {
     pub health: Arc<Health>,
 }
 impl App {
+    /// The state every handler shares: the budgets `config` sets, the parsed
+    /// catalog, and the request pool when persistence is on.
+    pub fn new(config: Config, catalog: HashMap<String, Board>, db: Option<PgPool>) -> Self {
+        Self {
+            db,
+            catalog: Arc::new(catalog),
+            slots: Arc::new(Semaphore::new(config.solve_concurrency)),
+            progress_slots: Arc::new(Semaphore::new(config.progress_concurrency as usize)),
+            proxies: Arc::new(config.proxies),
+            saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
+            solves: Arc::new(RateLimiter::new(config.solve_rate, RATE_WINDOW)),
+            health: Arc::default(),
+        }
+    }
     pub fn progress_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
         self.progress_slots
             .clone()
@@ -142,7 +161,7 @@ impl Error {
         {
             eprintln!("database operation interrupted: {error}");
             Self::database_timeout()
-        } else if db_unreachable(&error) {
+        } else if database::unreachable(&error) {
             eprintln!("database unavailable: {error}");
             Self::unavailable()
         } else {
@@ -152,19 +171,6 @@ impl Error {
     pub fn internal(message: impl std::fmt::Display) -> Self {
         eprintln!("request failed: {message}");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "Server operation failed")
-    }
-}
-/// Failures that mean the database cannot be reached right now (refused,
-/// reset, restarting, saturated) rather than that a query is wrong.
-pub fn db_unreachable(error: &sqlx::Error) -> bool {
-    match error {
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
-        // Class 08 is connection exceptions; 53300 is too many connections;
-        // 57P01-57P03 are shutdowns and a server still starting up.
-        sqlx::Error::Database(error) => error.code().is_some_and(|code| {
-            code.starts_with("08") || matches!(&*code, "53300" | "57P01" | "57P02" | "57P03")
-        }),
-        _ => false,
     }
 }
 impl IntoResponse for Error {
@@ -399,13 +405,6 @@ mod tests {
 
     #[test]
     fn unreachable_databases_are_503_and_failed_queries_500() {
-        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
-        assert!(db_unreachable(&sqlx::Error::Io(refused)));
-        assert!(db_unreachable(&sqlx::Error::PoolTimedOut));
-        assert!(!db_unreachable(&sqlx::Error::RowNotFound));
-        assert!(!db_unreachable(&sqlx::Error::Configuration(
-            "bad url".into()
-        )));
         let closed = Error::database(sqlx::Error::PoolClosed);
         assert_eq!(closed.0, StatusCode::SERVICE_UNAVAILABLE);
         let failed = Error::database(sqlx::Error::RowNotFound);
