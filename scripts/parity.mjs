@@ -11,11 +11,13 @@ import { root } from './toolchain.mjs';
 // `--native <file>` checks WASM against native records already on disk instead
 // of running the native corpus again. CI passes target/bench/catalog.json right
 // after bench:check wrote it, so the corpus runs once per CI run.
+// BENCH_FEATURES must match the one `npm run wasm` built web/wasm with.
+const FEATURES = process.env.BENCH_FEATURES ?? '';
 const { values: options } = parseArgs({ options: { native: { type: 'string' } }, strict: true, allowPositionals: false });
 function recorded(path) {
   const file = JSON.parse(readFileSync(resolve(root, path), 'utf8'));
   assert.equal(file.catalogHash, catalogHash, `${path} was recorded for another catalog; rerun npm run bench:check`);
-  assert(!file.features, `${path} was measured with cargo features "${file.features}"; parity needs the default build`);
+  assert.equal(file.features ?? '', FEATURES, `${path} was measured with cargo features "${file.features ?? ''}", not BENCH_FEATURES="${FEATURES}"`);
   const cases = Array.isArray(file.records) ? file.records.map(record => `${record.id}/${record.mode}`) : [];
   assert.deepEqual(cases, catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
     `${path} must hold one record per catalog puzzle and mode, as bench:check writes it`);
@@ -29,7 +31,7 @@ function decode(context, run) {
 
 const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')));
 const wasm = await init({ module_or_path: readFileSync(resolve(root, 'web/wasm/sokomind_bg.wasm')) });
-const native = options.native ? recorded(options.native) : nativeCorpus();
+const native = options.native ? recorded(options.native) : nativeCorpus([], FEATURES);
 const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')]));
 let verified = 0;
 for (const reference of native) {
@@ -64,5 +66,6 @@ for (const reference of native) {
     }
   } finally { search.free(); }
 }
+if (FEATURES) console.log(`*** Checked with cargo features: ${FEATURES} ***`);
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
 console.log(`WASM retained linear memory: ${(wasm.memory.buffer.byteLength / 1048576).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`);

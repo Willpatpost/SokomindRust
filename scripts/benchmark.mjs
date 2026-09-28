@@ -8,6 +8,7 @@
 //                                                   hard boards at production scale, median of K;
 //                                                   --update rewrites benchmarks/observe-reference.json
 // BENCH_FEATURES=<cargo features> measures an experiment switched on; such runs are never recorded.
+// npm run wasm and npm run test:parity honor it too.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
