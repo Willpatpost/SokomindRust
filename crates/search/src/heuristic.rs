@@ -1,7 +1,15 @@
-use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State};
+use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, State};
 use std::mem::size_of;
 
 const INF: i32 = 1_000_000;
+// INF exceeds every finite matching, and a full row of INF costs cannot
+// overflow i32.
+const _: () = assert!(
+    MAX_BOXES * MAX_CELLS < INF as usize
+        && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
+);
+// Duals indices fit a byte.
+const _: () = assert!(MAX_BOXES < u8::MAX as usize);
 /// Group size from which a child's group cost is repaired from the parent's
 /// duals with one augment instead of re-solved. Models put the crossover at
 /// 2-4; re-measure it on real hardware.
@@ -38,9 +46,9 @@ struct Duals {
     u: [i32; MAX_BOXES + 1],
     v: [i32; MAX_BOXES + 1],
     /// Row matched to each column, 0 when the column is free.
-    p: [usize; MAX_BOXES + 1],
+    p: [u8; MAX_BOXES + 1],
     /// Previous column on the augmenting path.
-    way: [usize; MAX_BOXES + 1],
+    way: [u8; MAX_BOXES + 1],
 }
 
 impl Duals {
@@ -73,9 +81,11 @@ impl ParentGroup {
 }
 
 impl Heuristic {
-    /// The dead mask. The distance table's `boxes * 2` bytes per cell are
-    /// accounted by the arena separately.
-    pub(crate) const BYTES_PER_CELL: usize = size_of::<u32>();
+    /// The dead mask plus one u16 push distance per goal column; there is
+    /// one goal per box.
+    pub(crate) const fn bytes_per_cell(boxes: usize) -> usize {
+        size_of::<u32>() + boxes * size_of::<u16>()
+    }
     pub(crate) fn new(board: &Board) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
@@ -104,7 +114,7 @@ impl Heuristic {
             while head < queue.len() {
                 let cell = queue[head];
                 head += 1;
-                for direction in OPPOSITE {
+                for direction in 0..4 {
                     let previous = board.neighbors()[cell as usize][direction];
                     if previous == NONE {
                         continue;
@@ -231,7 +241,7 @@ impl Heuristic {
         let row = row + 1;
         state.u[row] = 0;
         for p in &mut state.p[1..=group.len] {
-            if *p == row {
+            if *p as usize == row {
                 *p = 0;
             }
         }
@@ -247,13 +257,13 @@ impl Heuristic {
     fn augment(&self, group: &Group, cells: &[Cell], row: usize, state: &mut Duals) -> bool {
         let n = group.len;
         let Duals { u, v, p, way } = state;
-        p[0] = row;
+        p[0] = row as u8;
         let mut minv = [INF; MAX_BOXES + 1];
         let mut used = [false; MAX_BOXES + 1];
         let mut j0 = 0;
         loop {
             used[j0] = true;
-            let i0 = p[j0];
+            let i0 = p[j0] as usize;
             let distances = self.goal_distances(group, cells[i0 - 1]);
             let mut delta = INF;
             let mut j1 = 0;
@@ -264,7 +274,7 @@ impl Heuristic {
                 let reduced = cost(distances[j - 1]) - u[i0] - v[j];
                 if reduced < minv[j] {
                     minv[j] = reduced;
-                    way[j] = j0;
+                    way[j] = j0 as u8;
                 }
                 if minv[j] < delta {
                     delta = minv[j];
@@ -276,7 +286,7 @@ impl Heuristic {
             }
             for j in 0..=n {
                 if used[j] {
-                    u[p[j]] += delta;
+                    u[p[j] as usize] += delta;
                     v[j] -= delta;
                 } else {
                     minv[j] -= delta;
@@ -288,7 +298,7 @@ impl Heuristic {
             }
         }
         loop {
-            let j1 = way[j0];
+            let j1 = way[j0] as usize;
             p[j0] = p[j1];
             j0 = j1;
             if j0 == 0 {
@@ -303,7 +313,7 @@ impl Heuristic {
     fn matched_cost(&self, group: &Group, cells: &[Cell], state: &Duals) -> Option<u32> {
         let mut total = 0i32;
         for j in 1..=group.len {
-            total += cost(self.goal_distances(group, cells[state.p[j] - 1])[j - 1]);
+            total += cost(self.goal_distances(group, cells[state.p[j] as usize - 1])[j - 1]);
         }
         (total < INF).then_some(total as u32)
     }
@@ -322,6 +332,7 @@ fn cost(distance: u16) -> i32 {
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use sokomind_core::{Board, Cell, NONE};
+    use std::mem::size_of;
 
     /// Nine interchangeable X boxes and a lone A: the widest group here.
     const WIDE: &str = concat!(
@@ -452,6 +463,17 @@ mod tests {
         assert!(!heuristic.dead(a, at(3, 2)) && !heuristic.dead(b, at(3, 2)));
         // Nothing pushes a box up off the bottom row, which holds no goal.
         assert!(heuristic.dead(a, at(3, 4)) && heuristic.dead(b, at(3, 4)));
+    }
+
+    /// The arena accounts exactly the distance table and dead mask.
+    #[test]
+    fn bytes_per_cell_matches_the_tables() {
+        let board = Board::parse(WIDE).unwrap();
+        let h = Heuristic::new(&board);
+        assert_eq!(
+            h.distances.len() * size_of::<u16>() + h.dead.len() * size_of::<u32>(),
+            board.tiles().len() * Heuristic::bytes_per_cell(board.labels().len())
+        );
     }
 
     /// The incremental child estimate equals a fresh estimate for label
