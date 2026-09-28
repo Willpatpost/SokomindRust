@@ -44,9 +44,15 @@ Copy `.env.example` to `.env`, choose a PostgreSQL password, then run
 named volume; only NGINX is exposed. NGINX is required in front of the API
 binary, which serves only `/api`: NGINX serves the web app and supplies the
 security and cache headers, gzip, and the bounds on slow clients and open
-connections. For existing NGINX, serve `web/dist` and adapt `deploy/nginx.conf`'s
-API upstream. Terminate HTTPS at your existing proxy before exposing this beyond
-localhost.
+connections. The image pins NGINX 1.30. NGINX looks the `api` container up again
+about every 10 seconds and keeps idle connections to it open for reuse, so it
+follows a recreated `api` container within about 10 seconds, without a restart of
+its own, and it starts, serving the game, even while the API is down (API requests
+get 502 until the API answers). For existing NGINX, serve `web/dist` and adapt
+`deploy/nginx.conf`'s `upstream api` block: `resolve` needs NGINX 1.27.3 or later,
+and `127.0.0.11` is Docker's DNS server, so point `resolver` at yours, or drop the
+`resolver` lines and `resolve` for a fixed address. Terminate HTTPS at your
+existing proxy before exposing this beyond localhost.
 
 Upgrading a database created before migration `0002` deletes every saved server
 route: `0002` drops and recreates the `progress` table to key it by layout

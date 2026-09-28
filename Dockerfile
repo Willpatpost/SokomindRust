@@ -39,7 +39,9 @@ COPY data data
 COPY --from=rust-build /app/web/wasm web/wasm
 RUN npm run build:web
 
-FROM nginx:stable-alpine AS web
+# deploy/nginx.conf's upstream needs 1.27.3+ ("resolve"). 1.30 is the
+# maintained stable branch; 1.28 has been legacy, without fixes, since 1.30.0.
+FROM nginx:1.30-alpine AS web
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=web-build /app/web/dist /usr/share/nginx/html
 EXPOSE 80
