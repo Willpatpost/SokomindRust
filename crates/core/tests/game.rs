@@ -1,4 +1,4 @@
-use sokomind_core::{Board, Cell, Game, MAX_ROUTE, State, Step, decode_direction};
+use sokomind_core::{Board, Cell, Game, MAX_ROUTE, ReplayError, State, Step, decode_direction};
 
 /// The robot can pace left and right forever without touching the box.
 const CORRIDOR: &str = "OOOOOOO\nO R XSO\nOOOOOOO";
@@ -22,9 +22,7 @@ fn routes_stop_at_max_route_moves() {
     assert!(!game.step(2));
     assert_eq!(game.moves() as usize, MAX_ROUTE);
     // One move over is refused atomically.
-    let error = game.replay(&format!("{full}L")).unwrap_err();
-    assert!(error.contains("too long"), "{error}");
-    assert!(error.contains(&MAX_ROUTE.to_string()), "{error}");
+    assert_eq!(game.replay(&format!("{full}L")), Err(ReplayError::TooLong));
     assert_eq!(game.moves() as usize, MAX_ROUTE);
     assert_eq!(game.actions(), full);
 }
@@ -35,9 +33,18 @@ fn at_replays_a_prefix_and_refuses_a_full_unsolved_one() {
         Ok(_) => panic!("{} actions should be refused", actions.len()),
         Err(error) => error,
     };
-    // Board and replay errors keep the wording of `Board::parse` and `replay`.
-    assert_eq!(refused("", ""), "Board rows cannot be empty");
-    assert_eq!(refused(CROSSING_PAIR, "U"), "Blocked action at index 0");
+    // A board error carries `Board::parse`'s message; replay errors keep
+    // the index of the refused action.
+    let unparsed = Board::parse("").err().unwrap();
+    assert_eq!(refused("", ""), ReplayError::InvalidBoard(unparsed));
+    assert_eq!(
+        refused(CROSSING_PAIR, "U"),
+        ReplayError::Blocked { index: 0 }
+    );
+    assert_eq!(
+        refused(CROSSING_PAIR, "DX"),
+        ReplayError::InvalidAction { index: 1 }
+    );
     // A played prefix leaves the game where its actions left it.
     let game = Game::at(CROSSING_PAIR, "DL").unwrap();
     assert_eq!((game.moves(), game.pushes(), game.actions()), (2, 1, "DL"));
@@ -45,24 +52,56 @@ fn at_replays_a_prefix_and_refuses_a_full_unsolved_one() {
     // Unsolved at full length, the position can only be extended past the
     // limit; one move shorter it still has room for exactly one more.
     let pacing = "LR".repeat(MAX_ROUTE / 2);
-    let error = refused(CORRIDOR, &pacing);
-    assert!(error.contains("replay limit"), "{error}");
-    assert!(error.contains(&MAX_ROUTE.to_string()), "{error}");
+    assert_eq!(refused(CORRIDOR, &pacing), ReplayError::PastLimit);
     let short = Game::at(CORRIDOR, &pacing[..MAX_ROUTE - 1]).unwrap();
     assert_eq!(short.moves() as usize, MAX_ROUTE - 1);
     assert!(short.check_extension(1).is_ok());
-    assert_eq!(short.check_extension(2), Err(error.clone()));
+    assert_eq!(short.check_extension(2), Err(ReplayError::PastLimit));
     // A position solved at full length needs no extension.
     let solved = Game::at(CORRIDOR, &format!("{}RR", &pacing[2..])).unwrap();
     assert!(solved.solved());
     assert_eq!(solved.moves() as usize, MAX_ROUTE);
     assert!(solved.check_extension(0).is_ok());
-    assert!(solved.check_extension(1).is_err());
+    assert_eq!(solved.check_extension(1), Err(ReplayError::PastLimit));
     // A fresh game has room for MAX_ROUTE moves, and a huge count cannot overflow.
     let fresh = Game::at(CORRIDOR, "").unwrap();
     assert!(fresh.check_extension(MAX_ROUTE as u32).is_ok());
-    assert!(fresh.check_extension(MAX_ROUTE as u32 + 1).is_err());
-    assert_eq!(fresh.check_extension(u32::MAX), Err(error));
+    assert_eq!(
+        fresh.check_extension(MAX_ROUTE as u32 + 1),
+        Err(ReplayError::PastLimit)
+    );
+    assert_eq!(fresh.check_extension(u32::MAX), Err(ReplayError::PastLimit));
+}
+
+/// The server and the web app show these texts, so the typed variants keep
+/// the wording the string errors had.
+#[test]
+fn replay_errors_keep_their_messages() {
+    let cases = [
+        (
+            ReplayError::InvalidBoard("Board rows cannot be empty".into()),
+            "Board rows cannot be empty",
+        ),
+        (
+            ReplayError::TooLong,
+            "Route is too long: the limit is 100000 moves",
+        ),
+        (
+            ReplayError::InvalidAction { index: 3 },
+            "Routes must use only U/D/L/R",
+        ),
+        (
+            ReplayError::Blocked { index: 7 },
+            "Blocked action at index 7",
+        ),
+        (
+            ReplayError::PastLimit,
+            "Position and route together exceed the 100000-move replay limit",
+        ),
+    ];
+    for (error, message) in cases {
+        assert_eq!(error.to_string(), message);
+    }
 }
 
 #[test]
@@ -119,6 +158,7 @@ fn rules_undo_and_atomic_replay() {
     };
     let mut game = Game::new(board.clone());
     let mut trail = vec![snapshot(&game)];
+    assert_eq!(decode_direction(b'X'), None);
     // The wall above the robot refuses the step and changes nothing.
     assert!(!game.step(0));
     assert_eq!(snapshot(&game), trail[0]);
@@ -144,8 +184,12 @@ fn rules_undo_and_atomic_replay() {
     assert_eq!(&snapshot(&game), trail.last().unwrap());
     // A route blocked by a wall, by the solved position, or by a bad action
     // is refused as a whole and leaves the finished game untouched.
-    for route in ["DLU", "DLDRU", "DX"] {
-        assert!(game.replay(route).is_err(), "{route}");
+    for (route, error) in [
+        ("DLU", ReplayError::Blocked { index: 2 }),
+        ("DLDRU", ReplayError::Blocked { index: 4 }),
+        ("DX", ReplayError::InvalidAction { index: 1 }),
+    ] {
+        assert_eq!(game.replay(route), Err(error), "{route}");
         assert_eq!(&snapshot(&game), trail.last().unwrap());
     }
 }

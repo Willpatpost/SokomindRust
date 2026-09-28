@@ -57,7 +57,9 @@ impl WasmGame {
         self.game.moves()
     }
     pub fn replay(&mut self, route: &str) -> Result<(), JsError> {
-        self.game.replay(route).map_err(|e| JsError::new(&e))
+        self.game
+            .replay(route)
+            .map_err(|e| JsError::new(&e.to_string()))
     }
     /// Whether box `index` sits on its matching goal. The renderer styles
     /// solved boxes from this, so no game rule lives in JavaScript.
@@ -81,7 +83,7 @@ impl WasmSearch {
         max_states: u32,
         memory_mib: u32,
     ) -> Result<WasmSearch, JsError> {
-        let game = Game::at(rows, actions).map_err(|e| JsError::new(&e))?;
+        let game = Game::at(rows, actions).map_err(|e| JsError::new(&e.to_string()))?;
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
         let (board, start) = game.into_parts();
         let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)
@@ -123,7 +125,9 @@ impl WasmSearch {
         ]
     }
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {
-        self.search.solution().map_err(|e| JsError::new(&e))
+        self.search
+            .solution()
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Diagnostic ABI: the counters in `SearchStats::FIELDS` order (unique

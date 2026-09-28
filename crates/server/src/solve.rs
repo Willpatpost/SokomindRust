@@ -6,7 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sokomind_core::Game;
-use sokomind_search::{Mode, Proof, Search, SearchStats, Status, StopReason};
+use sokomind_search::{
+    MAX_STATES_RANGE, MEMORY_MIB_RANGE, Mode, Proof, Search, SearchError, SearchStats, Status,
+    StopReason,
+};
 use std::{
     net::SocketAddr,
     ops::RangeInclusive,
@@ -18,19 +21,38 @@ use std::{
 };
 
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
-const MAX_STATES: RangeInclusive<usize> = 1..=sokomind_search::MAX_STATES;
-const MEMORY_MIB: RangeInclusive<usize> = 4..=64;
+/// Native solves take the search crate's state range as is and cap its
+/// memory range lower, so every accepted request is a valid search limit.
+const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=64;
+const _: () = assert!(*MEMORY_MIB.end() <= *MEMORY_MIB_RANGE.end());
 
 fn limits() -> Error {
     Error::bad(format!(
         "Server limits: {}..{} ms, {}..{} states, {}..{} MiB",
         TIME_MS.start(),
         TIME_MS.end(),
-        MAX_STATES.start(),
-        MAX_STATES.end(),
+        MAX_STATES_RANGE.start(),
+        MAX_STATES_RANGE.end(),
         MEMORY_MIB.start(),
         MEMORY_MIB.end()
     ))
+}
+/// Limits the caller chose are its error (400); an allocation the host
+/// could not grant is 503. Requests pass [`limits`] and a replay first, so
+/// `Limits` cannot occur here and `InvalidState` would be a server bug.
+fn search_error(error: SearchError) -> Error {
+    match error {
+        SearchError::Limits => limits(),
+        SearchError::BudgetTooSmall => Error::bad(error.to_string()),
+        SearchError::Allocation(_) => {
+            eprintln!("search allocation failed: {error}");
+            Error::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Search allocation failed; lower the memory budget",
+            )
+        }
+        SearchError::InvalidState(_) => Error::internal(error),
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,7 +76,7 @@ fn default_states() -> usize {
     sokomind_search::MAX_STATES
 }
 fn default_memory() -> usize {
-    64
+    *MEMORY_MIB.end()
 }
 #[derive(Serialize)]
 struct ProofBody {
@@ -107,7 +129,7 @@ pub async fn solve(
     ApiJson(request): ApiJson<Request>,
 ) -> Result<Json<ResultBody>, Error> {
     if !TIME_MS.contains(&request.time_ms)
-        || !MAX_STATES.contains(&request.max_states)
+        || !MAX_STATES_RANGE.contains(&request.max_states)
         || !MEMORY_MIB.contains(&request.memory_mib)
     {
         return Err(limits());
@@ -132,7 +154,8 @@ pub async fn solve(
         let _permit = permit;
         let started = Instant::now();
         let deadline = Duration::from_millis(request.time_ms);
-        let mut game = Game::at(&request.rows.join("\n"), &request.actions).map_err(Error::bad)?;
+        let mut game = Game::at(&request.rows.join("\n"), &request.actions)
+            .map_err(|error| Error::bad(error.to_string()))?;
         let initial_moves = game.moves();
         let initial_pushes = game.pushes();
         let mut search = Search::new(
@@ -142,12 +165,7 @@ pub async fn solve(
             request.max_states,
             request.memory_mib,
         )
-        .map_err(|_| {
-            Error::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Search allocation failed; lower the memory budget",
-            )
-        })?;
+        .map_err(search_error)?;
         while search.status() == Status::Running {
             if cancel.load(Ordering::Relaxed) {
                 search.stop(StopReason::Cancelled);
@@ -160,7 +178,8 @@ pub async fn solve(
         // Checked on the incumbent's length before reconstruction, which
         // would otherwise fail a route alone over the limit as a 500.
         if let Some(moves) = search.best_moves() {
-            game.check_extension(moves).map_err(Error::bad)?;
+            game.check_extension(moves)
+                .map_err(|error| Error::bad(error.to_string()))?;
         }
         let route = search.solution().map_err(Error::internal)?;
         let (moves, pushes) = if let Some(route) = &route {
@@ -198,4 +217,38 @@ pub async fn solve(
     .await
     .map_err(Error::internal)??;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sokomind_core::StateError;
+
+    #[test]
+    fn bad_limits_are_400_and_failed_allocations_503() {
+        let cases = [
+            (SearchError::Limits, StatusCode::BAD_REQUEST),
+            (SearchError::BudgetTooSmall, StatusCode::BAD_REQUEST),
+            (
+                SearchError::Allocation("node arena"),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                SearchError::InvalidState(StateError::PlayerOnWall { cell: 0 }),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+        for (error, status) in cases {
+            assert_eq!(search_error(error.clone()).0, status, "{error:?}");
+        }
+        // Out-of-range limits get the same message as the request check.
+        assert_eq!(search_error(SearchError::Limits).1, limits().1);
+    }
+
+    #[test]
+    fn request_limits_sit_inside_the_search_ranges() {
+        assert_eq!(default_states(), *MAX_STATES_RANGE.end());
+        assert!(MEMORY_MIB_RANGE.contains(MEMORY_MIB.start()));
+        assert!(MEMORY_MIB_RANGE.contains(&default_memory()));
+    }
 }

@@ -1,6 +1,7 @@
 use sokomind_core::{Board, NONE, StateError};
 use sokomind_search::{
-    MAX_STATES, Mode, Proof, Search, SearchError, SearchStats, Status, StopReason,
+    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, Mode, Proof, Search, SearchError, SearchStats,
+    SolutionError, Status, StopReason,
 };
 
 const BOARD: &str = "OOOOOO\nOR   O\nO XX O\nO SS O\nOOOOOO";
@@ -65,14 +66,63 @@ fn malformed_positions_return_structured_errors_in_every_mode() {
 }
 
 #[test]
-fn state_cap_matches_the_exported_constant() {
+fn limits_follow_the_exported_ranges() {
+    assert_eq!(*MAX_STATES_RANGE.end(), MAX_STATES);
     let board = Board::parse(BOARD).unwrap();
+    let (states, memory) = (MAX_STATES_RANGE, MEMORY_MIB_RANGE);
     for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
-        assert!(Search::new(board.clone(), board.initial(), mode, MAX_STATES, 4).is_ok());
-        assert!(matches!(
-            Search::new(board.clone(), board.initial(), mode, MAX_STATES + 1, 4),
-            Err(SearchError::Configuration(_))
-        ));
+        let search = |max_states: usize, memory_mib: usize| {
+            Search::new(board.clone(), board.initial(), mode, max_states, memory_mib)
+        };
+        assert!(search(*states.end(), *memory.start()).is_ok());
+        assert!(search(*states.start(), *memory.end()).is_ok());
+        for (max_states, memory_mib) in [
+            (states.end() + 1, *memory.start()),
+            (states.start() - 1, *memory.start()),
+            (100, memory.start() - 1),
+            (100, memory.end() + 1),
+        ] {
+            assert_eq!(
+                search(max_states, memory_mib).err(),
+                Some(SearchError::Limits),
+                "{mode:?}: {max_states} states, {memory_mib} MiB"
+            );
+        }
+    }
+}
+
+/// The web app shows these texts when the WASM search refuses to start or
+/// to hand over a route, so the typed variants keep the old wording.
+#[test]
+fn search_errors_keep_their_messages() {
+    let cases = [
+        (
+            SearchError::Limits.to_string(),
+            "Use 1..1000000 states and 4..256 MiB",
+        ),
+        (
+            SearchError::BudgetTooSmall.to_string(),
+            "Memory budget is too small",
+        ),
+        (
+            SearchError::Allocation("node arena").to_string(),
+            "Cannot reserve node arena",
+        ),
+        (
+            SolutionError::TooLong.to_string(),
+            "Solution exceeds the 100000-move replay limit",
+        ),
+        (
+            SolutionError::Replay.to_string(),
+            "Internal route replay failed",
+        ),
+        (
+            SolutionError::Counters.to_string(),
+            "Internal solution counters failed",
+        ),
+    ];
+    for (message, expected) in cases {
+        assert_eq!(message, expected);
     }
 }
 

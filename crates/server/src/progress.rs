@@ -97,7 +97,7 @@ pub async fn save(
         // until it finishes. Successful jobs return it across the DB write.
         let mut game = Game::new(board);
         // Never trust client counters, box coordinates, solved flags, or optimality claims.
-        game.replay(&route)?;
+        game.replay(&route).map_err(|error| error.to_string())?;
         if !game.solved() {
             return Err("Route does not solve the puzzle".to_string());
         }

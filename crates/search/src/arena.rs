@@ -1,5 +1,6 @@
 use crate::{
-    MAX_STATES, SearchStats, Status, deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
+    MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, Status, deadlock::Deadlock,
+    heuristic::Heuristic, reach::Reach,
 };
 use sokomind_core::{Cell, MAX_BOXES, MAX_ROUTE, NONE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
@@ -89,6 +90,16 @@ mod tests {
             assert_eq!(arena.stats.duplicate_improvements, 1);
             assert_eq!(arena.stats.reopened_states, 1);
         }
+    }
+
+    #[test]
+    fn a_budget_under_the_fixed_buffers_is_its_own_error() {
+        // The per-cell buffers of a million cells alone overflow 4 MiB.
+        assert_eq!(
+            Arena::new(1 << 20, 1, 10, 4).err(),
+            Some(SearchError::BudgetTooSmall)
+        );
+        assert_eq!(Arena::new(100, 1, 0, 4).err(), Some(SearchError::Limits));
     }
 
     #[test]
@@ -213,9 +224,9 @@ impl Arena {
         boxes: usize,
         max_states: usize,
         memory_mib: usize,
-    ) -> Result<Self, String> {
-        if !(1..=MAX_STATES).contains(&max_states) || !(4..=256).contains(&memory_mib) {
-            return Err(format!("Use 1..{MAX_STATES} states and 4..256 MiB"));
+    ) -> Result<Self, SearchError> {
+        if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
+            return Err(SearchError::Limits);
         }
         // Flood and deadlock buffers and the heuristic tables per cell, plus
         // the route and its string.
@@ -242,25 +253,25 @@ impl Arena {
             }
         }
         if low == 0 {
-            return Err("Memory budget is too small".into());
+            return Err(SearchError::BudgetTooSmall);
         }
         let limit = low;
         let mut nodes = Vec::new();
         nodes
             .try_reserve_exact(limit + 1)
-            .map_err(|_| "Cannot reserve node arena")?;
+            .map_err(|_| SearchError::Allocation("node arena"))?;
         let mut box_cells = Vec::new();
         box_cells
             .try_reserve_exact((limit + 1) * boxes)
-            .map_err(|_| "Cannot reserve box arena")?;
+            .map_err(|_| SearchError::Allocation("box arena"))?;
         let mut heap = BinaryHeap::new();
         heap.try_reserve_exact(limit + 1)
-            .map_err(|_| "Cannot reserve search queue")?;
+            .map_err(|_| SearchError::Allocation("search queue"))?;
         let table_size = ((limit + 1) * 2).next_power_of_two();
         let mut table = Vec::new();
         table
             .try_reserve_exact(table_size)
-            .map_err(|_| "Cannot reserve state table")?;
+            .map_err(|_| SearchError::Allocation("state table"))?;
         table.resize(table_size, NIL);
         Ok(Self {
             boxes,

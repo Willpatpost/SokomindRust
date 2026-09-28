@@ -11,11 +11,18 @@ mod reach;
 use engine::{Engine, Policy};
 use exact::ExactSearch;
 pub use proof::Proof;
-use sokomind_core::{Board, State, StateError};
+use sokomind_core::{Board, MAX_ROUTE, State, StateError};
+use std::ops::RangeInclusive;
 
 /// Largest per-search state limit accepted anywhere. At 64 MiB the memory
 /// budget binds first on boards with 14 or more boxes.
 pub const MAX_STATES: usize = 1_000_000;
+/// The `max_states` values [`Search::new`] accepts. Callers that validate
+/// limits themselves check against this range, never a copy of it.
+pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
+/// The `memory_mib` budgets [`Search::new`] accepts. A caller may cap
+/// requests lower but never below this range's start.
+pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -66,16 +73,34 @@ pub enum StopReason {
 }
 
 /// Search construction failed before any caller-supplied state was indexed.
+/// `InvalidState`, `Limits` and `BudgetTooSmall` are caller errors;
+/// `Allocation` is a resource failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
     InvalidState(StateError),
-    Configuration(String),
+    /// `max_states` is outside [`MAX_STATES_RANGE`] or `memory_mib` is
+    /// outside [`MEMORY_MIB_RANGE`].
+    Limits,
+    /// The memory budget cannot hold the board's fixed buffers and one
+    /// state.
+    BudgetTooSmall,
+    /// The allocator refused a buffer the budget allows; names the buffer.
+    Allocation(&'static str),
 }
 impl std::fmt::Display for SearchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidState(error) => error.fmt(f),
-            Self::Configuration(error) => f.write_str(error),
+            Self::Limits => write!(
+                f,
+                "Use {}..{} states and {}..{} MiB",
+                MAX_STATES_RANGE.start(),
+                MAX_STATES_RANGE.end(),
+                MEMORY_MIB_RANGE.start(),
+                MEMORY_MIB_RANGE.end()
+            ),
+            Self::BudgetTooSmall => f.write_str("Memory budget is too small"),
+            Self::Allocation(buffer) => write!(f, "Cannot reserve {buffer}"),
         }
     }
 }
@@ -83,10 +108,33 @@ impl std::error::Error for SearchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidState(error) => Some(error),
-            Self::Configuration(_) => None,
+            Self::Limits | Self::BudgetTooSmall | Self::Allocation(_) => None,
         }
     }
 }
+
+/// Why [`Search::solution`] could not hand over the incumbent's route. Only
+/// `TooLong` can follow from a caller's input; the others are internal
+/// invariant failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolutionError {
+    /// The route is longer than [`MAX_ROUTE`] moves, so no game replays it.
+    TooLong,
+    /// The rebuilt route did not replay from the start.
+    Replay,
+    /// The rebuilt route did not end solved at the incumbent's length.
+    Counters,
+}
+impl std::fmt::Display for SolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLong => write!(f, "Solution exceeds the {MAX_ROUTE}-move replay limit"),
+            Self::Replay => f.write_str("Internal route replay failed"),
+            Self::Counters => f.write_str("Internal solution counters failed"),
+        }
+    }
+}
+impl std::error::Error for SolutionError {}
 
 /// Counters from the current search. Generated records include immutable
 /// improved versions of existing states; unique states count table entries.
@@ -279,7 +327,7 @@ impl Search {
     pub fn advance(&mut self, pops: u32) {
         self.engine_mut().advance(pops);
     }
-    pub fn solution(&mut self) -> Result<Option<String>, String> {
+    pub fn solution(&mut self) -> Result<Option<String>, SolutionError> {
         self.engine_mut().solution()
     }
 }

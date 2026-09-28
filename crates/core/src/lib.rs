@@ -2,7 +2,7 @@
 mod board;
 mod game;
 pub use board::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, State, StateError, Step, WALL};
-pub use game::{Game, MAX_ROUTE, decode_direction};
+pub use game::{Game, MAX_ROUTE, ReplayError, decode_direction};
 
 pub const ACTIONS: &[u8; 4] = b"UDLR";
 pub const OPPOSITE: [usize; 4] = [1, 0, 3, 2];

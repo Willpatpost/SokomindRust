@@ -1,5 +1,5 @@
 use crate::{
-    SearchError, SearchStats, Status, StopReason,
+    SearchError, SearchStats, SolutionError, Status, StopReason,
     arena::{Arena, NIL, Node},
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
@@ -147,8 +147,7 @@ impl Engine {
             .map_err(SearchError::InvalidState)?;
         canonicalize(&board, &mut start);
         let cells = board.tiles().len();
-        let arena = Arena::new(cells, board.labels().len(), max_states, memory_mib)
-            .map_err(SearchError::Configuration)?;
+        let arena = Arena::new(cells, board.labels().len(), max_states, memory_mib)?;
         let heuristic = Heuristic::new(&board);
         let deadlock = Deadlock::new(&board);
         let mut search = Self {
@@ -450,16 +449,14 @@ impl Engine {
     /// Rebuilds the incumbent's full route and replays it from the start.
     /// Costs O(route) plus one flood per push, so call it once per improved
     /// incumbent.
-    pub fn solution(&mut self) -> Result<Option<String>, String> {
+    pub fn solution(&mut self) -> Result<Option<String>, SolutionError> {
         let Some(id) = self.incumbent else {
             return Ok(None);
         };
         let mut node = self.arena.node(id);
         let expected = node.g as usize;
         if expected > MAX_ROUTE {
-            return Err(format!(
-                "Solution exceeds the {MAX_ROUTE}-move replay limit"
-            ));
+            return Err(SolutionError::TooLong);
         }
         // Direction indices, back to front: each push, then the walk before it.
         let mut route = Vec::with_capacity(expected);
@@ -477,11 +474,11 @@ impl Engine {
         let mut replay = self.start;
         for &direction in &route {
             if self.board.step(&mut replay, direction as usize).is_none() {
-                return Err("Internal route replay failed".into());
+                return Err(SolutionError::Replay);
             }
         }
         if !self.board.solved(&replay) || route.len() != expected {
-            return Err("Internal solution counters failed".into());
+            return Err(SolutionError::Counters);
         }
         Ok(Some(
             route
