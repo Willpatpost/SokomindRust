@@ -11,6 +11,7 @@ export const catalog = JSON.parse(readFileSync(resolve(root, 'data/puzzles.json'
 export const catalogHash = createHash('sha256')
     .update(readFileSync(resolve(root, 'data/puzzles.json'), 'utf8').replace(/\r\n/g, '\n'))
     .digest('hex');
+// sokomind_search::SearchStats::FIELDS, in order (pinned by crates/search/tests/boundary.rs).
 export const diagnosticFields = [
   'unique_states', 'duplicate_improvements', 'reopened_states', 'stale_pops', 'peak_queue',
   'pruned_dead_cells', 'pruned_deadlocks', 'pruned_duplicates', 'pruned_assignment', 'pruned_bound',

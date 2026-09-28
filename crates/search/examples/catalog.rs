@@ -2,7 +2,7 @@
 //! fixed-node CI checks, WASM parity, and repeated timed measurements.
 use serde_json::{Value, json};
 use sokomind_core::{Board, Game};
-use sokomind_search::{Mode, Proof, Search, Status, StopReason};
+use sokomind_search::{Mode, Proof, Search, SearchStats, Status, StopReason};
 use std::{
     env,
     time::{Duration, Instant},
@@ -55,15 +55,25 @@ impl Options {
 }
 
 fn proof_value(proof: Option<Proof>) -> Value {
+    let kind = proof.map_or("none", Proof::kind);
     match proof {
-        None => json!({ "kind": "none" }),
-        Some(Proof::Optimal { moves }) => json!({ "kind": "optimal", "moves": moves }),
-        Some(Proof::Unsolvable) => json!({ "kind": "unsolvable" }),
+        None | Some(Proof::Unsolvable) => json!({ "kind": kind }),
+        Some(Proof::Optimal { moves }) => json!({ "kind": kind, "moves": moves }),
         Some(Proof::Bounded {
             lower_bound,
             upper_bound,
-        }) => json!({ "kind": "bounded", "lower": lower_bound, "upper": upper_bound }),
+        }) => json!({ "kind": kind, "lower": lower_bound, "upper": upper_bound }),
     }
+}
+
+/// The counters as one object keyed by [`SearchStats::FIELDS`].
+fn stats_value(stats: SearchStats) -> Value {
+    SearchStats::FIELDS
+        .into_iter()
+        .zip(stats.values())
+        .map(|(field, value)| (field.to_owned(), Value::from(value)))
+        .collect::<serde_json::Map<String, Value>>()
+        .into()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -129,7 +139,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     None
                 };
-                let stats = search.stats();
                 println!(
                     "{}",
                     json!({
@@ -140,11 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "expanded": search.expanded(), "generated": search.generated(), "reserved_bytes": search.reserved_bytes(),
                         "first_route_expanded": first_route_expanded, "first_route_generated": first_route_generated,
                         "setup_us": setup_us, "first_route_us": first_route_us, "search_us": search_us, "reconstruct_us": reconstruct_us,
-                        "stats": { "unique_states": stats.unique_states, "duplicate_improvements": stats.duplicate_improvements,
-                            "reopened_states": stats.reopened_states, "stale_pops": stats.stale_pops, "peak_queue": stats.peak_queue,
-                            "pruned_dead_cells": stats.pruned_dead_cells, "pruned_deadlocks": stats.pruned_deadlocks,
-                            "pruned_duplicates": stats.pruned_duplicates, "pruned_assignment": stats.pruned_assignment,
-                            "pruned_bound": stats.pruned_bound }
+                        "stats": stats_value(search.stats())
                     })
                 );
                 count += 1;

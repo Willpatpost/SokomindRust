@@ -1,4 +1,4 @@
-use sokomind_core::{Board, Game, MAX_ROUTE};
+use sokomind_core::{Board, Game};
 use sokomind_search::{Mode, Proof, Search, Status, StopReason};
 use wasm_bindgen::prelude::*;
 
@@ -81,16 +81,7 @@ impl WasmSearch {
         max_states: u32,
         memory_mib: u32,
     ) -> Result<WasmSearch, JsError> {
-        let board = Board::parse(rows).map_err(|e| JsError::new(&e))?;
-        let mut game = Game::new(board);
-        game.replay(actions).map_err(|e| JsError::new(&e))?;
-        // A full-length unsolved position can only be extended past the
-        // limit; refuse before spending the search budget on it.
-        if actions.len() >= MAX_ROUTE && !game.solved() {
-            return Err(JsError::new(&format!(
-                "Position and route together exceed the {MAX_ROUTE}-move replay limit"
-            )));
-        }
+        let game = Game::at(rows, actions).map_err(|e| JsError::new(&e))?;
         let mode = Mode::parse(mode).map_err(|e| JsError::new(&e))?;
         let (board, start) = game.into_parts();
         let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)
@@ -135,23 +126,17 @@ impl WasmSearch {
         self.search.solution().map_err(|e| JsError::new(&e))
     }
 
-    /// Diagnostic ABI: unique states, duplicate improvements, reopenings,
-    /// stale pops, peak queue, then dead-cell/deadlock/duplicate/assignment/
-    /// bound prunes. f64 exactly represents all counters under the node cap.
-    /// Kept separate from the small six-value progress ABI.
+    /// Diagnostic ABI: the counters in `SearchStats::FIELDS` order (unique
+    /// states, duplicate improvements, reopenings, stale pops, peak queue,
+    /// then dead-cell/deadlock/duplicate/assignment/bound prunes). f64
+    /// exactly represents all counters under the node cap. Kept separate
+    /// from the small six-value progress ABI.
     pub fn diagnostics(&self) -> Vec<f64> {
-        let stats = self.search.stats();
-        vec![
-            stats.unique_states as f64,
-            stats.duplicate_improvements as f64,
-            stats.reopened_states as f64,
-            stats.stale_pops as f64,
-            stats.peak_queue as f64,
-            stats.pruned_dead_cells as f64,
-            stats.pruned_deadlocks as f64,
-            stats.pruned_duplicates as f64,
-            stats.pruned_assignment as f64,
-            stats.pruned_bound as f64,
-        ]
+        self.search
+            .stats()
+            .values()
+            .into_iter()
+            .map(|value| value as f64)
+            .collect()
     }
 }

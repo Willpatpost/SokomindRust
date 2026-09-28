@@ -5,8 +5,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
-use sokomind_core::{Board, Game, MAX_ROUTE};
-use sokomind_search::{Mode, Proof, Search, Status, StopReason};
+use sokomind_core::Game;
+use sokomind_search::{Mode, Proof, Search, SearchStats, Status, StopReason};
 use std::{
     net::SocketAddr,
     ops::RangeInclusive,
@@ -30,11 +30,6 @@ fn limits() -> Error {
         MAX_STATES.end(),
         MEMORY_MIB.start(),
         MEMORY_MIB.end()
-    ))
-}
-fn route_limit() -> Error {
-    Error::bad(format!(
-        "Position and route together exceed the {MAX_ROUTE}-move replay limit"
     ))
 }
 
@@ -70,25 +65,19 @@ struct ProofBody {
     upper_bound: Option<u32>,
 }
 fn proof_body(proof: Option<Proof>) -> Option<ProofBody> {
-    Some(match proof? {
+    let proof = proof?;
+    let (lower_bound, upper_bound) = match proof {
         Proof::Bounded {
             lower_bound,
             upper_bound,
-        } => ProofBody {
-            kind: "bounded",
-            lower_bound: Some(lower_bound),
-            upper_bound: Some(upper_bound),
-        },
-        Proof::Optimal { moves } => ProofBody {
-            kind: "optimal",
-            lower_bound: Some(moves),
-            upper_bound: Some(moves),
-        },
-        Proof::Unsolvable => ProofBody {
-            kind: "unsolvable",
-            lower_bound: None,
-            upper_bound: None,
-        },
+        } => (Some(lower_bound), Some(upper_bound)),
+        Proof::Optimal { moves } => (Some(moves), Some(moves)),
+        Proof::Unsolvable => (None, None),
+    };
+    Some(ProofBody {
+        kind: proof.kind(),
+        lower_bound,
+        upper_bound,
     })
 }
 #[derive(Serialize)]
@@ -143,13 +132,7 @@ pub async fn solve(
         let _permit = permit;
         let started = Instant::now();
         let deadline = Duration::from_millis(request.time_ms);
-        let mut game = Game::new(Board::parse(&request.rows.join("\n")).map_err(Error::bad)?);
-        game.replay(&request.actions).map_err(Error::bad)?;
-        // A full-length unsolved position can only be extended past the
-        // limit; refuse before spending the search budget on it.
-        if request.actions.len() >= MAX_ROUTE && !game.solved() {
-            return Err(route_limit());
-        }
+        let mut game = Game::at(&request.rows.join("\n"), &request.actions).map_err(Error::bad)?;
         let initial_moves = game.moves();
         let initial_pushes = game.pushes();
         let mut search = Search::new(
@@ -176,11 +159,8 @@ pub async fn solve(
         }
         // Checked on the incumbent's length before reconstruction, which
         // would otherwise fail a route alone over the limit as a 500.
-        if search
-            .best_moves()
-            .is_some_and(|moves| request.actions.len() + moves as usize > MAX_ROUTE)
-        {
-            return Err(route_limit());
+        if let Some(moves) = search.best_moves() {
+            game.check_extension(moves).map_err(Error::bad)?;
         }
         let route = search.solution().map_err(Error::internal)?;
         let (moves, pushes) = if let Some(route) = &route {
@@ -207,18 +187,12 @@ pub async fn solve(
             reserved_bytes: search.reserved_bytes(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             proof: proof_body(search.proof()),
-            stats: serde_json::json!({
-                "unique_states": stats.unique_states,
-                "duplicate_improvements": stats.duplicate_improvements,
-                "reopened_states": stats.reopened_states,
-                "stale_pops": stats.stale_pops,
-                "peak_queue": stats.peak_queue,
-                "pruned_dead_cells": stats.pruned_dead_cells,
-                "pruned_deadlocks": stats.pruned_deadlocks,
-                "pruned_duplicates": stats.pruned_duplicates,
-                "pruned_assignment": stats.pruned_assignment,
-                "pruned_bound": stats.pruned_bound,
-            }),
+            stats: SearchStats::FIELDS
+                .into_iter()
+                .zip(stats.values())
+                .map(|(field, value)| (field.to_owned(), serde_json::Value::from(value)))
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+                .into(),
         })
     })
     .await

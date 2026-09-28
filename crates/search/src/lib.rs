@@ -117,6 +117,55 @@ pub struct SearchStats {
     /// Popped nodes or children rejected by an incumbent cost bound.
     pub pruned_bound: u64,
 }
+/// Length shared by [`SearchStats::FIELDS`] and [`SearchStats::values`], so
+/// neither list can grow without the other.
+const STAT_COUNT: usize = 10;
+impl SearchStats {
+    /// The counters' wire names in declaration order. The server's `stats`
+    /// object, the WASM diagnostics ABI and the benchmark corpus all pair
+    /// these with [`Self::values`].
+    pub const FIELDS: [&'static str; STAT_COUNT] = [
+        "unique_states",
+        "duplicate_improvements",
+        "reopened_states",
+        "stale_pops",
+        "peak_queue",
+        "pruned_dead_cells",
+        "pruned_deadlocks",
+        "pruned_duplicates",
+        "pruned_assignment",
+        "pruned_bound",
+    ];
+    /// The counters in [`Self::FIELDS`] order, widened to u64. The
+    /// destructure names every field, so a new counter fails to compile
+    /// until it is listed here and in `FIELDS`.
+    pub fn values(&self) -> [u64; STAT_COUNT] {
+        let Self {
+            unique_states,
+            duplicate_improvements,
+            reopened_states,
+            stale_pops,
+            peak_queue,
+            pruned_dead_cells,
+            pruned_deadlocks,
+            pruned_duplicates,
+            pruned_assignment,
+            pruned_bound,
+        } = *self;
+        [
+            u64::from(unique_states),
+            u64::from(duplicate_improvements),
+            u64::from(reopened_states),
+            u64::from(stale_pops),
+            u64::from(peak_queue),
+            pruned_dead_cells,
+            pruned_deadlocks,
+            pruned_duplicates,
+            pruned_assignment,
+            pruned_bound,
+        ]
+    }
+}
 
 /// Mode dispatch over one engine. `optimal` runs the crate's exact search,
 /// the only code that may produce a [`Proof`]; fast and quality run the same

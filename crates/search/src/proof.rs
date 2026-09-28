@@ -11,3 +11,14 @@ pub enum Proof {
     /// No route exists.
     Unsolvable,
 }
+impl Proof {
+    /// The wire name: the server's `proof.kind` and the benchmark corpus's
+    /// `proof.kind`, which spells a missing proof `"none"`.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Bounded { .. } => "bounded",
+            Self::Optimal { .. } => "optimal",
+            Self::Unsolvable => "unsolvable",
+        }
+    }
+}

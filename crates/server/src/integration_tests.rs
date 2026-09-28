@@ -78,8 +78,19 @@ async fn router_solves_valid_invalid_and_busy_requests() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["route"], "D");
     assert_eq!(body["moves"], 1);
-    assert_eq!(body["proof"]["kind"], "optimal");
+    assert_eq!(
+        body["proof"],
+        json!({"kind": "optimal", "lower_bound": 1, "upper_bound": 1})
+    );
     assert!(body["stats"]["unique_states"].as_u64().unwrap() >= 1);
+    // The stats object carries exactly the shared counter names, all integers.
+    let stats = body["stats"].as_object().unwrap();
+    let mut keys: Vec<&str> = stats.keys().map(String::as_str).collect();
+    let mut fields = sokomind_search::SearchStats::FIELDS;
+    keys.sort_unstable();
+    fields.sort_unstable();
+    assert_eq!(keys, fields);
+    assert!(stats.values().all(Value::is_u64));
     assert_eq!(state.slots.available_permits(), 1);
 }
 

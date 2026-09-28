@@ -91,6 +91,30 @@ impl Game {
         self.actions.clear();
         self.pushes = 0;
     }
+    /// The position after strictly replaying `actions` on the board parsed
+    /// from `rows`: the one entry point for callers that search from a
+    /// played prefix. A full-length unsolved position can only be extended
+    /// past [`MAX_ROUTE`], so it is refused here, before a caller spends a
+    /// search budget on it.
+    pub fn at(rows: &str, actions: &str) -> Result<Self, String> {
+        let mut game = Self::new(Board::parse(rows)?);
+        game.replay(actions)?;
+        if !game.solved() {
+            game.check_extension(1)?;
+        }
+        Ok(game)
+    }
+    /// Errs, with the replay-limit message, when `moves` more moves would
+    /// take this game's route past [`MAX_ROUTE`].
+    pub fn check_extension(&self, moves: u32) -> Result<(), String> {
+        // `step` never lets the history outgrow the limit, so this cannot underflow.
+        if moves as usize > MAX_ROUTE - self.history.len() {
+            return Err(format!(
+                "Position and route together exceed the {MAX_ROUTE}-move replay limit"
+            ));
+        }
+        Ok(())
+    }
     /// Atomic strict replay: malformed or blocked routes leave the game unchanged.
     pub fn replay(&mut self, route: &str) -> Result<(), String> {
         if route.len() > MAX_ROUTE {
