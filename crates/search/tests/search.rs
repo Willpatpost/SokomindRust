@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game, State};
-use sokomind_search::{ExactSearch, Mode, Proof, Search, Status, StopReason};
+use sokomind_search::{Mode, Proof, Search, Status, StopReason};
 use std::collections::{HashSet, VecDeque};
 
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
@@ -395,14 +395,14 @@ fn limited_optimal_bounds_never_pass_the_optimum() {
 #[test]
 fn capped_optimal_bound_keeps_the_interrupted_f() {
     let board = Board::parse(TWO).unwrap();
-    let root = ExactSearch::new(board.clone(), board.initial(), 20_000, 8)
+    let root = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8)
         .unwrap()
         .lower_bound();
     assert!(
         root.is_some_and(|bound| (2..=20).contains(&bound)),
         "{root:?}"
     );
-    let mut capped = ExactSearch::new(board.clone(), board.initial(), 1, 8).unwrap();
+    let mut capped = Search::new(board.clone(), board.initial(), Mode::Optimal, 1, 8).unwrap();
     capped.advance(32);
     assert_eq!(capped.status(), Status::StateLimit);
     assert_eq!((capped.expanded(), capped.generated()), (1, 1));
@@ -446,12 +446,12 @@ fn engines_agree_with_bfs_on_generated_boards() {
 
 /// Frozen move-optima ported from the reference solver's fixtures
 /// (`tests/fixtures/solver-v2/{known-optima,benchmark-corpus,tunnel-soundness,
-/// pattern-deadlock-soundness}.ts`), run through the exact kernel directly.
-/// Each move count is the reference's independent step-oracle output; push
-/// counts are deliberately not asserted because move-optimal search does not
-/// optimize them. The large catalog boards, whose optima the reference only
-/// established with machinery this port does not carry yet, stay out of the
-/// gate until the exact kernel can reach them.
+/// pattern-deadlock-soundness}.ts`), run through the exact kernel as
+/// `Mode::Optimal`. Each move count is the reference's independent
+/// step-oracle output; push counts are deliberately not asserted because
+/// move-optimal search does not optimize them. The large catalog boards, whose
+/// optima the reference only established with machinery this port does not
+/// carry yet, stay out of the gate until the exact kernel can reach them.
 mod fixtures {
     use super::*;
 
@@ -472,20 +472,27 @@ mod fixtures {
 
     fn check(name: &str, rows: &str, optimum: Option<u32>) {
         let board = Board::parse(rows).unwrap();
-        let mut engine = ExactSearch::new(board.clone(), board.initial(), 1_000_000, 256).unwrap();
-        while engine.status() == Status::Running {
-            engine.advance(4096);
+        let mut search = Search::new(
+            board.clone(),
+            board.initial(),
+            Mode::Optimal,
+            1_000_000,
+            256,
+        )
+        .unwrap();
+        while search.status() == Status::Running {
+            search.advance(4096);
         }
         let finished = if optimum.is_some() {
             Status::Solved
         } else {
             Status::Exhausted
         };
-        assert_eq!(engine.status(), finished, "{name}");
-        assert_eq!(engine.best_moves(), optimum, "{name}");
+        assert_eq!(search.status(), finished, "{name}");
+        assert_eq!(search.best_moves(), optimum, "{name}");
         let proof = optimum.map_or(Proof::Unsolvable, |moves| Proof::Optimal { moves });
-        assert_eq!(engine.proof(), Some(proof), "{name}");
-        let route = engine.solution().unwrap();
+        assert_eq!(search.proof(), Some(proof), "{name}");
+        let route = search.solution().unwrap();
         match optimum {
             Some(moves) => assert_route(&board, &route.expect(name), moves, name),
             None => assert_eq!(route, None, "{name}"),

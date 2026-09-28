@@ -9,7 +9,7 @@ mod proof;
 mod reach;
 
 use engine::{Engine, Policy};
-pub use exact::ExactSearch;
+use exact::ExactSearch;
 pub use proof::Proof;
 use sokomind_core::{Board, State, StateError};
 
@@ -118,14 +118,35 @@ pub struct SearchStats {
     pub pruned_bound: u64,
 }
 
-/// Mode dispatch over one engine. `optimal` runs [`ExactSearch`], the only
-/// type that may produce a [`Proof`]; fast and quality run the same engine
-/// with a weighted policy and always report unknown optimality. The shared
-/// methods are forwarded without exposing the engine.
+/// Mode dispatch over one engine. `optimal` runs the crate's exact search,
+/// the only code that may produce a [`Proof`]; fast and quality run the same
+/// engine with a weighted policy and always report unknown optimality. The
+/// shared methods are forwarded without exposing the engine, so callers
+/// cannot reach or replace an optimal search's engine:
+///
+/// ```compile_fail
+/// # use sokomind_core::Board;
+/// # use sokomind_search::{Mode, Search};
+/// # let board = Board::parse("ORXS").unwrap();
+/// # let mut exact = Search::new(board.clone(), board.initial(), Mode::Optimal, 100, 4).unwrap();
+/// # let mut fast = Search::new(board.clone(), board.initial(), Mode::Fast, 100, 4).unwrap();
+/// std::mem::swap(&mut *exact, &mut *fast);
+/// ```
+///
+/// A caller interrupts a search only with a [`StopReason`], never with a
+/// verdict:
+///
+/// ```compile_fail
+/// # use sokomind_core::Board;
+/// # use sokomind_search::{Mode, Search, Status};
+/// # let board = Board::parse("ORXS").unwrap();
+/// # let mut exact = Search::new(board.clone(), board.initial(), Mode::Optimal, 100, 4).unwrap();
+/// exact.stop(Status::Exhausted);
+/// ```
 pub struct Search(Kind);
 enum Kind {
     Exact(ExactSearch),
-    Bounded(Engine),
+    Weighted(Engine),
 }
 impl Search {
     pub fn new(
@@ -137,14 +158,14 @@ impl Search {
     ) -> Result<Self, SearchError> {
         let kind = match mode {
             Mode::Optimal => Kind::Exact(ExactSearch::new(board, start, max_states, memory_mib)?),
-            Mode::Fast => Kind::Bounded(Engine::new(
+            Mode::Fast => Kind::Weighted(Engine::new(
                 board,
                 start,
                 Policy::FAST,
                 max_states,
                 memory_mib,
             )?),
-            Mode::Quality => Kind::Bounded(Engine::new(
+            Mode::Quality => Kind::Weighted(Engine::new(
                 board,
                 start,
                 Policy::FAST_THEN_QUALITY_RESTART,
@@ -155,18 +176,18 @@ impl Search {
         Ok(Self(kind))
     }
     /// Live certified lower bound on the optimal move count from the start;
-    /// the bounded modes claim none.
+    /// the weighted modes claim none.
     pub fn lower_bound(&self) -> Option<u32> {
         match &self.0 {
             Kind::Exact(search) => search.lower_bound(),
-            Kind::Bounded(_) => None,
+            Kind::Weighted(_) => None,
         }
     }
     /// Terminal proof; `None` while running or without a sound certificate.
     pub fn proof(&self) -> Option<Proof> {
         match &self.0 {
             Kind::Exact(search) => search.proof(),
-            Kind::Bounded(_) => None,
+            Kind::Weighted(_) => None,
         }
     }
 }
@@ -175,13 +196,13 @@ impl Search {
     fn engine(&self) -> &Engine {
         match &self.0 {
             Kind::Exact(search) => search.engine(),
-            Kind::Bounded(search) => search,
+            Kind::Weighted(search) => search,
         }
     }
     fn engine_mut(&mut self) -> &mut Engine {
         match &mut self.0 {
             Kind::Exact(search) => search.engine_mut(),
-            Kind::Bounded(search) => search,
+            Kind::Weighted(search) => search,
         }
     }
 

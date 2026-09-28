@@ -103,7 +103,7 @@ pub(crate) struct Engine {
     heuristic: Heuristic,
     reach: Reach,
     deadlock: Deadlock,
-    pub(crate) arena: Arena,
+    arena: Arena,
     status: Status,
     expanded: u32,
     stats: SearchStats,
@@ -113,7 +113,7 @@ pub(crate) struct Engine {
     /// g + queued h (at least 1) of a node whose expansion a limit cut short.
     /// Under an admissible h, no route through its unpushed successors along
     /// this path is shorter, so the exact frontier must include it.
-    pub(crate) interrupted_f: Option<u64>,
+    interrupted_f: Option<u64>,
 }
 
 impl Engine {
@@ -200,6 +200,18 @@ impl Engine {
             peak_queue: arena.peak_queue,
             ..self.stats
         }
+    }
+    /// Minimum f over everything not yet expanded, or `u64::MAX` when the
+    /// queue is empty and no expansion was cut short. An interrupted
+    /// expansion contributes its own f, which bounds its unpushed successors.
+    /// Queue keys are `g + weight * h`, so this is a lower bound only under
+    /// the exact policy's weight of 1; only [`crate::ExactSearch`] reads it.
+    pub(crate) fn frontier(&self) -> u64 {
+        debug_assert_eq!(self.policy.weight, 1, "weighted keys bound nothing");
+        self.arena
+            .min_f()
+            .unwrap_or(u64::MAX)
+            .min(self.interrupted_f.unwrap_or(u64::MAX))
     }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach.

@@ -1,7 +1,5 @@
 use sokomind_core::{Board, NONE, StateError};
-use sokomind_search::{
-    ExactSearch, MAX_STATES, Mode, Proof, Search, SearchError, Status, StopReason,
-};
+use sokomind_search::{MAX_STATES, Mode, Proof, Search, SearchError, Status, StopReason};
 
 const BOARD: &str = "OOOOOO\nOR   O\nO XX O\nO SS O\nOOOOOO";
 
@@ -61,8 +59,6 @@ fn malformed_positions_return_structured_errors_in_every_mode() {
             assert!(matches!(Search::new(board.clone(), state, mode, 100, 4),
                 Err(SearchError::InvalidState(error)) if error == expected));
         }
-        assert!(matches!(ExactSearch::new(board.clone(), state, 100, 4),
-            Err(SearchError::InvalidState(error)) if error == expected));
     }
 }
 
@@ -82,7 +78,7 @@ fn state_cap_matches_the_exported_constant() {
 fn interruption_cannot_manufacture_a_verdict_in_release() {
     let board = Board::parse("OOOOO\nO R O\nO A O\nO a O\nOOOOO").unwrap();
     for reason in [StopReason::Cancelled, StopReason::TimeLimit] {
-        let mut exact = ExactSearch::new(board.clone(), board.initial(), 100, 4).unwrap();
+        let mut exact = Search::new(board.clone(), board.initial(), Mode::Optimal, 100, 4).unwrap();
         exact.stop(reason);
         exact.advance(100);
         assert_eq!(exact.proof(), None);
@@ -92,7 +88,7 @@ fn interruption_cannot_manufacture_a_verdict_in_release() {
             Status::Cancelled | Status::TimeLimit
         ));
     }
-    let mut exact = ExactSearch::new(board.clone(), board.initial(), 100, 4).unwrap();
+    let mut exact = Search::new(board.clone(), board.initial(), Mode::Optimal, 100, 4).unwrap();
     exact.advance(100);
     exact.stop(StopReason::Cancelled);
     assert_eq!(exact.status(), Status::Solved);
