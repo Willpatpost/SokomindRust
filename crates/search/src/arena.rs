@@ -507,8 +507,10 @@ impl Arena {
         // One spare node keeps a solution found at the exact limit reachable.
         let bytes_for = |count: usize| {
             fixed_bytes
-                + (count + 1)
-                    * (size_of::<Record>() + boxes * size_of::<Cell>() + size_of::<Entry>())
+                + (count + 1) * (size_of::<Record>() + boxes * size_of::<Cell>())
+                // The queue holds at most one live entry per record, a
+                // partial expansion's re-queue included (5.3 S2).
+                + (count + 1) * size_of::<Entry>()
                 + ((count + 1) * 2).next_power_of_two() * size_of::<u32>()
         };
         // Exact largest limit that fits the budget, instead of stepping down 10%.
@@ -534,6 +536,8 @@ impl Arena {
         box_cells
             .try_reserve_exact((limit + 1) * boxes)
             .map_err(|_| SearchError::Allocation("box arena"))?;
+        // Every enqueue follows an insert or replaces the entry just popped,
+        // so heap.len() <= nodes.len() <= limit + 1 and this never grows.
         let mut heap = BinaryHeap::new();
         heap.try_reserve_exact(limit + 1)
             .map_err(|_| SearchError::Allocation("search queue"))?;

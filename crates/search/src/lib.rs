@@ -1,5 +1,17 @@
 //! Incremental, platform-independent push A*. The arena, queue, table and
 //! flood buffers are reserved once.
+// The PEA* slack is one const (5.3 S2): exactly one C, never the bare switch.
+#[cfg(any(
+    all(feature = "pea0", feature = "pea1"),
+    all(feature = "pea0", feature = "pea2"),
+    all(feature = "pea1", feature = "pea2"),
+))]
+compile_error!("features pea0, pea1 and pea2 are mutually exclusive");
+#[cfg(all(
+    feature = "pea",
+    not(any(feature = "pea0", feature = "pea1", feature = "pea2")),
+))]
+compile_error!("feature pea needs a slack: enable pea0, pea1 or pea2");
 mod arena;
 mod deadlock;
 mod engine;
@@ -313,6 +325,12 @@ impl Search {
     }
     pub fn expanded(&self) -> u32 {
         self.engine().expanded()
+    }
+    /// Pops that re-expanded a partially expanded record (5.3 S2). Always
+    /// 0 for Fast and Quality; `expanded` keeps counting distinct records.
+    #[cfg(feature = "pea")]
+    pub fn reexpansions(&self) -> u32 {
+        self.engine().reexpansions()
     }
     pub fn generated(&self) -> u32 {
         self.engine().generated()

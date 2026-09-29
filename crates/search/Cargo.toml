@@ -13,3 +13,8 @@ serde_json.workspace = true
 [features]
 o2 = []
 o3b = []
+# Internal: enabled only through pea0/pea1/pea2.
+pea = []
+pea0 = ["pea"]
+pea1 = ["pea"]
+pea2 = ["pea"]

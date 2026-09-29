@@ -139,19 +139,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     None
                 };
-                println!(
-                    "{}",
-                    json!({
-                        "id": id, "fingerprint": board.fingerprint(), "mode": name, "sample": sample,
-                        "max_states": options.states, "memory_mib": options.memory,
-                        "status": search.status().as_str(), "moves": search.best_moves(), "pushes": pushes,
-                        "route": route, "proof": proof_value(search.proof()), "lower_bound": search.lower_bound(),
-                        "expanded": search.expanded(), "generated": search.generated(), "reserved_bytes": search.reserved_bytes(),
-                        "first_route_expanded": first_route_expanded, "first_route_generated": first_route_generated,
-                        "setup_us": setup_us, "first_route_us": first_route_us, "search_us": search_us, "reconstruct_us": reconstruct_us,
-                        "stats": stats_value(search.stats())
-                    })
-                );
+                let record = json!({
+                    "id": id, "fingerprint": board.fingerprint(), "mode": name, "sample": sample,
+                    "max_states": options.states, "memory_mib": options.memory,
+                    "status": search.status().as_str(), "moves": search.best_moves(), "pushes": pushes,
+                    "route": route, "proof": proof_value(search.proof()), "lower_bound": search.lower_bound(),
+                    "expanded": search.expanded(), "generated": search.generated(), "reserved_bytes": search.reserved_bytes(),
+                    "first_route_expanded": first_route_expanded, "first_route_generated": first_route_generated,
+                    "setup_us": setup_us, "first_route_us": first_route_us, "search_us": search_us, "reconstruct_us": reconstruct_us,
+                    "stats": stats_value(search.stats())
+                });
+                // PEA* passes are a measurement only; the key exists only
+                // with the switch on, so default records stay byte-identical.
+                #[cfg(feature = "pea")]
+                let record = {
+                    let mut record = record;
+                    record["reexpanded"] = json!(search.reexpansions());
+                    record
+                };
+                println!("{record}");
                 count += 1;
             }
         }

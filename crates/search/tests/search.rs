@@ -584,3 +584,97 @@ fn stand_walk_raises_the_root_bound() {
         );
     }
 }
+
+/// The goal needs a walk around the box, so its f (6) is far past the root's
+/// (2) and outside the root's first window at every C in 0..=2. The
+/// pushed-away child (f = 4) is withheld at C = 0 and 1 and stored at C = 2.
+const DETOUR_GOAL: &str = "OOOOOOO\nO     O\nORSX  O\nO     O\nOOOOOOO";
+
+/// A solved child is stored when generated, whatever its f and whatever the
+/// state limit: partial expansion never withholds it, and an exact-limit
+/// goal takes the spare node.
+#[test]
+fn a_solved_child_is_kept_whatever_its_f() {
+    let board = Board::parse(DETOUR_GOAL).unwrap();
+    assert_eq!(bfs(&board), Some(6));
+    // 5.6 O3b prunes the pushed-away child, whose keeper still has to walk
+    // to the only legal push's stand (g + h + 2 >= 6), so two states prove.
+    let proves = if cfg!(feature = "o3b") { 2 } else { 3 };
+    for max_states in 1..=4 {
+        let context = format!("max_states {max_states}");
+        let mut search =
+            Search::new(board.clone(), board.initial(), Mode::Optimal, max_states, 8).unwrap();
+        assert!(
+            search.lower_bound().is_some_and(|root| root + 2 < 6),
+            "the goal must lie outside the first window at C = 2: {context}"
+        );
+        search.advance(1);
+        assert_eq!(
+            (search.expanded(), search.best_moves()),
+            (1, Some(6)),
+            "{context}"
+        );
+        while search.status() == Status::Running {
+            search.advance(8);
+        }
+        assert_consistent(&board, &mut search, Some(6), &context);
+        if max_states >= proves {
+            assert_eq!(search.status(), Status::Solved, "{context}");
+            assert_eq!(
+                search.proof(),
+                Some(Proof::Optimal { moves: 6 }),
+                "{context}"
+            );
+        } else {
+            assert_eq!(search.status(), Status::StateLimit, "{context}");
+            assert!(
+                matches!(search.proof(), Some(Proof::Bounded { upper_bound: 6, .. })),
+                "{context}"
+            );
+        }
+    }
+}
+
+/// Partial expansion touches Exact only and keeps every accounting identity:
+/// re-passes are counted apart from `expanded`, and each record still has
+/// at most one live queue entry.
+#[cfg(feature = "pea")]
+#[test]
+fn partial_expansion_is_exact_only_and_keeps_the_accounting() {
+    let reordered = REORDERED.map(|(rows, moves)| (rows, Some(moves)));
+    for (rows, optimum) in BOARDS.into_iter().chain(reordered) {
+        let board = Board::parse(rows).unwrap();
+        for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
+            let context = format!("{mode:?} {rows:?}");
+            let mut search = drive(&board, mode, 20_000, optimum, &context);
+            assert_consistent(&board, &mut search, optimum, &context);
+            if mode != Mode::Optimal {
+                assert_eq!(search.reexpansions(), 0, "{context}");
+            }
+            let stats = search.stats();
+            assert_eq!(
+                stats.unique_states + stats.duplicate_improvements,
+                search.generated(),
+                "{context}"
+            );
+            assert!(search.expanded() <= search.generated(), "{context}");
+            assert!(stats.peak_queue <= search.generated(), "{context}");
+            assert!(
+                stats.stale_pops <= stats.duplicate_improvements,
+                "{context}"
+            );
+            assert!(
+                stats.reopened_states <= stats.duplicate_improvements,
+                "{context}"
+            );
+        }
+    }
+    // TWO withholds at least one child at every C in 0..=2.
+    let board = Board::parse(TWO).unwrap();
+    let mut two = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8).unwrap();
+    while two.status() == Status::Running {
+        two.advance(8);
+    }
+    assert_eq!(two.proof(), Some(Proof::Optimal { moves: 20 }));
+    assert!(two.reexpansions() > 0);
+}
