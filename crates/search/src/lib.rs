@@ -7,6 +7,8 @@ mod exact;
 mod heuristic;
 mod proof;
 mod reach;
+#[cfg(feature = "o2")]
+mod sides;
 
 use engine::{Engine, Policy};
 use exact::ExactSearch;

@@ -3,9 +3,12 @@ use std::mem::size_of;
 
 const INF: i32 = 1_000_000;
 // INF exceeds every finite matching, and a full row of INF costs cannot
-// overflow i32.
+// overflow i32. A push distance stays below 4 * MAX_CELLS: the plain table's
+// is below MAX_CELLS, and the side-aware one (`o2`) counts (cell, side)
+// states. A dual repair's augmenting path can cost one row more than a full
+// matching, so MAX_BOXES + 1 rows of the largest distance stay below INF.
 const _: () = assert!(
-    MAX_BOXES * MAX_CELLS < INF as usize
+    (MAX_BOXES + 1) * 4 * MAX_CELLS < INF as usize
         && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
 );
 // Duals indices fit a byte.
@@ -80,13 +83,59 @@ impl ParentGroup {
     };
 }
 
+/// Plain reverse-push distances, cell-major per goal column: the fewest
+/// pushes a lone box needs from each cell when the keeper may stand anywhere,
+/// `NONE` when unreachable. One push changes an entry by at most one, so the
+/// estimate over this table is consistent.
+#[cfg(any(test, not(feature = "o2")))]
+pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16> {
+    let goals = columns.len();
+    let mut distances = vec![NONE; board.tiles().len() * goals];
+    let mut queue = Vec::with_capacity(board.tiles().len());
+    for (column, &(goal, _)) in columns.iter().enumerate() {
+        let at = |cell: Cell| cell as usize * goals + column;
+        queue.clear();
+        queue.push(goal);
+        distances[at(goal)] = 0;
+        let mut head = 0;
+        while head < queue.len() {
+            let cell = queue[head];
+            head += 1;
+            for direction in 0..4 {
+                let previous = board.neighbors()[cell as usize][direction];
+                if previous == NONE {
+                    continue;
+                }
+                let support = board.neighbors()[previous as usize][direction];
+                if support != NONE && distances[at(previous)] == NONE {
+                    distances[at(previous)] = distances[at(cell)] + 1;
+                    queue.push(previous);
+                }
+            }
+        }
+    }
+    distances
+}
+
 impl Heuristic {
     /// The dead mask plus one u16 push distance per goal column; there is
     /// one goal per box.
     pub(crate) const fn bytes_per_cell(boxes: usize) -> usize {
         size_of::<u32>() + boxes * size_of::<u16>()
     }
+    /// The estimator over the build's push-distance table: plain, or
+    /// side-aware with the `o2` feature (5.2).
     pub(crate) fn new(board: &Board) -> Self {
+        #[cfg(not(feature = "o2"))]
+        let table = plain_distances;
+        #[cfg(feature = "o2")]
+        let table = crate::sides::push_distances;
+        Self::with_table(board, table)
+    }
+    /// The estimator over `table`, which maps the board and its goal columns
+    /// in group order to cell-major per-box push distances, `NONE` when
+    /// unreachable. Estimates are admissible when every entry is.
+    pub(crate) fn with_table(board: &Board, table: fn(&Board, &[(Cell, u8)]) -> Vec<u16>) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
@@ -103,30 +152,7 @@ impl Heuristic {
         let mut columns = board.goals().to_vec();
         columns.sort_by_key(|&(_, label)| label);
         let goals = columns.len();
-        let mut distances = vec![NONE; board.tiles().len() * goals];
-        let mut queue = Vec::with_capacity(board.tiles().len());
-        for (column, &(goal, _)) in columns.iter().enumerate() {
-            let at = |cell: Cell| cell as usize * goals + column;
-            queue.clear();
-            queue.push(goal);
-            distances[at(goal)] = 0;
-            let mut head = 0;
-            while head < queue.len() {
-                let cell = queue[head];
-                head += 1;
-                for direction in 0..4 {
-                    let previous = board.neighbors()[cell as usize][direction];
-                    if previous == NONE {
-                        continue;
-                    }
-                    let support = board.neighbors()[previous as usize][direction];
-                    if support != NONE && distances[at(previous)] == NONE {
-                        distances[at(previous)] = distances[at(cell)] + 1;
-                        queue.push(previous);
-                    }
-                }
-            }
-        }
+        let distances = table(board, &columns);
         let dead = (0..board.tiles().len())
             .map(|cell| {
                 let row = &distances[cell * goals..(cell + 1) * goals];

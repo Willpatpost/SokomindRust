@@ -75,8 +75,9 @@ impl Policy {
         then: None,
         restart: None,
     };
-    /// First route wins. Without reopening, weighted A* keeps its
-    /// suboptimality bound under a consistent h, and never proves anyway.
+    /// First route wins, with no bound on its length: weighted A* without
+    /// reopening keeps its suboptimality bound only under a consistent h,
+    /// which the side-aware `o2` table (5.2) is not. Fast never proves.
     pub(crate) const FAST: Self = Self {
         weight: 5,
         stop_on_goal_pop: true,

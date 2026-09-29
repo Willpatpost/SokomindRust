@@ -8,8 +8,9 @@ use sokomind_core::{Board, State};
 /// Move-optimal push A* over an admissible heuristic. A cheaper path to a
 /// known state is re-inserted as a new node, even if the old one was already
 /// expanded, so soundness never depends on consistency; with a consistent
-/// heuristic, closed nodes are never re-expanded. The only engine that may
-/// produce a [`Proof`]. Callers reach it only as [`crate::Search`] in
+/// heuristic, closed nodes are never re-expanded (the side-aware `o2` table
+/// is not consistent, so its runs reopen). The only engine that may produce
+/// a [`Proof`]. Callers reach it only as [`crate::Search`] in
 /// [`crate::Mode::Optimal`], which forwards the shared methods to its engine
 /// and never hands the engine out, so callers cannot replace it.
 pub(crate) struct ExactSearch(Engine);
