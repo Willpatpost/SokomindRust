@@ -1,12 +1,31 @@
 use crate::{
-    MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, Status, deadlock::Deadlock,
-    heuristic::Heuristic, reach::Reach,
+    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, Status,
+    deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
 };
-use sokomind_core::{Cell, MAX_BOXES, MAX_ROUTE, NONE, State};
+use sokomind_core::{Cell, MAX_BOXES, MAX_CELLS, MAX_ROUTE, NONE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 
 /// No node: an empty table slot, or the root's parent.
 pub(crate) const NIL: u32 = u32::MAX;
+
+/// Bits of a node id in a queue key and in a record's parent field.
+const ID_BITS: u32 = 20;
+/// Low `ID_BITS` set: extracts an id, and stands for NIL in a record.
+const ID_MASK: u32 = (1 << ID_BITS) - 1;
+// Every id, the spare node's included, is at most MAX_STATES, so it fits
+// both fields with the all-ones value left over for a record's NIL parent.
+const _: () = assert!(MAX_STATES < ID_MASK as usize);
+// A node's depth is at most its id, and one push adds at most MAX_CELLS
+// moves (a walk shorter than the board, then the push), so a full u32 g
+// never overflows and is never narrowed.
+const _: () = assert!(MAX_STATES as u64 * MAX_CELLS as u64 <= u32::MAX as u64);
+
+/// Largest h any estimate may queue: MAX_BOXES push distances over (cell,
+/// keeper side) pairs, each below `4 * MAX_CELLS`, plus one keeper walk
+/// below `MAX_CELLS`. Today's estimates stay below
+/// `(MAX_BOXES + 1) * MAX_CELLS`; the rest is headroom for side-aware
+/// distances and a walk term at every node.
+pub(crate) const MAX_QUEUED_H: u32 = ((4 * MAX_BOXES + 1) * MAX_CELLS) as u32;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
@@ -16,13 +35,22 @@ pub(crate) struct Node {
     /// Direction of the push that made this node (unused at the root); the
     /// pushed box started at `state.player`.
     pub direction: u8,
-    /// [`Node::CLOSED`] once the node has been expanded.
-    pub flags: u8,
     /// The state's estimate, or `u16::MAX` when it is unknown or too large
     /// and must be recomputed. Estimates depend only on the canonical
     /// state, so a cheaper duplicate reuses it. This stack value is decoded
     /// from compact storage only when an expansion or replay needs it.
     pub h: u16,
+}
+
+/// A stored node without its state: all a duplicate probe or an incumbent
+/// check reads, at the cost of one record load.
+#[derive(Clone, Copy)]
+pub(crate) struct Meta {
+    pub g: u32,
+    /// As in [`Node::h`].
+    pub h: u16,
+    /// Expanded at least once ([`Arena::close`]).
+    pub closed: bool,
 }
 
 #[cfg(test)]
@@ -47,7 +75,6 @@ mod tests {
                     g: 10,
                     parent: NIL,
                     direction: 0,
-                    flags: 0,
                     h: 3,
                 },
                 slot,
@@ -63,7 +90,6 @@ mod tests {
                     g: 11,
                     parent: old,
                     direction: 1,
-                    flags: 0,
                     h: 2,
                 },
                 slot,
@@ -75,7 +101,6 @@ mod tests {
                     g: 8,
                     parent: NIL,
                     direction: 0,
-                    flags: 0,
                     h: 3,
                 },
                 slot,
@@ -83,9 +108,16 @@ mod tests {
             assert_eq!(arena.find(&state).1, Some(improved));
             assert_eq!(arena.find(&child).1, Some(descendant));
             assert_eq!(arena.node(descendant).parent, old);
+            assert_eq!(arena.node(descendant).direction, 1);
+            assert_eq!(arena.node(improved).parent, NIL);
             assert_eq!(arena.node(old).g, 10);
             assert_eq!(arena.node(old).state, state);
             assert_eq!(arena.node(improved).g, 8);
+            // Only the replaced version is stale, and closing is per version.
+            let flags = |id| (arena.is_superseded(id), arena.meta(id).closed);
+            assert_eq!(flags(old), (true, true));
+            assert_eq!(flags(improved), (false, false));
+            assert_eq!(flags(descendant), (false, false));
             assert_eq!(arena.stats.unique_states, 2);
             assert_eq!(arena.stats.duplicate_improvements, 1);
             assert_eq!(arena.stats.reopened_states, 1);
@@ -106,9 +138,24 @@ mod tests {
     fn reweight_orders_the_queue_as_if_queued_at_the_new_weight() {
         let mut arena = Arena::new(100, 1, 10, 4).unwrap();
         // (g, h) per id: the order at weight 5 differs from the order at 3.
-        let queued: [(u64, u32); 6] = [(0, 4), (9, 1), (4, 3), (12, 0), (7, 2), (1, 4)];
-        for (id, &(g, h)) in queued.iter().enumerate() {
-            arena.enqueue(g + 5 * h as u64, h, id as u32);
+        // Re-keying reads each g from its record, so the nodes are real.
+        let queued: [(u32, u32); 6] = [(0, 4), (9, 1), (4, 3), (12, 0), (7, 2), (1, 4)];
+        for (i, &(g, h)) in queued.iter().enumerate() {
+            let mut state = State {
+                player: 1,
+                boxes: [NONE; MAX_BOXES],
+            };
+            state.boxes[0] = 10 + i as Cell;
+            let (slot, _) = arena.find(&state);
+            let node = Node {
+                state,
+                g,
+                parent: NIL,
+                direction: 0,
+                h: Node::store_h(h),
+            };
+            let id = arena.insert(node, slot);
+            arena.enqueue(u64::from(g + 5 * h), h, id);
         }
         let capacity = arena.heap.capacity();
         arena.reweight(5, 3);
@@ -116,11 +163,13 @@ mod tests {
         let mut expected: Vec<_> = queued
             .iter()
             .enumerate()
-            .map(|(id, &(g, h))| (g + 3 * h as u64, h, id as u32))
+            .map(|(id, &(g, h))| (u64::from(g + 3 * h), h, id as u32))
             .collect();
         expected.sort();
         assert_eq!(arena.min_f(), Some(expected[0].0));
-        let order: Vec<_> = std::iter::from_fn(|| arena.dequeue()).collect();
+        let order: Vec<_> = std::iter::from_fn(|| arena.dequeue())
+            .map(|key| (key.id(), key.h()))
+            .collect();
         let wanted: Vec<_> = expected.iter().map(|&(_, h, id)| (id, h)).collect();
         assert_eq!(order, wanted);
         assert_eq!(arena.stats.peak_queue, queued.len() as u32);
@@ -139,7 +188,6 @@ mod tests {
             g: 0,
             parent: NIL,
             direction: 0,
-            flags: 0,
             h: 1,
         };
         let (slot, _) = arena.find(&state);
@@ -164,35 +212,257 @@ mod tests {
         assert_eq!(arena.insert(node, slot), 0);
         assert_eq!(arena.stats.unique_states, 2);
     }
+
+    /// Every record field at its extremes, with every flag combination.
+    #[test]
+    fn records_round_trip_every_field_at_its_extremes() {
+        let flags = [
+            0,
+            Record::CLOSED,
+            Record::SUPERSEDED,
+            Record::CLOSED | Record::SUPERSEDED,
+        ];
+        let last_cell = (MAX_CELLS - 1) as Cell;
+        // Straight through the packing, for ids no small arena reaches.
+        for parent in [NIL, 0, 1, MAX_STATES as u32, ID_MASK - 1] {
+            for direction in 0..4 {
+                for (g, h) in [(0, 0), (1, u16::MAX - 1), (u32::MAX, u16::MAX)] {
+                    for player in [0, last_cell] {
+                        let node = Node {
+                            state: State {
+                                player,
+                                boxes: [NONE; MAX_BOXES],
+                            },
+                            g,
+                            parent,
+                            direction,
+                            h,
+                        };
+                        for &set in &flags {
+                            let mut record = Record::new(&node);
+                            assert_eq!(record.link & (Record::CLOSED | Record::SUPERSEDED), 0);
+                            record.link |= set;
+                            assert_eq!(
+                                (record.g, record.parent(), record.direction()),
+                                (g, parent, direction)
+                            );
+                            assert_eq!((record.player, record.h), (player, h));
+                            assert_eq!(record.has(Record::CLOSED), set & Record::CLOSED != 0);
+                            assert_eq!(
+                                record.has(Record::SUPERSEDED),
+                                set & Record::SUPERSEDED != 0
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // Through the arena API, with every box cell at an extreme.
+        let mut arena = Arena::new(MAX_CELLS, MAX_BOXES, 4, 4).unwrap();
+        let mut state = State {
+            player: last_cell,
+            boxes: [NONE; MAX_BOXES],
+        };
+        for (i, cell) in state.boxes.iter_mut().enumerate() {
+            *cell = if i.is_multiple_of(2) {
+                i as Cell
+            } else {
+                last_cell - i as Cell
+            };
+        }
+        let mut child = state;
+        child.player = 0;
+        let root = Node {
+            state,
+            g: u32::MAX,
+            parent: NIL,
+            direction: 3,
+            h: u16::MAX,
+        };
+        let (slot, _) = arena.find(&state);
+        let first = arena.insert(root, slot);
+        arena.close(first);
+        let (slot, _) = arena.find(&child);
+        let leaf = Node {
+            state: child,
+            g: 0,
+            parent: first,
+            direction: 0,
+            h: 0,
+        };
+        let second = arena.insert(leaf, slot);
+        let (slot, _) = arena.find(&state);
+        let improved = Node {
+            g: u32::MAX - 1,
+            h: u16::MAX - 1,
+            ..root
+        };
+        let third = arena.insert(improved, slot);
+        for (id, node, closed, superseded) in [
+            (first, root, true, true),
+            (second, leaf, false, false),
+            (third, improved, false, false),
+        ] {
+            let stored = arena.node(id);
+            assert_eq!(stored.state, node.state);
+            assert_eq!(
+                (stored.g, stored.parent, stored.direction, stored.h),
+                (node.g, node.parent, node.direction, node.h)
+            );
+            let meta = arena.meta(id);
+            assert_eq!((meta.g, meta.h, meta.closed), (node.g, node.h, closed));
+            assert_eq!(meta.known_h(), node.known_h());
+            assert_eq!(arena.is_superseded(id), superseded);
+        }
+        assert_eq!(arena.meta(first).known_h(), None);
+        assert_eq!(arena.meta(third).known_h(), Some(u32::from(u16::MAX - 1)));
+    }
+
+    /// Key order is `(f, h, id)` order over every value that can be queued,
+    /// and saturation keeps each field in range and after every exact f.
+    #[test]
+    fn keys_order_like_tuples_and_saturate_safely() {
+        let fs = [0, 1, MAX_ROUTE as u64, Key::F_SAT - 1, Key::F_SAT];
+        let hs = [0, 1, MAX_QUEUED_H - 1, MAX_QUEUED_H, Key::H_SAT];
+        let ids = [0, 1, MAX_STATES as u32 - 1, MAX_STATES as u32, ID_MASK - 1];
+        let mut keys = Vec::new();
+        for f in fs {
+            for h in hs {
+                for id in ids {
+                    let key = Key::new(f, h, id);
+                    assert_eq!((key.f(), key.h(), key.id()), (f, h, id));
+                    keys.push(((f, h, id), key));
+                }
+            }
+        }
+        for (a, key_a) in &keys {
+            for (b, key_b) in &keys {
+                assert_eq!(key_a.cmp(key_b), a.cmp(b), "{a:?} {b:?}");
+            }
+        }
+        let last_exact = Key::new(Key::F_SAT - 1, Key::H_SAT, ID_MASK - 1);
+        for (f, h, id) in [
+            (Key::F_SAT + 1, 0, 0),
+            (u64::MAX, MAX_QUEUED_H, 1),
+            (u64::MAX, u32::MAX, ID_MASK - 1),
+        ] {
+            let key = Key::new(f, h, id);
+            assert_eq!(
+                (key.f(), key.h(), key.id()),
+                (Key::F_SAT, h.min(Key::H_SAT), id)
+            );
+            assert!(key > last_exact);
+        }
+    }
 }
 impl Node {
-    pub(crate) const CLOSED: u8 = 1;
     /// The estimate as stored in [`Node::h`].
     pub(crate) fn store_h(h: u32) -> u16 {
         u16::try_from(h).unwrap_or(u16::MAX)
     }
     /// The stored estimate, if it fit.
     pub(crate) fn known_h(&self) -> Option<u32> {
-        (self.h < u16::MAX).then_some(u32::from(self.h))
-    }
-    pub(crate) fn is_closed(&self) -> bool {
-        self.flags & Self::CLOSED != 0
+        known(self.h)
     }
 }
+impl Meta {
+    /// The stored estimate, if it fit.
+    pub(crate) fn known_h(self) -> Option<u32> {
+        known(self.h)
+    }
+}
+fn known(h: u16) -> Option<u32> {
+    (h < u16::MAX).then_some(u32::from(h))
+}
+
 /// Metadata is fixed-size; box cells live in an active-prefix column. Parent
-/// indices always refer to immutable appended versions, never overwritten states.
+/// indices always refer to immutable appended versions, never overwritten
+/// states. Only the two flags ever change after the append.
 #[derive(Clone, Copy)]
 struct Record {
     g: u32,
-    parent: u32,
+    /// Parent id in bits 0..20 ([`ID_MASK`] at the root), bits 20..28
+    /// spare and zero, the push direction in bits 28..30, then
+    /// [`Record::CLOSED`] and [`Record::SUPERSEDED`].
+    link: u32,
     player: Cell,
     h: u16,
-    direction: u8,
-    flags: u8,
+}
+// No padding and alignment 4 on wasm32 and 64-bit alike.
+const _: () = assert!(size_of::<Record>() == 12 && ID_BITS <= Record::DIRECTION_SHIFT);
+impl Record {
+    const DIRECTION_SHIFT: u32 = 28;
+    /// Expanded at least once.
+    const CLOSED: u32 = 1 << 30;
+    /// A later version of the state has replaced this one in the table, so
+    /// its queued entry is stale.
+    const SUPERSEDED: u32 = 1 << 31;
+    /// A fresh, open version of `node`.
+    fn new(node: &Node) -> Self {
+        debug_assert!(node.direction < 4);
+        debug_assert!(node.parent == NIL || node.parent < ID_MASK);
+        let parent = if node.parent == NIL {
+            ID_MASK
+        } else {
+            node.parent
+        };
+        Self {
+            g: node.g,
+            link: parent | (u32::from(node.direction) << Self::DIRECTION_SHIFT),
+            player: node.state.player,
+            h: node.h,
+        }
+    }
+    fn parent(self) -> u32 {
+        let parent = self.link & ID_MASK;
+        if parent == ID_MASK { NIL } else { parent }
+    }
+    fn direction(self) -> u8 {
+        ((self.link >> Self::DIRECTION_SHIFT) & 3) as u8
+    }
+    fn has(self, flag: u32) -> bool {
+        self.link & flag != 0
+    }
 }
 
-/// Queue entry `(f, h, id)`: lowest f first, then lowest h, then oldest.
-type Entry = Reverse<(u64, u32, u32)>;
+/// Queue entry `(f, h, id)` packed into one integer, f in the top 24 bits
+/// and h and id in 20 bits each, so integer order is exactly tuple order:
+/// lowest f first, then lowest h, then oldest. Values past a field
+/// saturate; see [`Key::F_SAT`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Key(u64);
+impl Key {
+    const H_BITS: u32 = 20;
+    const F_SHIFT: u32 = Self::H_BITS + ID_BITS;
+    /// Largest stored f. A key reading `F_SAT` stands for any f at or above
+    /// it: never more than the true f, so a frontier read from keys stays a
+    /// lower bound, and only nodes past MAX_ROUTE can saturate (see the
+    /// policy asserts in engine.rs).
+    pub(crate) const F_SAT: u64 = u64::MAX >> Self::F_SHIFT;
+    /// Largest stored h.
+    const H_SAT: u32 = (1 << Self::H_BITS) - 1;
+    pub(crate) fn new(f: u64, h: u32, id: u32) -> Self {
+        debug_assert!(id < ID_MASK);
+        let h = u64::from(h.min(Self::H_SAT));
+        Self((f.min(Self::F_SAT) << Self::F_SHIFT) | (h << ID_BITS) | u64::from(id))
+    }
+    /// The queued f, exact below [`Key::F_SAT`].
+    pub(crate) fn f(self) -> u64 {
+        self.0 >> Self::F_SHIFT
+    }
+    /// The queued h, exact up to [`MAX_QUEUED_H`].
+    pub(crate) fn h(self) -> u32 {
+        ((self.0 >> ID_BITS) as u32) & Self::H_SAT
+    }
+    pub(crate) fn id(self) -> u32 {
+        (self.0 as u32) & ID_MASK
+    }
+}
+const _: () = assert!(MAX_QUEUED_H <= Key::H_SAT);
+
+/// 8 bytes on wasm32 and 64-bit alike.
+type Entry = Reverse<Key>;
+const _: () = assert!(size_of::<Entry>() == 8);
 
 fn hash(state: &State, boxes: usize) -> usize {
     let mut h = (state.player as u64).wrapping_add(0x9e3779b97f4a7c15);
@@ -322,9 +592,10 @@ impl Arena {
         }
     }
     /// Appends `node` and binds `slot`, which [`Arena::find`] returned for its
-    /// state with no insert since, replacing any older node there. Only one
-    /// node may go past the limit, into the spare slot: a solution discovered
-    /// at the exact moment the arena filled.
+    /// state with no insert since, replacing any older node there, which
+    /// becomes superseded. Only one node may go past the limit, into the
+    /// spare slot: a solution discovered at the exact moment the arena
+    /// filled.
     pub(crate) fn insert(&mut self, node: Node, slot: usize) -> u32 {
         debug_assert!(self.nodes.len() <= self.node_limit);
         let id = self.nodes.len() as u32;
@@ -333,20 +604,16 @@ impl Arena {
             self.stats.unique_states += 1;
         } else {
             self.stats.duplicate_improvements += 1;
-            if self.nodes[previous as usize].flags & Node::CLOSED != 0 {
+            let previous = &mut self.nodes[previous as usize];
+            if previous.has(Record::CLOSED) {
                 self.stats.reopened_states += 1;
             }
+            // Its queued entry, if any, now pops as stale.
+            previous.link |= Record::SUPERSEDED;
         }
         self.box_cells
             .extend_from_slice(&node.state.boxes[..self.boxes]);
-        self.nodes.push(Record {
-            g: node.g,
-            parent: node.parent,
-            player: node.state.player,
-            h: node.h,
-            direction: node.direction,
-            flags: node.flags,
-        });
+        self.nodes.push(Record::new(&node));
         self.table[slot] = id;
         id
     }
@@ -361,31 +628,55 @@ impl Arena {
         Node {
             state,
             g: record.g,
-            parent: record.parent,
+            parent: record.parent(),
+            direction: record.direction(),
             h: record.h,
-            direction: record.direction,
-            flags: record.flags,
         }
+    }
+    /// The node's g, stored h and closed flag, without decoding its state.
+    pub(crate) fn meta(&self, id: u32) -> Meta {
+        let record = self.nodes[id as usize];
+        Meta {
+            g: record.g,
+            h: record.h,
+            closed: record.has(Record::CLOSED),
+        }
+    }
+    /// Whether a later version of the node's state has replaced it: exactly
+    /// when [`Arena::find`] on its state would return another id.
+    pub(crate) fn is_superseded(&self, id: u32) -> bool {
+        self.nodes[id as usize].has(Record::SUPERSEDED)
     }
     pub(crate) fn stats(&self) -> SearchStats {
         self.stats
     }
     /// Marks the node expanded.
     pub(crate) fn close(&mut self, id: u32) {
-        self.nodes[id as usize].flags |= Node::CLOSED;
+        self.nodes[id as usize].link |= Record::CLOSED;
     }
+    /// Queues `id` at `f`, with `h` as the tie-break; see [`Key`].
+    ///
+    /// Every queued key must read `min(g + weight * h, F_SAT)` for the
+    /// node's stored g at the current weight, with `h <= MAX_QUEUED_H`;
+    /// [`Arena::reweight`] asserts it. So a node queued again after its pop
+    /// (a partial expansion, at weight 1) is queued as `enqueue(f', f' - g,
+    /// id)`, with its next threshold `f'` computed in exact u64 from
+    /// `g + key.h()` and its children's f, never from the popped
+    /// [`Key::f`]: that saturates, so code reading it must take `F_SAT` as
+    /// "at least `F_SAT`".
     pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
-        self.heap.push(Reverse((f, h, id)));
+        debug_assert!(h <= MAX_QUEUED_H);
+        self.heap.push(Reverse(Key::new(f, h, id)));
         self.stats.peak_queue = self.stats.peak_queue.max(self.heap.len() as u32);
     }
-    /// The node of the lowest queued entry, which may be stale, with the h
-    /// it was queued with.
-    pub(crate) fn dequeue(&mut self) -> Option<(u32, u32)> {
-        self.heap.pop().map(|Reverse((_, h, id))| (id, h))
+    /// The lowest queued entry, which may be stale: its node, the h it was
+    /// queued with, and its f.
+    pub(crate) fn dequeue(&mut self) -> Option<Key> {
+        self.heap.pop().map(|Reverse(key)| key)
     }
     /// Lowest queued f, stale entries included.
     pub(crate) fn min_f(&self) -> Option<u64> {
-        self.heap.peek().map(|Reverse((f, _, _))| *f)
+        self.heap.peek().map(|Reverse(key)| key.f())
     }
     /// Forgets every node and queued entry in place. The reservation, limit
     /// and stats are kept.
@@ -395,13 +686,19 @@ impl Arena {
         self.heap.clear();
         self.table.fill(NIL);
     }
-    /// Re-keys every queued `g + from * h` as `g + to * h`, in the reserved
-    /// allocation, so the order is as if each entry had been queued at `to`.
+    /// Re-keys every entry queued at `g + from * h` as `g + to * h`, in the
+    /// reserved allocation, so the order is as if each entry had been queued
+    /// at `to`. g comes from the entry's record, which is exact even where
+    /// the old key saturated.
     pub(crate) fn reweight(&mut self, from: u32, to: u32) {
         let mut entries = std::mem::take(&mut self.heap).into_vec();
-        for Reverse((f, h, _)) in &mut entries {
-            let g = *f - from as u64 * *h as u64;
-            *f = g + to as u64 * *h as u64;
+        for Reverse(key) in &mut entries {
+            let (g, h) = (u64::from(self.nodes[key.id() as usize].g), key.h());
+            debug_assert_eq!(
+                key.f(),
+                (g + u64::from(from) * u64::from(h)).min(Key::F_SAT)
+            );
+            *key = Key::new(g + u64::from(to) * u64::from(h), h, key.id());
         }
         self.heap = BinaryHeap::from(entries);
     }

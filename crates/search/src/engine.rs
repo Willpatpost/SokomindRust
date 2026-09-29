@@ -1,6 +1,6 @@
 use crate::{
     SearchError, SearchStats, SolutionError, Status, StopReason,
-    arena::{Arena, NIL, Node},
+    arena::{Arena, Key, MAX_QUEUED_H, NIL, Node},
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
     reach::Reach,
@@ -19,7 +19,7 @@ pub(crate) struct Policy {
     /// Stop as soon as a solved child is generated.
     stop_on_goal_push: bool,
     /// Let a cheaper path re-add a state whose node was already expanded
-    /// ([`Node::CLOSED`]). A cheaper path to a state still open always
+    /// ([`Arena::close`]). A cheaper path to a state still open always
     /// replaces it.
     reopen_closed: bool,
     /// Also skip a popped node when `g + h >= best`, with the h it was
@@ -42,6 +42,26 @@ const _: () = {
     assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
     if let Some(next) = Policy::FAST_THEN_QUALITY_RESTART.restart {
         assert!(next.then.is_none() && next.restart.is_none());
+    }
+};
+// Queue keys saturate (see `Key`), and a saturated key needs g > MAX_ROUTE
+// at every weight: saturation only reorders nodes no replayable route goes
+// through, and never raises a stored f above the true one. The list must
+// name every policy a search can run, `then` and `restart` targets included.
+const _: () = {
+    let weights = [
+        Policy::EXACT.weight,
+        Policy::FAST.weight,
+        Policy::QUALITY.weight,
+        Policy::FAST_THEN_QUALITY.weight,
+        Policy::FAST_THEN_QUALITY_RESTART.weight,
+    ];
+    let mut i = 0;
+    while i < weights.len() {
+        // Named first: `x as u64 < y` would parse `u64<` as generic arguments.
+        let largest = MAX_ROUTE as u64 + weights[i] as u64 * MAX_QUEUED_H as u64;
+        assert!(largest < Key::F_SAT);
+        i += 1;
     }
 };
 impl Policy {
@@ -179,7 +199,6 @@ impl Engine {
                 g: 0,
                 parent: NIL,
                 direction: 0,
-                flags: 0,
                 h: h.map_or(u16::MAX, Node::store_h),
             },
             slot,
@@ -196,7 +215,7 @@ impl Engine {
         self.status
     }
     pub fn best_moves(&self) -> Option<u32> {
-        self.incumbent.map(|i| self.arena.node(i).g)
+        self.incumbent.map(|i| self.arena.meta(i).g)
     }
     pub fn expanded(&self) -> u32 {
         self.expanded
@@ -276,7 +295,7 @@ impl Engine {
             return;
         }
         'pops: for _ in 0..pops {
-            let Some((index, queued_h)) = self.arena.dequeue() else {
+            let Some(key) = self.arena.dequeue() else {
                 // The queue emptied: every state was popped, dominated, or
                 // pruned by an admissible rule. Under the exact policy that
                 // makes the incumbent optimal.
@@ -287,12 +306,18 @@ impl Engine {
                 };
                 return;
             };
-            let node = self.arena.node(index);
+            let (index, queued_h) = (key.id(), key.h());
             // A cheaper duplicate has since taken over this state's slot.
-            if self.arena.find(&node.state).1 != Some(index) {
+            let superseded = self.arena.is_superseded(index);
+            debug_assert_eq!(
+                superseded,
+                self.arena.find(&self.arena.node(index).state).1 != Some(index)
+            );
+            if superseded {
                 self.stats.stale_pops += 1;
                 continue;
             }
+            let node = self.arena.node(index);
             if self.board.solved(&node.state) {
                 if self.best_moves().is_none_or(|best| node.g < best) {
                     self.incumbent = Some(index);
@@ -356,9 +381,9 @@ impl Engine {
                     next.boxes[i] = to;
                     canonicalize(&self.board, &mut next);
                     let (slot, previous) = self.arena.find(&next);
-                    let previous = previous.map(|previous| self.arena.node(previous));
+                    let previous = previous.map(|previous| self.arena.meta(previous));
                     if previous.is_some_and(|previous| {
-                        previous.g <= g || (!self.policy.reopen_closed && previous.is_closed())
+                        previous.g <= g || (!self.policy.reopen_closed && previous.closed)
                     }) {
                         self.stats.pruned_duplicates += 1;
                         continue;
@@ -394,7 +419,6 @@ impl Engine {
                         g,
                         parent: index,
                         direction: d as u8,
-                        flags: 0,
                         h: Node::store_h(h),
                     };
                     if self.arena.is_full() {
