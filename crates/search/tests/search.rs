@@ -657,7 +657,17 @@ fn partial_expansion_is_exact_only_and_keeps_the_accounting() {
                 search.generated(),
                 "{context}"
             );
-            assert!(search.expanded() <= search.generated(), "{context}");
+            // 5.5 O6: Quality mode queues each record its Fast phase expanded
+            // once more at the handover, so a record is expanded at most twice.
+            #[cfg(feature = "o6")]
+            let limit = if mode == Mode::Quality {
+                2 * search.generated()
+            } else {
+                search.generated()
+            };
+            #[cfg(not(feature = "o6"))]
+            let limit = search.generated();
+            assert!(search.expanded() <= limit, "{context}");
             assert!(stats.peak_queue <= search.generated(), "{context}");
             assert!(
                 stats.stale_pops <= stats.duplicate_improvements,

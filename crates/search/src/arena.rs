@@ -57,6 +57,71 @@ pub(crate) struct Meta {
 mod tests {
     use super::*;
 
+    /// Region keys (5.5 O6): a probe matches a node with the same boxes
+    /// only through the region test, exact lookups still find live nodes
+    /// and only those, and re-keying by state keeps the live nodes, their
+    /// flags and the stats.
+    #[cfg(feature = "o6")]
+    #[test]
+    fn region_keys_find_by_membership_and_rekey_by_state() {
+        let mut arena = Arena::new(100, 2, 10, 4).unwrap();
+        arena.key_by_region(true);
+        let at = |player: Cell| State {
+            player,
+            boxes: {
+                let mut boxes = [NONE; MAX_BOXES];
+                boxes[..2].copy_from_slice(&[20, 30]);
+                boxes
+            },
+        };
+        let node = |player, g| Node {
+            state: at(player),
+            g,
+            parent: NIL,
+            direction: 0,
+            h: 5,
+        };
+        // Keepers 1 and 2 share a region, keeper 9 is apart.
+        let region = |a: Cell, b: Cell| (a < 9) == (b < 9);
+        let (slot, found) = arena.find_region(&at(1), |keeper| region(keeper, 1));
+        assert_eq!(found, None);
+        let first = arena.insert(node(1, 10), slot);
+        let (slot, found) = arena.find_region(&at(9), |keeper| region(keeper, 9));
+        assert_eq!(found, None);
+        let apart = arena.insert(node(9, 10), slot);
+        let (slot, found) = arena.find_region(&at(2), |keeper| region(keeper, 2));
+        assert_eq!(found, Some(first));
+        assert_eq!(arena.find(&at(1)).1, Some(first));
+        assert_eq!(arena.find(&at(2)).1, None);
+        // A cheaper keeper of the region replaces the first node.
+        let better = arena.insert(node(2, 8), slot);
+        assert!(arena.is_superseded(first) && !arena.is_superseded(better));
+        assert_eq!(arena.find(&at(1)).1, None);
+        assert_eq!(arena.find(&at(2)).1, Some(better));
+        assert_eq!(
+            arena.find_region(&at(1), |keeper| region(keeper, 1)).1,
+            Some(better)
+        );
+        assert_eq!(
+            arena.find_region(&at(9), |keeper| region(keeper, 9)).1,
+            Some(apart)
+        );
+        arena.key_by_state();
+        assert!(!arena.keeper_regions());
+        assert_eq!(arena.find(&at(2)).1, Some(better));
+        assert_eq!(arena.find(&at(9)).1, Some(apart));
+        assert_eq!(arena.find(&at(1)).1, None);
+        assert!(arena.is_superseded(first));
+        assert_eq!(arena.node(first).state, at(1));
+        assert_eq!(
+            (
+                arena.stats.unique_states,
+                arena.stats.duplicate_improvements
+            ),
+            (2, 1)
+        );
+    }
+
     #[test]
     fn compact_versions_preserve_parents_and_exact_keeper_identity() {
         for count in [1, 8, MAX_BOXES] {
@@ -464,9 +529,9 @@ const _: () = assert!(MAX_QUEUED_H <= Key::H_SAT);
 type Entry = Reverse<Key>;
 const _: () = assert!(size_of::<Entry>() == 8);
 
-fn hash(state: &State, boxes: usize) -> usize {
-    let mut h = (state.player as u64).wrapping_add(0x9e3779b97f4a7c15);
-    for &cell in &state.boxes[..boxes] {
+fn hash(player: Cell, boxes: &[Cell]) -> usize {
+    let mut h = (player as u64).wrapping_add(0x9e3779b97f4a7c15);
+    for &cell in boxes {
         h ^= cell as u64;
         h = h.wrapping_mul(0x100000001b3);
         h ^= h >> 29;
@@ -487,6 +552,10 @@ pub(crate) struct Arena {
     node_limit: usize,
     reserved_bytes: usize,
     scaled_down: bool,
+    /// The table keys states by boxes and keeper region instead of exact
+    /// state (5.5 O6): see [`Arena::find_region`].
+    #[cfg(feature = "o6")]
+    keeper_regions: bool,
 }
 impl Arena {
     pub(crate) fn new(
@@ -557,6 +626,8 @@ impl Arena {
             stats: SearchStats::default(),
             heap,
             table,
+            #[cfg(feature = "o6")]
+            keeper_regions: false,
         })
     }
     pub(crate) fn limit_status(&self) -> Status {
@@ -579,7 +650,17 @@ impl Arena {
     /// hold a new node for it.
     pub(crate) fn find(&self, state: &State) -> (usize, Option<u32>) {
         let mask = self.table.len() - 1;
-        let mut slot = hash(state, self.boxes) & mask;
+        // An arena keyed by keeper region hashes no keeper, since its probes
+        // compare keepers by region (`find_region`), not by cell.
+        #[cfg(feature = "o6")]
+        let player = if self.keeper_regions {
+            NONE
+        } else {
+            state.player
+        };
+        #[cfg(not(feature = "o6"))]
+        let player = state.player;
+        let mut slot = hash(player, &state.boxes[..self.boxes]) & mask;
         loop {
             let id = self.table[slot];
             if id == NIL {
@@ -595,11 +676,76 @@ impl Arena {
             slot = (slot + 1) & mask;
         }
     }
-    /// Appends `node` and binds `slot`, which [`Arena::find`] returned for its
-    /// state with no insert since, replacing any older node there, which
-    /// becomes superseded. Only one node may go past the limit, into the
-    /// spare slot: a solution discovered at the exact moment the arena
-    /// filled.
+    /// Keys the table of an empty arena by boxes and keeper region
+    /// ([`Arena::find_region`]) or, with `on` false, by exact state.
+    #[cfg(feature = "o6")]
+    pub(crate) fn key_by_region(&mut self, on: bool) {
+        debug_assert!(self.nodes.is_empty());
+        self.keeper_regions = on;
+    }
+    #[cfg(feature = "o6")]
+    pub(crate) fn keeper_regions(&self) -> bool {
+        self.keeper_regions
+    }
+    /// [`Arena::find`] in an arena keyed by keeper region: the node with the
+    /// state's boxes whose keeper `same_region` places in the state's keeper
+    /// region, and the slot that holds it or would hold a new node for it.
+    /// No two live nodes with the same boxes share a region, so at most one
+    /// passes. [`Arena::find`] still finds a live node by its exact state,
+    /// and only a live one.
+    #[cfg(feature = "o6")]
+    pub(crate) fn find_region(
+        &self,
+        state: &State,
+        mut same_region: impl FnMut(Cell) -> bool,
+    ) -> (usize, Option<u32>) {
+        debug_assert!(self.keeper_regions);
+        let boxes = &state.boxes[..self.boxes];
+        let mask = self.table.len() - 1;
+        let mut slot = hash(NONE, boxes) & mask;
+        loop {
+            let id = self.table[slot];
+            if id == NIL {
+                return (slot, None);
+            }
+            let begin = id as usize * self.boxes;
+            if self.box_cells[begin..begin + self.boxes] == *boxes
+                && same_region(self.nodes[id as usize].player)
+            {
+                return (slot, Some(id));
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    /// Re-keys a region-keyed table by exact state, in place, for a phase
+    /// that keeps every keeper apart. Only live nodes are bound, under their
+    /// real keepers, which never collide since no two live nodes with the
+    /// same boxes share a region. A superseded node stays unbound and
+    /// flagged, so its queued entry still pops as stale and a state it
+    /// stood for is new again. Records, queue and stats are untouched.
+    #[cfg(feature = "o6")]
+    pub(crate) fn key_by_state(&mut self) {
+        debug_assert!(self.keeper_regions);
+        self.keeper_regions = false;
+        self.table.fill(NIL);
+        let mask = self.table.len() - 1;
+        for (id, record) in self.nodes.iter().enumerate() {
+            if record.has(Record::SUPERSEDED) {
+                continue;
+            }
+            let begin = id * self.boxes;
+            let mut slot = hash(record.player, &self.box_cells[begin..begin + self.boxes]) & mask;
+            while self.table[slot] != NIL {
+                slot = (slot + 1) & mask;
+            }
+            self.table[slot] = id as u32;
+        }
+    }
+    /// Appends `node` and binds `slot`, which [`Arena::find`] (or
+    /// `find_region`) returned for its state with no insert since,
+    /// replacing any older node there, which becomes superseded. Only one
+    /// node may go past the limit, into the spare slot: a solution
+    /// discovered at the exact moment the arena filled.
     pub(crate) fn insert(&mut self, node: Node, slot: usize) -> u32 {
         debug_assert!(self.nodes.len() <= self.node_limit);
         let id = self.nodes.len() as u32;
@@ -647,7 +793,7 @@ impl Arena {
         }
     }
     /// Whether a later version of the node's state has replaced it: exactly
-    /// when [`Arena::find`] on its state would return another id.
+    /// when [`Arena::find`] on its state would not return this id.
     pub(crate) fn is_superseded(&self, id: u32) -> bool {
         self.nodes[id as usize].has(Record::SUPERSEDED)
     }

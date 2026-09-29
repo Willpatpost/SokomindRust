@@ -17,6 +17,8 @@ mod deadlock;
 mod engine;
 mod exact;
 mod heuristic;
+#[cfg(feature = "o6")]
+mod keeper;
 mod proof;
 mod reach;
 #[cfg(feature = "o2")]

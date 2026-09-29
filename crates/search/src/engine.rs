@@ -1,3 +1,5 @@
+#[cfg(feature = "o6")]
+use crate::keeper::{CellSet, ChildRegion};
 use crate::{
     SearchError, SearchStats, SolutionError, Status, StopReason,
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node},
@@ -43,6 +45,14 @@ pub(crate) struct Policy {
     /// only at weight 1, so only [`Self::EXACT`] sets it.
     #[cfg(feature = "pea")]
     partial: bool,
+    /// Keep one node per box set and keeper region instead of per exact
+    /// state (5.5 O6): a child whose keeper can walk to a stored keeper of
+    /// the same boxes is that node's duplicate. Such states have the same
+    /// pushes and children, so a search that never proves stays sound; only
+    /// the walk into the first push differs, so moves can get longer and
+    /// Fast's weighted bound no longer holds.
+    #[cfg(feature = "o6")]
+    keeper_regions: bool,
 }
 /// PEA* slack C (5.3 S2 sweep): children with f <= F + C are stored.
 #[cfg(feature = "pea0")]
@@ -68,6 +78,35 @@ const _: () = {
     if let Some(next) = Policy::FAST_THEN_QUALITY_RESTART.restart {
         assert!(next.then.is_none() && next.restart.is_none());
     }
+};
+// Region keys merge states whose routes differ in length (5.5 O6), so a
+// policy that proves or improves never uses them: only one that stops at
+// its first route and never reopens, like Fast alone or as a first phase.
+// Whatever follows it keys by state; `next_phase` re-keys the table, and a
+// restart re-seeds under its own policy.
+#[cfg(feature = "o6")]
+const _: () = {
+    let policies = [
+        Policy::EXACT,
+        Policy::FAST,
+        Policy::QUALITY,
+        Policy::FAST_THEN_QUALITY,
+        Policy::FAST_THEN_QUALITY_RESTART,
+    ];
+    let mut i = 0;
+    while i < policies.len() {
+        let policy = policies[i];
+        assert!(!policy.keeper_regions || (policy.stop_on_goal_push && !policy.reopen_closed));
+        if let Some(next) = policy.then {
+            assert!(!next.keeper_regions);
+        }
+        if let Some(next) = policy.restart {
+            assert!(!next.keeper_regions);
+        }
+        i += 1;
+    }
+    assert!(!Policy::EXACT.keeper_regions && !Policy::QUALITY.keeper_regions);
+    assert!(Policy::FAST.keeper_regions);
 };
 // Queue keys saturate (see `Key`), and a saturated key needs g > MAX_ROUTE
 // at every weight: saturation only reorders nodes no replayable route goes
@@ -101,6 +140,8 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: true,
+        #[cfg(feature = "o6")]
+        keeper_regions: false,
     };
     /// First route wins, with no bound on its length: weighted A* without
     /// reopening keeps its suboptimality bound only under a consistent h,
@@ -115,6 +156,8 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: false,
+        #[cfg(feature = "o6")]
+        keeper_regions: true,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -127,6 +170,8 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: false,
+        #[cfg(feature = "o6")]
+        keeper_regions: false,
     };
     /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
     /// in the same arena. The incumbent only improves, so the result is never
@@ -188,6 +233,9 @@ pub(crate) struct Engine {
     /// expansion. `expanded` keeps counting distinct records.
     #[cfg(feature = "pea")]
     reexpanded: u32,
+    /// Scratch for the region of the child being probed; see [`ChildRegion`].
+    #[cfg(feature = "o6")]
+    child_region: CellSet,
 }
 
 impl Engine {
@@ -222,6 +270,8 @@ impl Engine {
             interrupted_f: None,
             #[cfg(feature = "pea")]
             reexpanded: 0,
+            #[cfg(feature = "o6")]
+            child_region: CellSet::EMPTY,
         };
         search.seed();
         Ok(search)
@@ -229,6 +279,8 @@ impl Engine {
     /// Inserts and queues the start in an empty arena, or ends the search
     /// when the start has no goal assignment.
     fn seed(&mut self) {
+        #[cfg(feature = "o6")]
+        self.arena.key_by_region(self.policy.keeper_regions);
         let h = self.heuristic.estimate(&self.start);
         let (slot, _) = self.arena.find(&self.start);
         let root = self.arena.insert(
@@ -309,8 +361,38 @@ impl Engine {
             return false;
         };
         self.arena.reweight(self.policy.weight, next.weight);
+        #[cfg(feature = "o6")]
+        if self.arena.keeper_regions() && !next.keeper_regions {
+            self.leave_keeper_regions(next.weight);
+        }
         self.policy = next;
         true
+    }
+    /// Hands a region-keyed arena to a phase that improves routes: the table
+    /// is keyed by exact state again, and every expanded node is queued once
+    /// more at the new weight. A node's children that a stored region-mate
+    /// stood for were never inserted under their own keepers, and expanding
+    /// the node again is the only way the next phase generates them. Each
+    /// expanded node's entry has popped, so the queue still holds at most
+    /// one entry per record.
+    #[cfg(feature = "o6")]
+    fn leave_keeper_regions(&mut self, weight: u32) {
+        self.arena.key_by_state();
+        for id in 0..self.arena.len() as u32 {
+            let meta = self.arena.meta(id);
+            // Fast never supersedes an expanded node; the check keeps the
+            // loop right for any policy that does.
+            if !meta.closed || self.arena.is_superseded(id) {
+                continue;
+            }
+            let h = meta.known_h().unwrap_or_else(|| {
+                self.heuristic
+                    .estimate(&self.arena.node(id).state)
+                    .expect("an expanded state has an assignment")
+            });
+            self.arena
+                .enqueue(u64::from(meta.g) + u64::from(weight) * u64::from(h), h, id);
+        }
     }
     /// Starts over under the policy's restart while there is no route: the
     /// arena is emptied in place, so the rest of the run is a fresh search
@@ -384,6 +466,11 @@ impl Engine {
             // child with f below this pass's F.
             #[cfg(feature = "pea")]
             let revisit = self.arena.meta(index).closed;
+            // Under keeper regions (5.5 O6) a Fast arena's expanded records
+            // are queued again when Quality takes over; that pop is a full
+            // expansion, not a partial re-pass.
+            #[cfg(all(feature = "pea", feature = "o6"))]
+            let revisit = revisit && self.policy.partial;
             #[cfg(feature = "pea")]
             {
                 debug_assert!(self.policy.partial || !revisit);
@@ -450,7 +537,21 @@ impl Engine {
                     next.player = from;
                     next.boxes[i] = to;
                     canonicalize(&self.board, &mut next);
+                    #[cfg(not(feature = "o6"))]
                     let (slot, previous) = self.arena.find(&next);
+                    // A stored keeper of the same boxes in the child's region
+                    // makes a duplicate; most answers come from the fill above.
+                    #[cfg(feature = "o6")]
+                    let (slot, previous) = if self.arena.keeper_regions() {
+                        let mut child = ChildRegion::new(from, to, d);
+                        let (board, reach, region) =
+                            (&self.board, &mut self.reach, &mut self.child_region);
+                        self.arena.find_region(&next, |keeper| {
+                            child.contains(board, reach, region, keeper)
+                        })
+                    } else {
+                        self.arena.find(&next)
+                    };
                     let previous = previous.map(|previous| self.arena.meta(previous));
                     if previous.is_some_and(|previous| {
                         previous.g <= g || (!self.policy.reopen_closed && previous.closed)
@@ -882,6 +983,89 @@ mod tests {
         state.boxes[..4].copy_from_slice(&[a2, a1, b2, b1]);
         canonicalize(&board, &mut state);
         assert_eq!(state, start);
+    }
+
+    /// Region keys belong to Fast and to Quality mode's Fast phase only: a
+    /// policy that proves or improves starts keyed by state, and at every
+    /// limit the table is keyed by region exactly while a Fast phase runs,
+    /// so a handover to Quality and a restart both leave it keyed by state.
+    #[cfg(feature = "o6")]
+    #[test]
+    fn only_fast_phases_key_by_region() {
+        let (id, board) = catalog().into_iter().find(|(id, _)| id == "tiny").unwrap();
+        for (policy, regions) in [
+            (Policy::EXACT, false),
+            (Policy::QUALITY, false),
+            (Policy::FAST, true),
+            (Policy::FAST_THEN_QUALITY, true),
+            (Policy::FAST_THEN_QUALITY_RESTART, true),
+        ] {
+            let engine = Engine::new(board.clone(), board.initial(), policy, STATES, 16).unwrap();
+            assert_eq!(engine.arena.keeper_regions(), regions, "{id}");
+        }
+        let (fast, _) = run(&board, Policy::FAST, STATES);
+        assert!(
+            fast.best_moves().is_some() && fast.arena.keeper_regions(),
+            "{id}"
+        );
+        let (both, _) = run(&board, Policy::FAST_THEN_QUALITY, STATES);
+        assert!(
+            both.best_moves().is_some() && !both.arena.keeper_regions(),
+            "{id}"
+        );
+        // A route found in the spare node ends the Fast phase at its limit,
+        // still keyed by region.
+        let (mut handed, mut restarted) = (0, 0);
+        for max_states in 1..=fast.generated() as usize + 1 {
+            let context = format!("{id} at {max_states} states");
+            let (quality, _) = run(&board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
+            assert_eq!(
+                quality.arena.keeper_regions(),
+                quality.policy.keeper_regions,
+                "{context}"
+            );
+            let fresh = quality.discarded == 0;
+            handed += usize::from(fresh && !quality.policy.keeper_regions);
+            restarted += usize::from(!fresh);
+        }
+        assert!(handed > 0 && restarted > 0, "{handed} {restarted}");
+    }
+
+    /// Fast with region keys against the same policy keyed by state: every
+    /// route replays at its length, neither run exhausts a board the other
+    /// solves, and the boards both solve cost fewer records in total.
+    #[cfg(feature = "o6")]
+    #[test]
+    fn keeper_regions_keep_routes_replayable() {
+        let (mut records, mut control_records) = (0, 0);
+        for (id, board) in catalog() {
+            let (mut fast, _) = run(&board, Policy::FAST, STATES);
+            let control = Policy {
+                keeper_regions: false,
+                ..Policy::FAST
+            };
+            let (control, _) = run(&board, control, STATES);
+            for (engine, other) in [(&fast, &control), (&control, &fast)] {
+                assert!(
+                    engine.status() != Status::Exhausted || other.best_moves().is_none(),
+                    "{id}"
+                );
+            }
+            if let Some(moves) = fast.best_moves() {
+                let route = fast.solution().unwrap().unwrap();
+                assert_eq!(route.len(), moves as usize, "{id}");
+                if control.best_moves().is_some() {
+                    records += fast.generated();
+                    control_records += control.generated();
+                }
+            }
+            let (mut quality, _) = run(&board, Policy::FAST_THEN_QUALITY_RESTART, STATES);
+            if let Some(moves) = quality.best_moves() {
+                let route = quality.solution().unwrap().unwrap();
+                assert_eq!(route.len(), moves as usize, "{id}");
+            }
+        }
+        assert!(records < control_records, "{records} {control_records}");
     }
 
     /// 5.6 O3b: the stand walk against exact distances on the catalog.
