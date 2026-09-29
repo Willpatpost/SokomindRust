@@ -5,6 +5,8 @@ use crate::{
     heuristic::{Heuristic, ParentGroup},
     reach::Reach,
 };
+#[cfg(feature = "o3b")]
+use sokomind_core::Cell;
 use sokomind_core::{ACTIONS, Board, MAX_ROUTE, NONE, OPPOSITE, State};
 
 /// What separates the modes. Everything else, from child order to pruning
@@ -412,6 +414,30 @@ impl Engine {
                         self.stats.pruned_bound += 1;
                         continue;
                     }
+                    // 5.6 O3b: before its first push the child's keeper walks
+                    // to the stand of a statically legal push, so g + h + that
+                    // walk still bounds every route through the child. A prune
+                    // only: queue keys and stored estimates stay push-only.
+                    #[cfg(feature = "o3b")]
+                    if h > 0
+                        && let Some(best) = self.best_moves()
+                    {
+                        // At least 1, since the prune above failed.
+                        let need = best - g - h;
+                        let boxes = &next.boxes[..self.board.labels().len()];
+                        // The parent's flood marks its boxes, and the pushed
+                        // box left `from` for `to`.
+                        let occupied =
+                            |cell: Cell| cell == to || (cell != from && self.reach.blocked(cell));
+                        // Pushing the same box on again starts from `from`.
+                        let ahead = self.board.neighbors()[to as usize][d];
+                        let onward =
+                            ahead != NONE && !occupied(ahead) && !self.heuristic.dead(i, ahead);
+                        if !onward && self.stand_walk(from, boxes, occupied, need) >= need {
+                            self.stats.pruned_bound += 1;
+                            continue;
+                        }
+                    }
                     // Past the prune above g + h < best, so a solved child
                     // always improves the incumbent.
                     let goal = h == 0 && self.board.solved(&next);
@@ -469,7 +495,65 @@ impl Engine {
             .map(|&cell| x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1)
             .min()
             .unwrap_or(0);
+        // 5.6 O3b: the first push needs the keeper on its stand, not just
+        // next to a box.
+        #[cfg(feature = "o3b")]
+        let walk = {
+            let boxes = &state.boxes[..self.board.labels().len()];
+            walk.max(self.stand_walk(state.player, boxes, |cell| boxes.contains(&cell), 1) as usize)
+        };
         pushes + walk as u32
+    }
+    /// 5.6 O3b: the Manhattan distance from `player` to the nearest stand of
+    /// a statically legal push, or 0 when there is none. Pushing box `j` in
+    /// direction `e` is statically legal when the cell ahead of it and the
+    /// stand behind it are floor that `occupied` leaves free, and the cell
+    /// ahead is not dead for the box. The first push of every route from an
+    /// unsolved state is one of these, made with exactly these boxes, so the
+    /// walk to its stand bounds the route's walking moves, which the
+    /// assignment's pushes do not count. Callers skip solved states.
+    ///
+    /// Stops early once the answer is known to be below `enough` (0 asks for
+    /// the exact walk): the result is below `enough` exactly when the exact
+    /// walk is, and equals the exact walk otherwise. O(boxes * 4).
+    #[cfg(feature = "o3b")]
+    fn stand_walk(
+        &self,
+        player: Cell,
+        boxes: &[Cell],
+        occupied: impl Fn(Cell) -> bool,
+        enough: u32,
+    ) -> u32 {
+        let width = self.board.width();
+        let (x, y) = (player as usize % width, player as usize / width);
+        let walk = |cell: Cell| {
+            (x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width)) as u32
+        };
+        let neighbors = self.board.neighbors();
+        let mut best = u32::MAX;
+        for (j, &cell) in boxes.iter().enumerate() {
+            // A stand is next to its box, so at most one step closer.
+            if walk(cell) > best {
+                continue;
+            }
+            for (e, &opposite) in OPPOSITE.iter().enumerate() {
+                let ahead = neighbors[cell as usize][e];
+                let stand = neighbors[cell as usize][opposite];
+                if ahead == NONE
+                    || stand == NONE
+                    || occupied(ahead)
+                    || occupied(stand)
+                    || self.heuristic.dead(j, ahead)
+                {
+                    continue;
+                }
+                best = best.min(walk(stand));
+                if best < enough {
+                    return best;
+                }
+            }
+        }
+        if best == u32::MAX { 0 } else { best }
     }
     /// Rebuilds the incumbent's full route and replays it from the start.
     /// Costs O(route) plus one flood per push, so call it once per improved
@@ -701,5 +785,223 @@ mod tests {
         state.boxes[..4].copy_from_slice(&[a2, a1, b2, b1]);
         canonicalize(&board, &mut state);
         assert_eq!(state, start);
+    }
+
+    /// 5.6 O3b: the stand walk against exact distances on the catalog.
+    #[cfg(feature = "o3b")]
+    mod o3b {
+        use super::{Engine, Policy, STATES, catalog};
+        use sokomind_core::{Board, Cell, NONE, State};
+        use std::collections::{HashMap, VecDeque};
+
+        /// Primitive states per board at most; 8 catalog boards fit.
+        const CAP: usize = 20_000;
+        /// Successor state and, for a push, the box index and direction.
+        type Edge = (usize, Option<(usize, usize)>);
+
+        /// Every primitive state reachable from the start, without
+        /// expanding solved ones, or `None` past `CAP` states. Box order is
+        /// the board's: estimates and walks ignore order inside a group.
+        fn explore(board: &Board) -> Option<(Vec<State>, Vec<Vec<Edge>>)> {
+            let key = |state: &State| (state.player, state.boxes);
+            let mut states = vec![board.initial()];
+            let mut index = HashMap::from([(key(&board.initial()), 0)]);
+            let mut edges = Vec::new();
+            while edges.len() < states.len() {
+                let state = states[edges.len()];
+                let mut out = Vec::new();
+                for direction in 0..4 {
+                    let mut next = state;
+                    if board.solved(&state) || board.step(&mut next, direction).is_none() {
+                        continue;
+                    }
+                    let pushed = (0..board.labels().len())
+                        .find(|&i| next.boxes[i] != state.boxes[i])
+                        .map(|i| (i, direction));
+                    let id = *index.entry(key(&next)).or_insert_with(|| {
+                        states.push(next);
+                        states.len() - 1
+                    });
+                    out.push((id, pushed));
+                }
+                edges.push(out);
+                if states.len() > CAP {
+                    return None;
+                }
+            }
+            Some((states, edges))
+        }
+
+        /// Exact moves to a solved state, `u32::MAX` without one.
+        fn remaining(board: &Board, states: &[State], edges: &[Vec<Edge>]) -> Vec<u32> {
+            let mut reverse = vec![Vec::new(); states.len()];
+            for (from, out) in edges.iter().enumerate() {
+                for &(to, _) in out {
+                    reverse[to].push(from);
+                }
+            }
+            let mut exact = vec![u32::MAX; states.len()];
+            let mut queue = VecDeque::new();
+            for (id, state) in states.iter().enumerate() {
+                if board.solved(state) {
+                    exact[id] = 0;
+                    queue.push_back(id);
+                }
+            }
+            while let Some(to) = queue.pop_front() {
+                for &from in &reverse[to] {
+                    if exact[from] == u32::MAX {
+                        exact[from] = exact[to] + 1;
+                        queue.push_back(from);
+                    }
+                }
+            }
+            exact
+        }
+
+        /// The exact walk over `boxes`, occupancy read from the boxes.
+        fn walk(engine: &Engine, player: Cell, boxes: &[Cell]) -> u32 {
+            engine.stand_walk(player, boxes, |cell| boxes.contains(&cell), 0)
+        }
+
+        /// (h, h') with h' = h + walk, and 0 when solved; `None` without an
+        /// assignment.
+        fn estimates(engine: &Engine, state: &State) -> Option<(u32, u32)> {
+            let h = engine.heuristic.estimate(state)?;
+            if h == 0 {
+                return Some((0, 0));
+            }
+            let boxes = &state.boxes[..engine.board.labels().len()];
+            Some((h, h + walk(engine, state.player, boxes)))
+        }
+
+        /// Admissible: never above the exact remaining moves. Consistent: a
+        /// move lowers h' by at most 1 wherever it lowers h by at most 1,
+        /// which with the plain table is every move (3.3); the o2 table alone
+        /// may break that. On every catalog board whose primitive state space
+        /// fits `CAP`.
+        #[test]
+        fn stand_walk_is_admissible_and_consistent() {
+            let mut checked = Vec::new();
+            for (id, board) in catalog() {
+                let Some((states, edges)) = explore(&board) else {
+                    continue;
+                };
+                let engine =
+                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+                let exact = remaining(&board, &states, &edges);
+                let values: Vec<_> = states
+                    .iter()
+                    .map(|state| estimates(&engine, state))
+                    .collect();
+                for (from, state) in states.iter().enumerate() {
+                    let Some((h, value)) = values[from] else {
+                        assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
+                        continue;
+                    };
+                    assert!(
+                        value <= exact[from],
+                        "{id}: {value} > {} at {state:?}",
+                        exact[from]
+                    );
+                    for &(to, _) in &edges[from] {
+                        if let Some((next_h, next)) = values[to]
+                            && h <= next_h + 1
+                        {
+                            assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
+                        }
+                    }
+                }
+                checked.push(id);
+            }
+            assert_eq!(checked.len(), 8, "{checked:?}");
+        }
+
+        /// The child prune's inputs: occupancy from the parent's flood plus
+        /// the pushed box gives the child's own walk, an early stop only
+        /// answers "below enough", and the onward exit only skips a walk
+        /// of 0.
+        #[test]
+        fn stand_walk_after_a_push_matches_a_fresh_scan() {
+            let (mut pushes, mut onward) = (0, 0);
+            for (id, board) in catalog() {
+                let Some((states, edges)) = explore(&board) else {
+                    continue;
+                };
+                let mut engine =
+                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+                let n = board.labels().len();
+                for (parent, state) in states.iter().enumerate() {
+                    engine.reach.fill(&engine.board, state);
+                    for &(child, push) in &edges[parent] {
+                        let Some((i, d)) = push else {
+                            continue;
+                        };
+                        let (from, to) = (state.boxes[i], states[child].boxes[i]);
+                        let boxes = &states[child].boxes[..n];
+                        let occupied =
+                            |cell: Cell| cell == to || (cell != from && engine.reach.blocked(cell));
+                        let exact = walk(&engine, from, boxes);
+                        for enough in 0..=exact + 1 {
+                            let got = engine.stand_walk(from, boxes, occupied, enough);
+                            assert_eq!(
+                                got < enough,
+                                exact < enough,
+                                "{id}: {got} {exact} {enough}"
+                            );
+                            assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
+                        }
+                        let ahead = board.neighbors()[to as usize][d];
+                        if ahead != NONE && !occupied(ahead) && !engine.heuristic.dead(i, ahead) {
+                            assert_eq!(exact, 0, "{id} at {:?}", states[child]);
+                            onward += 1;
+                        }
+                        pushes += 1;
+                    }
+                }
+            }
+            assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
+        }
+
+        /// The root estimate is pushes + max(box walk, stand walk). It rises
+        /// over pushes + box walk by exactly these gains, on exactly these
+        /// catalog boards (o3b_root.txt), under o2 too (o3b_root_o2.txt). The
+        /// gain reads only cells and dead masks, not the push count.
+        #[test]
+        fn o3b_root_estimates_match_prevalidation() {
+            const RAISED: [(&str, u32); 7] = [
+                ("tutorial-push", 2),
+                ("beginner-detour", 2),
+                ("garden-2", 2),
+                ("classic-1", 2),
+                ("adv-gallery", 2),
+                ("theme-parking", 2),
+                ("expert-maze", 2),
+            ];
+            let mut raised = 0;
+            for (id, board) in catalog() {
+                let engine =
+                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+                let start = engine.start;
+                let pushes = engine.heuristic.estimate(&start).unwrap();
+                let width = board.width();
+                let (x, y) = (start.player as usize % width, start.player as usize / width);
+                let box_walk = start.boxes[..board.labels().len()]
+                    .iter()
+                    .map(|&cell| {
+                        x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
+                    })
+                    .min()
+                    .unwrap() as u32;
+                let gain = RAISED
+                    .iter()
+                    .find(|&&(raised_id, _)| raised_id == id)
+                    .map_or(0, |&(_, gain)| gain);
+                let root = engine.root_estimate(&start, pushes);
+                assert_eq!(root, pushes + box_walk + gain, "{id}");
+                raised += usize::from(root > pushes + box_walk);
+            }
+            assert_eq!(raised, RAISED.len());
+        }
     }
 }

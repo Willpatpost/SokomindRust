@@ -556,3 +556,31 @@ mod fixtures {
         blocked_typed_corridor: "OOOOOOOOO\nOabB    O\nOOOO    O\nOOOO A  O\nOOOO  R O\nOOOOOOOOO" => None,
     }
 }
+
+/// 5.6 O3b: the root bound counts the walk to the nearest statically legal
+/// push's stand, which can lie past the nearest box. The raised bound stays
+/// at or below the optimum and the run still proves it. TWO is a control
+/// whose keeper already stands behind a legal push. Same values under o2.
+#[cfg(feature = "o3b")]
+#[test]
+fn stand_walk_raises_the_root_bound() {
+    const TUTORIAL_PUSH: &str = "OOOOO\nO XSO\nO   O\nO R O\nOOOOO";
+    for (rows, root, optimum) in [
+        (TUTORIAL_PUSH, 4, 4),
+        (REORDERED[4].0, 7, 15),
+        (REORDERED[2].0, 6, 11),
+        (TWO, 5, 20),
+    ] {
+        let board = Board::parse(rows).unwrap();
+        assert_eq!(bfs(&board), Some(optimum), "{rows:?}");
+        let fresh = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8).unwrap();
+        assert_eq!(fresh.lower_bound(), Some(root), "{rows:?}");
+        let mut search = drive(&board, Mode::Optimal, 20_000, Some(optimum), rows);
+        assert_consistent(&board, &mut search, Some(optimum), rows);
+        assert_eq!(
+            search.proof(),
+            Some(Proof::Optimal { moves: optimum }),
+            "{rows:?}"
+        );
+    }
+}
