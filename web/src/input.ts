@@ -16,6 +16,18 @@ export function swipeDirection(dx: number, dy: number): number | undefined {
   if (Math.max(ax, ay) < SWIPE_MIN_PX || Math.max(ax, ay) < 2 * Math.min(ax, ay)) return undefined;
   return ax > ay ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0);
 }
+/** Keyboard keys by their lowercased `key`: arrows and WASD move, Z undoes. */
+const KEYS = new Map<string, number | 'undo'>([
+  ['arrowup', 0], ['w', 0],
+  ['arrowdown', 1], ['s', 1],
+  ['arrowleft', 2], ['a', 2],
+  ['arrowright', 3], ['d', 3],
+  ['z', 'undo'],
+]);
+/** What a keydown's `key` does, in either case: a direction, 'undo', or undefined for any other key. */
+export function keyAction(key: string): number | 'undo' | undefined {
+  return KEYS.get(key.toLowerCase());
+}
 /** Binds the on-screen direction buttons, swipes on the board canvas and the
  * keyboard (arrow keys, WASD, Z) to the handlers. */
 export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: InputHandlers) {
@@ -61,23 +73,10 @@ export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: 
       || event.altKey
       || (event.target as HTMLElement).matches('input,textarea,select')
     ) return;
-    const key = event.key.toLowerCase();
-    const directions: Record<string, number> = {
-      arrowup: 0,
-      w: 0,
-      arrowdown: 1,
-      s: 1,
-      arrowleft: 2,
-      a: 2,
-      arrowright: 3,
-      d: 3,
-    };
-    if (key in directions) {
-      event.preventDefault();
-      move(directions[key]);
-    } else if (key === 'z') {
-      event.preventDefault();
-      undo();
-    }
+    const action = keyAction(event.key);
+    if (action === undefined) return;
+    event.preventDefault();
+    if (action === 'undo') undo();
+    else move(action);
   });
 }

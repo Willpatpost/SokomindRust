@@ -32,6 +32,8 @@ const RETENTION_SWEEP: Duration = Duration::from_secs(3600);
 /// Batches per sweep, so a large backlog drains over several sweeps instead
 /// of in one long burst of deletes: each replica deletes at most this many
 /// times PROGRESS_RETENTION_BATCH_SIZE records per `RETENTION_SWEEP`.
+/// README's Configuration table and .env.example quote this cap; change them
+/// with it.
 const RETENTION_MAX_BATCHES: usize = 20;
 /// statement_timeout, or a cancel request, stopped the statement.
 const QUERY_CANCELED: &str = "57014";

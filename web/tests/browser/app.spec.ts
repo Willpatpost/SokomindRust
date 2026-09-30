@@ -49,6 +49,18 @@ test('undo restores the previous position', async ({ page }) => {
   await expect(page.locator('#undo')).toBeDisabled();
 });
 
+// The keyboard shortcuts skip keys typed into a form field, so S types an s
+// there instead of pushing the robot down.
+test('keys typed into a text field stay in it', async ({ page }) => {
+  await loaded(page);
+  await page.locator('summary', { hasText: 'Import / edit a puzzle' }).click();
+  await page.fill('#rows', '');
+  await page.locator('#rows').press('s');
+  await expect(page.locator('#rows')).toHaveValue('s');
+  await expect(page.locator('#moves')).toHaveText('0');
+  await expect(page.locator('#message')).toHaveText(MOVE_HINT);
+});
+
 test('rows that do not parse report why and leave the current puzzle in play', async ({ page }) => {
   await loaded(page);
   await page.locator('summary', { hasText: 'Import / edit a puzzle' }).click();

@@ -128,6 +128,10 @@ const _: () = {
         i += 1;
     }
 };
+// Mode's rustdoc (lib.rs) and README.md ("g + 5h", "g + 3h") state these
+// weights; change them together.
+const _: () =
+    assert!(Policy::EXACT.weight == 1 && Policy::FAST.weight == 5 && Policy::QUALITY.weight == 3);
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
     pub(crate) const EXACT: Self = Self {

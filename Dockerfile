@@ -1,7 +1,7 @@
 # The two images share only rust-base and stubs. Past them, target server
-# (compose's api) runs server-build, and target web runs wasm-tools, wasm-build
-# and web-build, so a server-only edit runs no WASM step, and a WASM-only edit
-# no server step.
+# (compose's api) runs server-build, and target web runs wasm-bindgen-version,
+# wasm-tools, wasm-build and web-build, so a server-only edit runs no WASM
+# step, and a WASM-only edit no server step.
 
 # The web-build stage's Node. It must equal .node-version, which CI's
 # setup-node reads; the deploy job in ci.yml fails when the two differ.
@@ -51,13 +51,19 @@ ENTRYPOINT ["sokomind-server"]
 # runs wasm-bindgen without scripts/build-wasm.mjs, which checks that, so this
 # stage reads the version from Cargo.lock (tr drops CRLF endings). ci.yml and
 # scripts/build-wasm.mjs parse the lock the same way; keep the three in step.
-# Only Cargo.lock is copied, so a manifest edit keeps the installed CLI.
-FROM rust-base AS wasm-tools
-RUN rustup target add wasm32-unknown-unknown
+FROM rust-base AS wasm-bindgen-version
 COPY Cargo.lock ./
 RUN version=$(tr -d '\r' < Cargo.lock | grep -m1 -A1 -x 'name = "wasm-bindgen"' | sed -n 's/^version = "\(.*\)"$/\1/p') \
     && if [ -z "$version" ]; then echo 'Cargo.lock does not list wasm-bindgen' >&2; exit 1; fi \
-    && cargo install wasm-bindgen-cli --version "$version" --locked
+    && printf '%s' "$version" > /wasm-bindgen.version
+
+# The install, a from-source compile of several minutes, copies only the
+# version file, whose content keys its cache: a Cargo.lock edit that keeps
+# wasm-bindgen's version keeps the installed CLI.
+FROM rust-base AS wasm-tools
+RUN rustup target add wasm32-unknown-unknown
+COPY --from=wasm-bindgen-version /wasm-bindgen.version /tmp/
+RUN cargo install wasm-bindgen-cli --version "$(cat /tmp/wasm-bindgen.version)" --locked
 
 # Copies only what the WASM compiles (the server crate keeps its stub), so a
 # server-only edit leaves this stage cached. data/ is left out because only

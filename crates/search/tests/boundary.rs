@@ -58,7 +58,7 @@ fn malformed_positions_return_structured_errors_in_every_mode() {
         },
     ));
     for (state, expected) in cases {
-        for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
+        for mode in Mode::ALL {
             assert!(matches!(Search::new(board.clone(), state, mode, 100, 4),
                 Err(SearchError::InvalidState(error)) if error == expected));
         }
@@ -70,7 +70,7 @@ fn limits_follow_the_exported_ranges() {
     assert_eq!(*MAX_STATES_RANGE.end(), MAX_STATES);
     let board = Board::parse(BOARD).unwrap();
     let (states, memory) = (MAX_STATES_RANGE, MEMORY_MIB_RANGE);
-    for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
+    for mode in Mode::ALL {
         let search = |max_states: usize, memory_mib: usize| {
             Search::new(board.clone(), board.initial(), mode, max_states, memory_mib)
         };

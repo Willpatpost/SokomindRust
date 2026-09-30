@@ -1,5 +1,7 @@
-// Every validation step CI runs (.github/workflows/ci.yml), in the same order, as
-// one local command. It ends with a PASS/FAIL/SKIP line per step.
+// The npm and node steps of CI's rust and integration jobs (.github/workflows/ci.yml),
+// in the same order, as one local command. npm ci, the node-floor job and the deploy
+// job's Docker and version-copy checks run only in CI. It ends with a PASS/FAIL/SKIP
+// line per step.
 //   npm run validate                      stops at the first failure
 //   npm run validate -- --keep-going      runs every step, then fails if any failed
 //   npm run validate -- --quick           skips bench:observe, test:db and test:browser
@@ -45,6 +47,7 @@ export function plan({ quick, database }) {
     step('npm run test:release'),
     step('npm run test:web'),
     step('npm run test:scripts'),
+    step('npm run check:scripts'),
     step('npm run bench:check'),
     // The only WASM build: `npm run build` and `npm run test:parity` would each
     // rebuild it, so their second halves run directly.

@@ -655,7 +655,7 @@ fn partial_expansion_is_exact_only_and_keeps_the_accounting() {
     let reordered = REORDERED.map(|(rows, moves)| (rows, Some(moves)));
     for (rows, optimum) in BOARDS.into_iter().chain(reordered) {
         let board = Board::parse(rows).unwrap();
-        for mode in [Mode::Fast, Mode::Quality, Mode::Optimal] {
+        for mode in Mode::ALL {
             let context = format!("{mode:?} {rows:?}");
             let mut search = drive(&board, mode, 20_000, optimum, &context);
             assert_consistent(&board, &mut search, optimum, &context);

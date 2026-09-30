@@ -860,6 +860,20 @@ mod tests {
         }
     }
 
+    /// The largest board and box count need 92,969,620 bytes (88.7 MiB) for a
+    /// full `MAX_STATES`, so no budget above 89 MiB changes a limit
+    /// (`MEMORY_MIB_RANGE`'s doc).
+    #[test]
+    fn eighty_nine_mib_fits_a_full_limit_at_any_size() {
+        let fits = Arena::new(MAX_CELLS, MAX_BOXES, MAX_STATES, 89).unwrap();
+        assert_eq!(fits.node_limit, MAX_STATES);
+        assert_eq!(fits.limit_status(), Status::StateLimit);
+        drop(fits);
+        let short = Arena::new(MAX_CELLS, MAX_BOXES, MAX_STATES, 88).unwrap();
+        assert!(short.node_limit < MAX_STATES);
+        assert_eq!(short.limit_status(), Status::MemoryLimit);
+    }
+
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
     /// entry and 8 to 16 bytes of table. At 64 MiB, 19 boxes fit a full
     /// `MAX_STATES` even at `MAX_CELLS` cells (about 240 KiB to spare) and

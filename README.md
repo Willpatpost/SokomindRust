@@ -10,7 +10,8 @@ PostgreSQL persistence. No frontend framework and no JavaScript game-rule duplic
 Requires Node 22.18+ (24 recommended), Rust 1.98.1, and a native linker (Visual
 Studio C++ Build Tools on Windows). PostgreSQL is optional for local play/search.
 `rust-toolchain.toml` pins the Rust version, and `.node-version` the exact Node
-that CI and the Docker image use (24.14.0).
+that CI and the Docker image use (24.14.0). Of the checks, only the Node unit
+tests also run on 22.18.0 (CI's `node-floor` job).
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -88,9 +89,11 @@ The `Dockerfile` builds both images. `rust-base` is the Rust 1.98.1 image with
 `rust-toolchain.toml`, and `stubs` adds the workspace manifests with stub
 sources, so each build stage compiles its dependencies first, in a layer that
 survives crate edits. Target `server` (compose's `api`) builds in
-`server-build`. Target `web` installs `wasm-bindgen-cli` in `wasm-tools`, builds
-the WASM package in `wasm-build` and the app in `web-build`, and copies the app
-into the NGINX image. The two targets share only `rust-base` and `stubs`, so a
+`server-build`. Target `web` reads `wasm-bindgen`'s version from `Cargo.lock` in
+`wasm-bindgen-version` and installs that `wasm-bindgen-cli` in `wasm-tools`
+(a `Cargo.lock` edit that keeps that version keeps the installed CLI), builds
+the WASM package in `wasm-build`
+and the app in `web-build`, and copies the app into the NGINX image. The two targets share only `rust-base` and `stubs`, so a
 server-only edit runs no WASM step and a WASM-only edit no server step;
 `docker compose build api` builds only the server image. `web-build` runs the
 Node image that `ARG NODE_VERSION` names, whose default must equal
@@ -165,7 +168,7 @@ proof. Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component. On every expanded state it covers
 the reference's fully blocked 2x2 wall/box squares and frozen-component
 fixpoints, and it only removes states from which no solution exists.
-The objective is total remaining moves, not pushes. These are MVP algorithms:
+The objective is total remaining moves, not pushes. These are baseline algorithms:
 the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
 and route-repair strategies are not yet ported; Grand Hall performance parity
 is not claimed.
@@ -326,7 +329,8 @@ requests, and on demand (`workflow_dispatch`); a push or pull request that
 changes only Markdown files or `LICENSE` starts no run. The first four run on
 Ubuntu and Windows and the rest on Ubuntu with a PostgreSQL 18 service. It
 builds the WASM package once and checks parity against the native records
-`bench:check` wrote.
+`bench:check` wrote. A `node-floor` job runs the `test:web` and `test:scripts`
+files on Node 22.18.0 as well, the floor `package.json`'s `engines` gives.
 
 ```sh
 npm run fmt:check
@@ -335,6 +339,7 @@ npm run test:rust
 npm run test:release
 npm run test:web
 npm run test:scripts
+npm run check:scripts
 npm run bench:check
 npm run build
 npm run test:parity
@@ -351,7 +356,7 @@ is a SKIP, never a PASS, while `SOKOMIND_TEST_DATABASE_URL` is unset. It exits 1
 when a step failed and 2 on an unknown option or argument, and must be started
 through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
 `--`, so quote it there: `npm run validate '--' --quick`. It runs neither
-`npm ci` nor the deploy job below.
+`npm ci` nor CI's `node-floor` and deploy jobs.
 
 `lint:rust` runs Clippy on every target with warnings as errors, under the
 workspace lints in `Cargo.toml`: unsafe code is denied, and an exported item or
@@ -359,8 +364,9 @@ crate root without a doc fails. `test:rust` runs the core, search, and server
 tests and `test:release` the core and search tests under the `release-test`
 profile, which keeps release optimization without debug assertions but drops
 cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries
-use `release`. `npm run check:scripts` type-checks the helpers in `scripts` from
-their JSDoc (`tsc -p scripts`, strict); neither CI nor `validate` runs it yet.
+use `release`. `check:scripts` type-checks the helpers in `scripts` from their
+JSDoc (`tsc -p scripts`, strict). It stays out of `check:web`, which `build:web`
+runs in the Docker web build, where there is no `scripts` directory.
 `test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
 tests of the web modules, the benchmark gate, and the validate script, whose
 step list must match `ci.yml`'s, and need no WASM build. `bench:check` runs
@@ -409,7 +415,7 @@ regressions, and one proven unsolvable the exact engine must all reproduce
 exactly.
 
 `SokomindSolver` was read as the behavior reference and left unchanged. Puzzle
-data retains the original MIT license. The MVP deliberately omits React, PWA,
+data retains the original MIT license. The app deliberately omits React, PWA,
 music, accounts, and cloud jobs, and the reference's editor, generator, journey,
 daily challenge, achievements, stats, favorites, ratings, share links, progress
 import, solver hints, solver lab, board zoom, and in-play deadlock warning.

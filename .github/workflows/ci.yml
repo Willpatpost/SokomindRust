@@ -22,6 +22,9 @@ concurrency:
   group: validate-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
+# scripts/validate.mjs runs the rust and integration jobs' `npm run` and
+# `node scripts/` steps locally, in this order; scripts/validate.test.mjs fails
+# when the two differ.
 jobs:
   rust:
     if: github.event_name != 'schedule'
@@ -91,6 +94,9 @@ jobs:
       # Cheap checks first. bench:check compares the catalog hash before it builds anything.
       - run: npm run test:web
       - run: npm run test:scripts
+      # Not part of check:web, which build:web runs in the Dockerfile's web-build
+      # stage, where there is no scripts/.
+      - run: npm run check:scripts
       - run: npm run bench:check
       # The only WASM build. `npm run build` and `npm run test:parity` would each
       # rebuild it, so their second halves run directly.
@@ -132,6 +138,21 @@ jobs:
             playwright-report/
             test-results/
           if-no-files-found: ignore
+
+  # package.json's engines floor. Node 22.18 is the first release with type
+  # stripping on by default and import.meta.main, which the unit tests and
+  # scripts/validate.mjs need; the other jobs run .node-version. The unit tests
+  # import only node: modules and local files, so this needs no npm ci.
+  node-floor:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - run: node --test scripts/*.test.mjs web/tests/*.test.ts
 
   # Runs the deploy job when a push or pull request changes a file that shapes
   # the images or their config, and on every weekly or manual run. A change to

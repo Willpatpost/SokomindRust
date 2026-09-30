@@ -4,7 +4,7 @@
 use sokomind_core::{Board, State, Step};
 use std::collections::{HashMap, VecDeque};
 
-/// Primitive states per board at most; 8 catalog boards fit.
+/// Primitive states per board at most; at least 8 catalog boards fit.
 const CAP: usize = 20_000;
 /// Successor state and, for a push, the box index and direction.
 pub(crate) type Edge = (usize, Option<(usize, usize)>);

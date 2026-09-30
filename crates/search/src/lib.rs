@@ -82,7 +82,11 @@ pub const MAX_STATES: usize = 1_000_000;
 /// limits themselves check against this range, never a copy of it.
 pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// The `memory_mib` budgets [`Search::new`] accepts. A caller may cap
-/// requests lower but never below this range's start.
+/// requests lower but never below this range's start. While the state limit
+/// is capped at [`MAX_STATES`], a budget above 89 MiB cannot raise it: that
+/// fits a full limit even at `MAX_BOXES` boxes on `MAX_CELLS` cells (see
+/// [`MAX_STATES`] for the per-state cost, and the arena test
+/// `eighty_nine_mib_fits_a_full_limit_at_any_size`).
 pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
 
 /// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].

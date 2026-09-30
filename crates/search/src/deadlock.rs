@@ -399,8 +399,9 @@ mod tests {
                 }
             }
         }
-        // A Python replica of this test counts 10_658 flags, 503 from
-        // solvable parents.
+        // Seed 0x5eed gave 10_658 flags, 503 from solvable parents, in an
+        // out-of-repo Python replica of this test; the bounds leave room for
+        // rule changes that remove a few flags.
         assert!(
             flagged >= 10_000 && from_solvable >= 450,
             "{flagged} {from_solvable}"
