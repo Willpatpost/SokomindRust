@@ -21,12 +21,6 @@ if (!version.stdout.trim().endsWith(PINNED)) {
   console.error(`wasm-bindgen ${PINNED} is required (found: ${version.stdout.trim()}). See "Run locally" in README.md.`);
   process.exit(1);
 }
-// BENCH_FEATURES (see scripts/benchmark.mjs) names sokomind-search features, so
-// parity can check an experiment's WASM build. Rebuild without it afterwards:
-// web/wasm then holds the experiment.
-const features = (process.env.BENCH_FEATURES ?? '').split(/[\s,]+/).filter(Boolean).map(f => `sokomind-search/${f}`);
-if (features.length) console.log(`*** Building WASM with cargo features: ${features.join(',')} ***`);
 // The Dockerfile runs the same two commands; change both together.
-run('cargo', ['build', '--locked', '-p', 'sokomind-wasm', '--target', 'wasm32-unknown-unknown', '--profile', 'wasm-release',
-  ...(features.length ? ['--features', features.join(',')] : [])]);
+run('cargo', ['build', '--locked', '-p', 'sokomind-wasm', '--target', 'wasm32-unknown-unknown', '--profile', 'wasm-release']);
 run('wasm-bindgen', ['--target', 'web', '--out-dir', 'web/wasm', '--out-name', 'sokomind', 'target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm']);

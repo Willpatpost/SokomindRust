@@ -21,9 +21,8 @@ const _: () = assert!(MAX_STATES < ID_MASK as usize);
 const _: () = assert!(MAX_STATES as u64 * MAX_CELLS as u64 <= u32::MAX as u64);
 
 /// Largest h a queue entry may carry: MAX_BOXES push distances, each below
-/// `MAX_CELLS`, plus at most `MAX_CELLS` for the keeper: the root's walk to
-/// its first push or, under PEA*, a re-queued record's walk and push to its
-/// least withheld child (`f - g`), which PEA* withholds only while it fits.
+/// `MAX_CELLS`, plus at most `MAX_CELLS` for the root's keeper walk to its
+/// first push.
 pub(crate) const MAX_QUEUED_H: u32 = ((MAX_BOXES + 1) * MAX_CELLS) as u32;
 
 /// Budget bytes charged to every search whatever the board: room for the
@@ -211,8 +210,7 @@ impl Arena {
         let bytes_for = |count: usize| {
             fixed_bytes
                 + (count + 1) * (size_of::<Record>() + boxes * size_of::<Cell>())
-                // The queue holds at most one live entry per record, a
-                // partial expansion's re-queue included.
+                // The queue holds at most one entry per record.
                 + (count + 1) * size_of::<Entry>()
                 + ((count + 1) * 2).next_power_of_two() * size_of::<u32>()
         };
@@ -239,8 +237,8 @@ impl Arena {
         box_cells
             .try_reserve_exact((limit + 1) * boxes)
             .map_err(|_| SearchError::Allocation("box arena"))?;
-        // Every enqueue follows an insert or replaces the entry just popped,
-        // so heap.len() <= nodes.len() <= limit + 1 and this never grows.
+        // Every enqueue follows an insert, so heap.len() <= nodes.len() <=
+        // limit + 1 and this never grows.
         let mut heap = BinaryHeap::new();
         heap.try_reserve_exact(limit + 1)
             .map_err(|_| SearchError::Allocation("search queue"))?;
@@ -365,12 +363,7 @@ impl Arena {
     ///
     /// Every queued key must read `min(g + weight * h, F_SAT)` for the
     /// node's stored g at the current weight, with `h <= MAX_QUEUED_H`;
-    /// [`Arena::reweight`] asserts it. So a node queued again after its pop
-    /// (a partial expansion, at weight 1) is queued as `enqueue(f', f' - g,
-    /// id)`, with its next threshold `f'` computed in exact u64 from
-    /// `g + key.h()` and its children's f, never from the popped
-    /// [`Key::f`]: that saturates, so code reading it must take `F_SAT` as
-    /// "at least `F_SAT`".
+    /// [`Arena::reweight`] asserts it.
     pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
         debug_assert!(h <= MAX_QUEUED_H);
         self.heap.push(Reverse(Key::new(f, h, id)));

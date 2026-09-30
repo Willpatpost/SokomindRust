@@ -14,10 +14,3 @@ sokomind-core.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-
-[features]
-# Internal: enabled only through pea0/pea1/pea2.
-pea = []
-pea0 = ["pea"]
-pea1 = ["pea"]
-pea2 = ["pea"]

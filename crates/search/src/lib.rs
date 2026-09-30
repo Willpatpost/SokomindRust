@@ -40,18 +40,6 @@
 //! assert_eq!(game.moves(), 4);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-// The PEA* slack is one const: exactly one C, never the bare switch.
-#[cfg(any(
-    all(feature = "pea0", feature = "pea1"),
-    all(feature = "pea0", feature = "pea2"),
-    all(feature = "pea1", feature = "pea2"),
-))]
-compile_error!("features pea0, pea1 and pea2 are mutually exclusive");
-#[cfg(all(
-    feature = "pea",
-    not(any(feature = "pea0", feature = "pea1", feature = "pea2")),
-))]
-compile_error!("feature pea needs a slack: enable pea0, pea1 or pea2");
 mod arena;
 mod deadlock;
 mod engine;
@@ -463,12 +451,6 @@ impl Search {
     /// so a reopened state counts again.
     pub fn expanded(&self) -> u32 {
         self.engine().expanded()
-    }
-    /// Pops that re-expanded a partially expanded record. Always 0 for
-    /// Fast and Quality; `expanded` keeps counting distinct records.
-    #[cfg(feature = "pea")]
-    pub fn reexpansions(&self) -> u32 {
-        self.engine().reexpansions()
     }
     /// Records inserted so far, improved versions of known states and any a
     /// Quality restart discarded included.

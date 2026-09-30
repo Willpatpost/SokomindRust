@@ -34,7 +34,6 @@ import { env, root, run } from './toolchain.mjs';
  * @property {number} search_us
  * @property {number} reconstruct_us
  * @property {Record<string, number>} stats
- * @property {number} [reexpanded] Only with the pea feature.
  */
 
 const catalogText = readFileSync(resolve(root, 'data/puzzles.json'), 'utf8');
@@ -54,14 +53,10 @@ let built = false;
 /**
  * Compile once per process, then return the example's verified JSON-line records.
  * @param {readonly string[]} [args] Options for the catalog example.
- * @param {string} [features] sokomind-search cargo features for the build.
  * @returns {CorpusRecord[]}
  */
-export function nativeCorpus(args = [], features = '') {
-  if (!built) {
-    run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog',
-      ...(features ? ['--features', features] : [])]);
-  }
+export function nativeCorpus(args = []) {
+  if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
   built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
   const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });

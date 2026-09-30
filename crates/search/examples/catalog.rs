@@ -162,14 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "reconstruct_us": reconstruct_us,
                     "stats": stats_value(search.stats())
                 });
-                // PEA* passes are a measurement only; the key exists only
-                // with the switch on, so default records stay byte-identical.
-                #[cfg(feature = "pea")]
-                let record = {
-                    let mut record = record;
-                    record["reexpanded"] = json!(search.reexpansions());
-                    record
-                };
                 println!("{record}");
                 count += 1;
             }

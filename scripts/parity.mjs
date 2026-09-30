@@ -11,18 +11,15 @@ import { root } from './toolchain.mjs';
 // `--native <file>` checks WASM against native records already on disk instead
 // of running the native corpus again. CI passes target/bench/catalog.json right
 // after bench:check wrote it, so the corpus runs once per CI run.
-// BENCH_FEATURES must match the one `npm run wasm` built web/wasm with.
-const FEATURES = process.env.BENCH_FEATURES ?? '';
 const { values: options } = parseArgs({ options: { native: { type: 'string' } }, strict: true, allowPositionals: false });
 /**
- * The native records in a file bench:check wrote, once they are shown to cover this catalog and build.
+ * The native records in a file bench:check wrote, once they are shown to cover this catalog.
  * @param {string} path
  * @returns {import('./corpus.mjs').CorpusRecord[]}
  */
 function recorded(path) {
   const file = JSON.parse(readFileSync(resolve(root, path), 'utf8'));
   assert.equal(file.catalogHash, catalogHash, `${path} was recorded for another catalog; rerun npm run bench:check`);
-  assert.equal(file.features ?? '', FEATURES, `${path} was measured with cargo features "${file.features ?? ''}", not BENCH_FEATURES="${FEATURES}"`);
   const records = /** @type {unknown} */ (file.records);
   const cases = Array.isArray(records) ? records.map(record => `${record.id}/${record.mode}`) : [];
   assert.deepEqual(cases, catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
@@ -43,7 +40,7 @@ function decode(context, run) {
 
 const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')).href);
 const wasm = await init({ module_or_path: readFileSync(resolve(root, 'web/wasm/sokomind_bg.wasm')) });
-const native = options.native ? recorded(options.native) : nativeCorpus([], FEATURES);
+const native = options.native ? recorded(options.native) : nativeCorpus();
 const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')]));
 let verified = 0;
 for (const reference of native) {
@@ -78,6 +75,5 @@ for (const reference of native) {
     }
   } finally { search.free(); }
 }
-if (FEATURES) console.log(`*** Checked with cargo features: ${FEATURES} ***`);
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
 console.log(`WASM retained linear memory: ${(wasm.memory.buffer.byteLength / 1048576).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`);

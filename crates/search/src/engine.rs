@@ -35,30 +35,7 @@ pub(crate) struct Policy {
     /// the search: the arena is emptied in place and the start re-seeded
     /// under that policy, which then runs exactly as a fresh search.
     restart: Option<&'static Policy>,
-    /// Partial expansion (PEA*): an expansion popped at f = F stores only
-    /// the children with f <= F + [`PEA_C`], plus any solved child, and
-    /// re-queues its record at the least f it withheld. Sound only at weight
-    /// 1, so only [`Self::EXACT`] sets it.
-    #[cfg(feature = "pea")]
-    partial: bool,
 }
-/// PEA* slack C: children with f <= F + C are stored.
-#[cfg(feature = "pea0")]
-const PEA_C: u64 = 0;
-#[cfg(feature = "pea1")]
-const PEA_C: u64 = 1;
-#[cfg(feature = "pea2")]
-const PEA_C: u64 = 2;
-// A window f <= F + C needs f = g + h, and a weighted policy never proves.
-#[cfg(feature = "pea")]
-const _: () = assert!(
-    Policy::EXACT.partial
-        && Policy::EXACT.weight == 1
-        && !Policy::FAST.partial
-        && !Policy::QUALITY.partial
-        && !Policy::FAST_THEN_QUALITY.partial
-        && !Policy::FAST_THEN_QUALITY_RESTART.partial
-);
 // Exact soundness assumes one admissible weight for the whole search. A
 // restarted policy runs to the end, so a search restarts at most once.
 const _: () = {
@@ -101,8 +78,6 @@ impl Policy {
         prune_popped_estimate: false,
         then: None,
         restart: None,
-        #[cfg(feature = "pea")]
-        partial: true,
     };
     /// First route wins, with no bound on its length. Fast never proves.
     pub(crate) const FAST: Self = Self {
@@ -113,8 +88,6 @@ impl Policy {
         prune_popped_estimate: true,
         then: None,
         restart: None,
-        #[cfg(feature = "pea")]
-        partial: false,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -125,8 +98,6 @@ impl Policy {
         prune_popped_estimate: true,
         then: None,
         restart: None,
-        #[cfg(feature = "pea")]
-        partial: false,
     };
     /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
     /// in the same arena. The incumbent only improves, so the result is never
@@ -184,10 +155,6 @@ pub(crate) struct Engine {
     /// Under an admissible h, no route through its unpushed successors along
     /// this path is shorter, so the exact frontier must include it.
     interrupted_f: Option<u64>,
-    /// Pops of a record already expanded: the re-queued passes of partial
-    /// expansion. `expanded` keeps counting distinct records.
-    #[cfg(feature = "pea")]
-    reexpanded: u32,
 }
 
 impl Engine {
@@ -220,8 +187,6 @@ impl Engine {
             incumbent: None,
             discarded: 0,
             interrupted_f: None,
-            #[cfg(feature = "pea")]
-            reexpanded: 0,
         };
         search.seed();
         Ok(search)
@@ -257,11 +222,6 @@ impl Engine {
     }
     pub fn expanded(&self) -> u32 {
         self.expanded
-    }
-    /// Re-queued passes over already expanded records (partial expansion).
-    #[cfg(feature = "pea")]
-    pub fn reexpansions(&self) -> u32 {
-        self.reexpanded
     }
     /// Records inserted, including any a restart discarded.
     pub fn generated(&self) -> u32 {
@@ -379,34 +339,7 @@ impl Engine {
                 self.stats.pruned_bound += 1;
                 continue;
             }
-            // A closed record pops again only when partial expansion
-            // re-queued it; its first pass already stored and counted every
-            // child with f below this pass's F.
-            #[cfg(feature = "pea")]
-            let revisit = self.arena.meta(index).closed;
-            #[cfg(feature = "pea")]
-            {
-                debug_assert!(self.policy.partial || !revisit);
-                self.expanded += u32::from(!revisit);
-                self.reexpanded += u32::from(revisit);
-            }
-            #[cfg(not(feature = "pea"))]
-            {
-                self.expanded += 1;
-            }
-            // Pre-estimate prunes count once per record and child.
-            #[cfg(feature = "pea")]
-            let tally = u64::from(!revisit);
-            #[cfg(not(feature = "pea"))]
-            let tally = 1;
-            // Exact at weight 1 even where the key's f saturates: every
-            // entry is queued at g + h with h <= MAX_QUEUED_H.
-            #[cfg(feature = "pea")]
-            let popped_f = u64::from(node.g) + u64::from(queued_h);
-            #[cfg(feature = "pea")]
-            debug_assert!(!self.policy.partial || key.f() == popped_f.min(Key::F_SAT));
-            #[cfg(feature = "pea")]
-            let mut withheld = u64::MAX;
+            self.expanded += 1;
             self.arena.close(index);
             self.reach.fill(&self.board, &node.state);
             self.deadlock
@@ -434,16 +367,16 @@ impl Engine {
                         continue;
                     }
                     if self.heuristic.dead(i, to) {
-                        self.stats.pruned_dead_cells += tally;
+                        self.stats.pruned_dead_cells += 1;
                         continue;
                     }
                     let g = node.g + self.reach.distance(stand) as u32 + 1;
                     if self.best_moves().is_some_and(|best| g >= best) {
-                        self.stats.pruned_bound += tally;
+                        self.stats.pruned_bound += 1;
                         continue;
                     }
                     if self.deadlock.is_dead_after_push(&self.board, from, to) {
-                        self.stats.pruned_deadlocks += tally;
+                        self.stats.pruned_deadlocks += 1;
                         continue;
                     }
                     let mut next = node.state;
@@ -455,7 +388,7 @@ impl Engine {
                     if previous.is_some_and(|previous| {
                         previous.g <= g || (!self.policy.reopen_closed && previous.closed)
                     }) {
-                        self.stats.pruned_duplicates += tally;
+                        self.stats.pruned_duplicates += 1;
                         continue;
                     }
                     // A cheaper duplicate reuses the stored estimate; otherwise
@@ -471,29 +404,9 @@ impl Engine {
                             to,
                         )
                     }) else {
-                        self.stats.pruned_assignment += tally;
+                        self.stats.pruned_assignment += 1;
                         continue;
                     };
-                    #[cfg(feature = "pea")]
-                    if self.policy.partial {
-                        let f = u64::from(g) + u64::from(h);
-                        // Stored by an earlier pass, or pruned by a rule that
-                        // still holds: windows never overlap.
-                        if revisit && f < popped_f {
-                            continue;
-                        }
-                        // Withhold past the window, except a solved child
-                        // (the incumbent must exist from its generation) and
-                        // one whose re-queue would not fit an exact key.
-                        let solved = h == 0 && self.board.solved(&next);
-                        if !solved
-                            && f > popped_f + PEA_C
-                            && f - u64::from(node.g) <= u64::from(MAX_QUEUED_H)
-                        {
-                            withheld = withheld.min(f);
-                            continue;
-                        }
-                    }
                     if self
                         .best_moves()
                         .is_some_and(|best| g as u64 + h as u64 >= best as u64)
@@ -560,16 +473,6 @@ impl Engine {
                         }
                     }
                 }
-            }
-            // Re-queue under the same id at the least withheld f. Its old
-            // entry just popped, so the queue still holds at most one live
-            // entry per record. h = f - g keeps g + h = f, which the next
-            // pass reads back as its F, and bounds a limit there by F.
-            #[cfg(feature = "pea")]
-            if withheld != u64::MAX {
-                let h = u32::try_from(withheld - u64::from(node.g))
-                    .expect("withheld children fit an exact key");
-                self.arena.enqueue(withheld, h, index);
             }
         }
     }

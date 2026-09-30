@@ -1,6 +1,5 @@
 //! Search results against breadth-first search on fixed and generated
-//! boards, the bounds that stopped searches report, and the experiment
-//! features' own checks.
+//! boards, and the bounds that stopped searches report.
 
 use sokomind_core::{Board, Game, State};
 use sokomind_search::{Mode, ParseModeError, Proof, Search, Status, StopReason};
@@ -154,13 +153,30 @@ fn assert_route(board: &Board, route: &str, moves: u32, context: &str) {
 
 /// Runs all three modes against the BFS optimum and returns the exact run's
 /// node count. With `must_finish`, a limit is a failure; otherwise a run cut
-/// short by one only has to stay consistent.
+/// short by one only has to stay consistent. Every run must keep the stats'
+/// accounting identities.
 fn engines_agree(board: &Board, rows: &str, optimum: Option<u32>, must_finish: bool) -> usize {
     let mut full = 1;
     for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
         let context = format!("{mode:?} on {rows:?}");
         let mut search = drive(board, mode, 20_000, optimum, &context);
         assert_consistent(board, &mut search, optimum, &context);
+        let stats = search.stats();
+        assert_eq!(
+            stats.unique_states + stats.duplicate_improvements,
+            search.generated(),
+            "{context}"
+        );
+        assert!(search.expanded() <= search.generated(), "{context}");
+        assert!(stats.peak_queue <= search.generated(), "{context}");
+        assert!(
+            stats.stale_pops <= stats.duplicate_improvements,
+            "{context}"
+        );
+        assert!(
+            stats.reopened_states <= stats.duplicate_improvements,
+            "{context}"
+        );
         if mode == Mode::Optimal {
             full = search.generated() as usize;
         } else {
@@ -599,14 +615,13 @@ fn stand_walk_raises_the_root_bound() {
     }
 }
 
-/// The goal needs a walk around the box, so its f (6) is far past the root's
-/// (2) and outside the root's first window at every C in 0..=2. The
-/// pushed-away child (f = 4) is withheld at C = 0 and 1 and stored at C = 2.
+/// The goal needs a walk around the box, so its f (6) is far past the
+/// root's (2).
 const DETOUR_GOAL: &str = "OOOOOOO\nO     O\nORSX  O\nO     O\nOOOOOOO";
 
-/// A solved child is stored when generated, whatever its f and whatever the
-/// state limit: partial expansion never withholds it, and an exact-limit
-/// goal takes the spare node.
+/// A solved child becomes the incumbent when it is generated, before its own
+/// pop, whatever its f and whatever the state limit: an exact-limit goal
+/// takes the spare node.
 #[test]
 fn a_solved_child_is_kept_whatever_its_f() {
     let board = Board::parse(DETOUR_GOAL).unwrap();
@@ -621,7 +636,7 @@ fn a_solved_child_is_kept_whatever_its_f() {
             Search::new(board.clone(), board.initial(), Mode::Optimal, max_states, 8).unwrap();
         assert!(
             search.lower_bound().is_some_and(|root| root + 2 < 6),
-            "the goal must lie outside the first window at C = 2: {context}"
+            "the goal's f must lie well past the root bound: {context}"
         );
         search.advance(1);
         assert_eq!(
@@ -648,48 +663,4 @@ fn a_solved_child_is_kept_whatever_its_f() {
             );
         }
     }
-}
-
-/// Partial expansion touches Exact only and keeps every accounting identity:
-/// re-passes are counted apart from `expanded`, and each record still has
-/// at most one live queue entry.
-#[cfg(feature = "pea")]
-#[test]
-fn partial_expansion_is_exact_only_and_keeps_the_accounting() {
-    let reordered = REORDERED.map(|(rows, moves)| (rows, Some(moves)));
-    for (rows, optimum) in BOARDS.into_iter().chain(reordered) {
-        let board = Board::parse(rows).unwrap();
-        for mode in Mode::ALL {
-            let context = format!("{mode:?} {rows:?}");
-            let mut search = drive(&board, mode, 20_000, optimum, &context);
-            assert_consistent(&board, &mut search, optimum, &context);
-            if mode != Mode::Optimal {
-                assert_eq!(search.reexpansions(), 0, "{context}");
-            }
-            let stats = search.stats();
-            assert_eq!(
-                stats.unique_states + stats.duplicate_improvements,
-                search.generated(),
-                "{context}"
-            );
-            assert!(search.expanded() <= search.generated(), "{context}");
-            assert!(stats.peak_queue <= search.generated(), "{context}");
-            assert!(
-                stats.stale_pops <= stats.duplicate_improvements,
-                "{context}"
-            );
-            assert!(
-                stats.reopened_states <= stats.duplicate_improvements,
-                "{context}"
-            );
-        }
-    }
-    // TWO withholds at least one child at every C in 0..=2.
-    let board = Board::parse(TWO).unwrap();
-    let mut two = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8).unwrap();
-    while two.status() == Status::Running {
-        two.advance(8);
-    }
-    assert_eq!(two.proof(), Some(Proof::Optimal { moves: 20 }));
-    assert!(two.reexpansions() > 0);
 }
