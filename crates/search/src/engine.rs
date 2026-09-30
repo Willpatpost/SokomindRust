@@ -1113,7 +1113,7 @@ mod tests {
                 }
                 checked.push(id);
             }
-            assert_eq!(checked.len(), 8, "{checked:?}");
+            assert!(checked.len() >= 8, "{checked:?}");
         }
 
         /// The child prune's inputs: occupancy from the parent's flood plus

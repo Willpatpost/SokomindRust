@@ -126,6 +126,10 @@ pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16>
     distances
 }
 
+/// A push-distance table: maps the board and its goal columns in group order
+/// to cell-major per-box push distances, `NONE` when unreachable.
+pub(crate) type DistanceTable = fn(&Board, &[(Cell, u8)]) -> Vec<u16>;
+
 impl Heuristic {
     /// The dead mask plus one u16 push distance per goal column; there is
     /// one goal per box.
@@ -141,10 +145,9 @@ impl Heuristic {
         let table = crate::sides::push_distances;
         Self::with_table(board, table)
     }
-    /// The estimator over `table`, which maps the board and its goal columns
-    /// in group order to cell-major per-box push distances, `NONE` when
-    /// unreachable. Estimates are admissible when every entry is.
-    pub(crate) fn with_table(board: &Board, table: fn(&Board, &[(Cell, u8)]) -> Vec<u16>) -> Self {
+    /// The estimator over `table`. Estimates are admissible when every entry
+    /// is.
+    pub(crate) fn with_table(board: &Board, table: DistanceTable) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
