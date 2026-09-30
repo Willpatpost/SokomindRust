@@ -5,7 +5,7 @@
 //   npm run bench:update [-- --states N --memory M --accept-regressions]
 //                                                   rewrite the baseline after review
 //   npm run bench:observe [-- --states N --memory M --repeat K --update]
-//                                                   hard boards at production scale, median of K;
+//                                                   hard boards at OBSERVE's fixed size, median of K;
 //                                                   --update rewrites benchmarks/observe-reference.json
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -40,6 +40,8 @@ const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
 // The command that rewrites each committed file, for load()'s errors.
 const REGENERATE = { [BASELINE]: 'npm run bench:update', [REFERENCE]: 'npm run bench:observe -- --update' };
 const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
+// bench:observe's fixed size, which observe-reference.json records: far below sokomind_search::MAX_STATES
+// (60M) on purpose, so a run stays short. It is an observation size, not a cap; --states and --memory override it.
 const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
 const order = catalog.map(puzzle => puzzle.id);
@@ -165,7 +167,7 @@ function update() {
   return true;
 }
 
-// Hard boards at production scale, each searched --repeat times; the table
+// Hard boards at OBSERVE's size, each searched --repeat times; the table
 // shows the median timings. It fails on an invariant failure (the catalog
 // baseline's and the committed reference's routes count as evidence), a crash,
 // a board missing from the catalog, or repeats that differ in anything but
