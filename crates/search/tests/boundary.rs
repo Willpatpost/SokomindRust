@@ -101,7 +101,7 @@ fn search_errors_keep_their_messages() {
     let cases = [
         (
             SearchError::Limits.to_string(),
-            "Use 1..1000000 states and 4..256 MiB",
+            "Use 1..60000000 states and 4..256 MiB",
         ),
         (
             SearchError::BudgetTooSmall.to_string(),

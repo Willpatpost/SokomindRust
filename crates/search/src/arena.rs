@@ -8,17 +8,26 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 /// No node: an empty table slot, or the root's parent.
 pub(crate) const NIL: u32 = u32::MAX;
 
-/// Bits of a node id in a queue key and in a record's parent field.
-const ID_BITS: u32 = 20;
+/// Bits of a node id in a queue key, in a record's parent field and in a
+/// table slot.
+const ID_BITS: u32 = 26;
 /// Low `ID_BITS` set: extracts an id, and stands for NIL in a record.
 const ID_MASK: u32 = (1 << ID_BITS) - 1;
 // Every id, the spare node's included, is at most MAX_STATES, so it fits
 // both fields with the all-ones value left over for a record's NIL parent.
 const _: () = assert!(MAX_STATES < ID_MASK as usize);
-// A node's depth is at most its id, and one push adds at most MAX_CELLS
-// moves (a walk shorter than the board, then the push), so a full u32 g
-// never overflows and is never narrowed.
-const _: () = assert!(MAX_STATES as u64 * MAX_CELLS as u64 <= u32::MAX as u64);
+
+/// Largest stored g. A node's depth is at most its id, and one push adds at
+/// most `MAX_CELLS` moves (a walk shorter than the board, then the push),
+/// but `MAX_STATES * MAX_CELLS` overflows a u32 and no tighter bound holds
+/// for every board, so [`Node::push_g`] saturates here instead. A stored
+/// `G_SAT` stands for any g at or above it: its key saturates at
+/// [`Key::F_SAT`], no game replays its route, and it bounds nothing from
+/// above, so the exact search certifies no proof from it. It is one below
+/// `u32::MAX`, which the WASM metrics send for "no route", so a saturated
+/// best route never reads as none.
+pub(crate) const G_SAT: u32 = u32::MAX - 1;
+const _: () = assert!((MAX_ROUTE as u64) < Key::F_SAT && Key::F_SAT < G_SAT as u64);
 
 /// Largest h a queue entry may carry: MAX_BOXES push distances, each below
 /// `MAX_CELLS`, plus at most `MAX_CELLS` for the root's keeper walk to its
@@ -58,6 +67,11 @@ pub(crate) struct Meta {
 }
 
 impl Node {
+    /// A child's g: the parent's `g`, a walk of `walk` moves, then the push,
+    /// saturated at [`G_SAT`].
+    pub(crate) fn push_g(g: u32, walk: u16) -> u32 {
+        g.saturating_add(u32::from(walk) + 1).min(G_SAT)
+    }
     /// The estimate as stored in [`Node::h`].
     pub(crate) fn store_h(h: u32) -> u16 {
         u16::try_from(h).unwrap_or(u16::MAX)
@@ -83,7 +97,7 @@ fn known(h: u16) -> Option<u32> {
 #[derive(Clone, Copy)]
 struct Record {
     g: u32,
-    /// Parent id in bits 0..20 ([`ID_MASK`] at the root), bits 20..28
+    /// Parent id in bits 0..26 ([`ID_MASK`] at the root), bits 26..28
     /// spare and zero, the push direction in bits 28..30, then
     /// [`Record::CLOSED`] and [`Record::SUPERSEDED`].
     link: u32,
@@ -127,14 +141,14 @@ impl Record {
     }
 }
 
-/// Queue entry `(f, h, id)` packed into one integer, f in the top 24 bits
-/// and h and id in 20 bits each, so integer order is exactly tuple order:
-/// lowest f first, then lowest h, then oldest. Values past a field
-/// saturate; see [`Key::F_SAT`].
+/// Queue entry `(f, h, id)` packed into one integer, f in the top 20 bits,
+/// h in the next 18 and the id in the low `ID_BITS` (26), so integer order
+/// is exactly tuple order: lowest f first, then lowest h, then oldest.
+/// Values past a field saturate; see [`Key::F_SAT`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Key(u64);
 impl Key {
-    const H_BITS: u32 = 20;
+    const H_BITS: u32 = 18;
     const F_SHIFT: u32 = Self::H_BITS + ID_BITS;
     /// Largest stored f. A key reading `F_SAT` stands for any f at or above
     /// it: never more than the true f, so a frontier read from keys stays a
@@ -195,6 +209,11 @@ pub(crate) struct Arena {
     box_cells: Vec<Cell>,
     counters: TableCounters,
     heap: BinaryHeap<Entry>,
+    /// Open-addressed slots, each a node id or [`NIL`] when empty. Ids stay
+    /// below [`ID_MASK`], so a slot's top 32 - `ID_BITS` = 6 bits are spare:
+    /// too few for the planned 12-bit hash tag (X13), which is therefore
+    /// not implemented. A 6-bit tag is worth trying only if profiling shows
+    /// table finds dominate.
     table: Vec<u32>,
     /// Boxes per state, the prefix of `State::boxes` that is hashed.
     boxes: usize,
@@ -213,18 +232,27 @@ impl Arena {
             return Err(SearchError::Limits);
         }
         // Flood and deadlock buffers and the heuristic tables per cell, plus
-        // the route, its string and the fixed scratch.
+        // the route, its string and the fixed scratch. Bytes are counted in
+        // u64, since usize is 32 bits on wasm32, and saturate, so a board too
+        // large to count never fits instead of wrapping.
         let per_cell =
             Reach::BYTES_PER_CELL + Deadlock::BYTES_PER_CELL + Heuristic::bytes_per_cell(boxes);
-        let fixed_bytes = cells * per_cell + FIXED_SCRATCH;
-        let budget = memory_mib * 1024 * 1024;
+        let fixed_bytes = (cells as u64)
+            .saturating_mul(per_cell as u64)
+            .saturating_add(FIXED_SCRATCH as u64);
+        let budget = memory_mib as u64 * 1024 * 1024;
+        // A record, its box cells and a queue entry, since the queue holds at
+        // most one entry per record.
+        let per_state =
+            (size_of::<Record>() + boxes * size_of::<Cell>() + size_of::<Entry>()) as u64;
         // One spare node keeps a solution found at the exact limit reachable.
+        // count is at most MAX_STATES, so only the sum with the fixed bytes
+        // can overflow.
         let bytes_for = |count: usize| {
-            fixed_bytes
-                + (count + 1) * (size_of::<Record>() + boxes * size_of::<Cell>())
-                // The queue holds at most one entry per record.
-                + (count + 1) * size_of::<Entry>()
-                + ((count + 1) * 2).next_power_of_two() * size_of::<u32>()
+            let records = count as u64 + 1;
+            fixed_bytes.saturating_add(
+                records * per_state + (records * 2).next_power_of_two() * size_of::<u32>() as u64,
+            )
         };
         // Exact largest limit that fits the budget, instead of stepping down 10%.
         let mut low = 0;
@@ -241,6 +269,9 @@ impl Arena {
             return Err(SearchError::BudgetTooSmall);
         }
         let limit = low;
+        // At most the budget, so it and every count reserved below fit a
+        // usize on wasm32 too.
+        let reserved_bytes = bytes_for(limit) as usize;
         let mut nodes = Vec::new();
         nodes
             .try_reserve_exact(limit + 1)
@@ -262,7 +293,7 @@ impl Arena {
         table.resize(table_size, NIL);
         Ok(Self {
             boxes,
-            reserved_bytes: bytes_for(limit),
+            reserved_bytes,
             scaled_down: limit < max_states,
             node_limit: limit,
             nodes,
@@ -495,6 +526,14 @@ mod tests {
             Some(SearchError::BudgetTooSmall)
         );
         assert_eq!(Arena::new(100, 1, 0, 4).err(), Some(SearchError::Limits));
+        // A cell count too large to count in bytes saturates instead of
+        // wrapping to a small total, on wasm32 and 64-bit alike.
+        for memory_mib in [*MEMORY_MIB_RANGE.start(), *MEMORY_MIB_RANGE.end()] {
+            assert_eq!(
+                Arena::new(usize::MAX, MAX_BOXES, MAX_STATES, memory_mib).err(),
+                Some(SearchError::BudgetTooSmall)
+            );
+        }
     }
 
     #[test]
@@ -718,34 +757,77 @@ mod tests {
         }
     }
 
-    /// The largest board and box count need 92,969,620 bytes (88.7 MiB) for a
-    /// full `MAX_STATES`, so no budget above 89 MiB changes a limit
-    /// (`MEMORY_MIB_RANGE`'s doc).
+    /// The key's field widths, with the largest key any node can carry one
+    /// below `u64::MAX`, and the worst f a queued node can reach exact.
     #[test]
-    fn eighty_nine_mib_fits_a_full_limit_at_any_size() {
-        let fits = Arena::new(MAX_CELLS, MAX_BOXES, MAX_STATES, 89).unwrap();
-        assert_eq!(fits.node_limit, MAX_STATES);
-        assert_eq!(fits.limit_status(), Status::StateLimit);
-        drop(fits);
-        let short = Arena::new(MAX_CELLS, MAX_BOXES, MAX_STATES, 88).unwrap();
-        assert!(short.node_limit < MAX_STATES);
-        assert_eq!(short.limit_status(), Status::MemoryLimit);
+    fn keys_split_into_twenty_eighteen_and_twenty_six_bits() {
+        assert_eq!(
+            (Key::F_SAT, Key::H_SAT, ID_MASK),
+            ((1 << 20) - 1, (1 << 18) - 1, (1 << 26) - 1)
+        );
+        let largest = Key::new(Key::F_SAT, Key::H_SAT, ID_MASK - 1);
+        assert_eq!(largest.0, u64::MAX - 1);
+        // MAX_ROUTE plus the fast policy's weight 5 times the largest h.
+        let worst = MAX_ROUTE as u64 + 5 * u64::from(MAX_QUEUED_H);
+        assert_eq!(worst, 775_840);
+        let key = Key::new(worst, MAX_QUEUED_H, MAX_STATES as u32);
+        assert_eq!(
+            (key.f(), key.h(), key.id()),
+            (worst, MAX_QUEUED_H, MAX_STATES as u32)
+        );
+        // A saturated g saturates its key, past every exact f.
+        let saturated = Key::new(u64::from(G_SAT), 0, 0);
+        assert_eq!(saturated.f(), Key::F_SAT);
+        assert!(saturated > Key::new(Key::F_SAT - 1, Key::H_SAT, ID_MASK - 1));
+    }
+
+    #[test]
+    fn push_g_adds_the_walk_and_the_push_and_saturates() {
+        assert_eq!(Node::push_g(0, 0), 1);
+        assert_eq!(Node::push_g(10, 5), 16);
+        assert_eq!(
+            Node::push_g(MAX_ROUTE as u32, u16::MAX - 1),
+            MAX_ROUTE as u32 + u32::from(u16::MAX)
+        );
+        assert_eq!(Node::push_g(G_SAT - 2, 0), G_SAT - 1);
+        assert_eq!(Node::push_g(G_SAT - 1, 0), G_SAT);
+        assert_eq!(Node::push_g(G_SAT - 1, u16::MAX - 1), G_SAT);
+        assert_eq!(Node::push_g(G_SAT, 0), G_SAT);
+        assert_eq!(Node::push_g(u32::MAX, u16::MAX), G_SAT);
     }
 
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
-    /// entry and 8 to 16 bytes of table. At 64 MiB, 19 boxes fit a full
-    /// `MAX_STATES` even at `MAX_CELLS` cells (about 240 KiB to spare) and
-    /// 20 boxes do not even on a tiny board (about 1.5 MiB over).
+    /// entry and 8 to 16 bytes of table, so no budget holds a full
+    /// `MAX_STATES`: 256 MiB holds 8,388,607 states at one box, where the
+    /// next state would double the table, and 2,789,285 at `MAX_BOXES` on
+    /// `MAX_CELLS` cells (`MAX_STATES`'s doc).
     #[test]
-    fn memory_binds_from_twenty_boxes_at_64_mib() {
-        let full = Arena::new(MAX_CELLS, 19, MAX_STATES, 64).unwrap();
-        assert_eq!(full.node_limit, MAX_STATES);
-        assert_eq!(full.limit_status(), Status::StateLimit);
-        drop(full);
-        for cells in [64, MAX_CELLS] {
-            let scaled = Arena::new(cells, 20, MAX_STATES, 64).unwrap();
-            assert!(scaled.node_limit < MAX_STATES, "{cells} cells");
-            assert_eq!(scaled.limit_status(), Status::MemoryLimit);
+    fn memory_binds_a_full_limit_at_every_budget() {
+        let top = *MEMORY_MIB_RANGE.end();
+        for (cells, boxes, fits) in [
+            (4, 1, 8_388_607),
+            (MAX_CELLS, 1, 8_388_607),
+            (4, MAX_BOXES, 2_793_036),
+            (MAX_CELLS, MAX_BOXES, 2_789_285),
+        ] {
+            let arena = Arena::new(cells, boxes, MAX_STATES, top).unwrap();
+            assert_eq!(arena.node_limit, fits, "{cells} cells, {boxes} boxes");
+            assert_eq!(arena.limit_status(), Status::MemoryLimit);
+            assert!(arena.reserved_bytes() <= top << 20);
         }
+    }
+
+    /// The exact edge at 64 MiB for the largest board and box count: 692,133
+    /// states fit with 72 bytes to spare, and one more scales the request.
+    #[test]
+    fn a_limit_one_past_the_budget_is_scaled_to_it() {
+        let fits = Arena::new(MAX_CELLS, MAX_BOXES, 692_133, 64).unwrap();
+        assert_eq!(fits.node_limit, 692_133);
+        assert_eq!(fits.limit_status(), Status::StateLimit);
+        assert_eq!(fits.reserved_bytes(), (64 << 20) - 72);
+        drop(fits);
+        let scaled = Arena::new(MAX_CELLS, MAX_BOXES, 692_134, 64).unwrap();
+        assert_eq!(scaled.node_limit, 692_133);
+        assert_eq!(scaled.limit_status(), Status::MemoryLimit);
     }
 }

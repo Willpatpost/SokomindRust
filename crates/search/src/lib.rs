@@ -56,21 +56,28 @@ pub use proof::Proof;
 use sokomind_core::{Board, MAX_ROUTE, State, StateError};
 use std::ops::RangeInclusive;
 
-/// Largest per-search state limit accepted anywhere. A state costs a 12-byte
-/// record, two bytes per box, an 8-byte queue entry and 8 to 16 bytes of
-/// index table, so at 64 MiB the memory budget binds first from about 20
-/// boxes: 19 fit a full limit even at `MAX_CELLS` cells, and 20 do not even
-/// on a tiny board (the arena test `memory_binds_from_twenty_boxes_at_64_mib`).
-pub const MAX_STATES: usize = 1_000_000;
+/// Largest per-search state limit accepted anywhere. Node ids fill 26 bits
+/// in queue keys, records and the state table, with the all-ones id
+/// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
+/// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
+/// queue entry and 8 to 16 bytes of index table, so no budget in
+/// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,789,285 states at
+/// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
+/// test `memory_binds_a_full_limit_at_every_budget`). A request at this
+/// limit therefore reserves nearly its whole memory budget up front, even on
+/// a small board, and a search that fills it ends with
+/// [`Status::MemoryLimit`], never [`Status::StateLimit`]. That eager
+/// reservation is accepted: a caller that wants a smaller footprint asks for
+/// fewer states or less memory.
+pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
 pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// The `memory_mib` budgets [`Search::new`] accepts. A caller may cap
-/// requests lower but never below this range's start. While the state limit
-/// is capped at [`MAX_STATES`], a budget above 89 MiB cannot raise it: that
-/// fits a full limit even at `MAX_BOXES` boxes on `MAX_CELLS` cells (see
-/// [`MAX_STATES`] for the per-state cost, and the arena test
-/// `eighty_nine_mib_fits_a_full_limit_at_any_size`).
+/// requests lower but never below this range's start. No budget holds a
+/// full [`MAX_STATES`] (see there for the per-state cost), so a larger budget
+/// raises a full limit's scaled-down state count all the way to this range's
+/// end.
 pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
 
 /// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].
@@ -413,8 +420,9 @@ impl Search {
     }
     /// Terminal proof; `None` while running or without a sound certificate.
     /// A limit or stop still yields one once a route exists: bounds, or
-    /// optimality when they meet. See [`Proof::kind`] for how each wire
-    /// format spells it.
+    /// optimality when they meet. A route too long to count exactly (see
+    /// [`Search::best_moves`]) yields none. See [`Proof::kind`] for how each
+    /// wire format spells it.
     pub fn proof(&self) -> Option<Proof> {
         match &self.0 {
             Kind::Exact(search) => search.proof(),
@@ -442,7 +450,9 @@ impl Search {
         self.engine().status()
     }
     /// Move count of the best route found so far, if any. It never grows: a
-    /// later route replaces it only when shorter.
+    /// later route replaces it only when shorter. Counts saturate: a route of
+    /// `u32::MAX - 1` moves or more reads as `u32::MAX - 1`, so it never
+    /// reads as the `u32::MAX` that the WASM metrics send for no route.
     pub fn best_moves(&self) -> Option<u32> {
         self.engine().best_moves()
     }

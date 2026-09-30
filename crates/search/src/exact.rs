@@ -1,5 +1,6 @@
 use crate::{
     SearchError, Status,
+    arena::G_SAT,
     engine::{Engine, Policy},
     proof::Proof,
 };
@@ -41,21 +42,70 @@ impl ExactSearch {
     /// Terminal proof; `None` while running or without an incumbent. A limit
     /// or cancellation keeps every bound computed so far.
     pub(crate) fn proof(&self) -> Option<Proof> {
-        match self.0.status() {
-            Status::Running => None,
-            Status::Exhausted => Some(Proof::Unsolvable),
-            _ => {
-                let upper = self.0.best_moves()?;
-                let lower = self.lower_bound()?;
-                Some(if lower >= upper {
-                    Proof::Optimal { moves: upper }
-                } else {
-                    Proof::Bounded {
-                        lower_bound: lower,
-                        upper_bound: upper,
-                    }
-                })
-            }
+        certify(self.0.status(), self.0.best_moves(), self.lower_bound())
+    }
+}
+
+/// The proof a search ending in `status` certifies from its incumbent's move
+/// count `best` and its lower bound `lower`.
+fn certify(status: Status, best: Option<u32>, lower: Option<u32>) -> Option<Proof> {
+    match status {
+        Status::Running => None,
+        Status::Exhausted => Some(Proof::Unsolvable),
+        _ => {
+            // A saturated g stands for any count at or above it, so it
+            // bounds nothing from above.
+            let upper = best.filter(|&best| best < G_SAT)?;
+            let lower = lower?;
+            Some(if lower >= upper {
+                Proof::Optimal { moves: upper }
+            } else {
+                Proof::Bounded {
+                    lower_bound: lower,
+                    upper_bound: upper,
+                }
+            })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_saturated_incumbent_certifies_nothing() {
+        let ends = [
+            Status::Solved,
+            Status::StateLimit,
+            Status::MemoryLimit,
+            Status::Cancelled,
+            Status::TimeLimit,
+        ];
+        for status in ends {
+            for lower in [None, Some(1), Some(G_SAT - 1), Some(G_SAT)] {
+                assert_eq!(certify(status, Some(G_SAT), lower), None, "{status:?}");
+            }
+            assert_eq!(certify(status, None, Some(1)), None, "{status:?}");
+            // One below saturation is an exact count.
+            let last = G_SAT - 1;
+            assert_eq!(
+                certify(status, Some(last), Some(last)),
+                Some(Proof::Optimal { moves: last })
+            );
+            assert_eq!(
+                certify(status, Some(last), Some(1)),
+                Some(Proof::Bounded {
+                    lower_bound: 1,
+                    upper_bound: last,
+                })
+            );
+            assert_eq!(certify(status, Some(last), None), None, "{status:?}");
+        }
+        assert_eq!(certify(Status::Running, Some(1), Some(1)), None);
+        assert_eq!(
+            certify(Status::Exhausted, None, None),
+            Some(Proof::Unsolvable)
+        );
     }
 }

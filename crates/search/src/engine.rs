@@ -459,7 +459,7 @@ impl Engine {
                         self.skipped.pruned_dead_cells += 1;
                         continue;
                     }
-                    let g = node.g + self.reach.distance(stand) as u32 + 1;
+                    let g = Node::push_g(node.g, self.reach.distance(stand));
                     if self.best_moves().is_some_and(|best| g >= best) {
                         self.skipped.pruned_bound += 1;
                         continue;
