@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { keyAction, swipeDirection } from '../src/input.ts';
+import { ignoresKey, keyAction, swipeDirection } from '../src/input.ts';
 
 test('a swipe moves along its main axis, with screen y growing down', () => {
   assert.equal(swipeDirection(0, -30), 0); assert.equal(swipeDirection(0, 30), 1);
@@ -25,4 +25,18 @@ test('arrow keys and WASD move in either case, and Z undoes', () => {
     ['z', 'undo'], ['Z', 'undo'],
   ] as const) assert.equal(keyAction(key), action, key);
   for (const key of ['q', 'Enter', ' ', '', 'Shift', 'constructor']) assert.equal(keyAction(key), undefined, key);
+});
+test('a Ctrl, Meta or Alt chord, or a key typed into a form field, stays with the browser', () => {
+  const none = { ctrlKey: false, metaKey: false, altKey: false };
+  const ctrl = { ...none, ctrlKey: true }, meta = { ...none, metaKey: true }, alt = { ...none, altKey: true };
+  for (const [modifiers, editable, ignored] of [
+    [none, false, false],
+    [none, true, true],
+    [ctrl, false, true],
+    [ctrl, true, true],
+    [meta, false, true],
+    [meta, true, true],
+    [alt, false, true],
+    [alt, true, true],
+  ] as const) assert.equal(ignoresKey(modifiers, editable), ignored, JSON.stringify({ ...modifiers, editable }));
 });

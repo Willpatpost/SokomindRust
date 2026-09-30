@@ -28,6 +28,12 @@ const KEYS = new Map<string, number | 'undo'>([
 export function keyAction(key: string): number | 'undo' | undefined {
   return KEYS.get(key.toLowerCase());
 }
+/** Whether a keydown stays with the browser: one chorded with Ctrl, Meta or Alt (a shortcut such as
+ * Ctrl+R or Cmd+W), or one typed into a form field, which `editable` reports. A Shift chord still
+ * plays, since keyAction reads either case. */
+export function ignoresKey({ ctrlKey, metaKey, altKey }: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, editable: boolean) {
+  return ctrlKey || metaKey || altKey || editable;
+}
 /** Binds the on-screen direction buttons, swipes on the board canvas and the
  * keyboard (arrow keys, WASD, Z) to the handlers. */
 export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: InputHandlers) {
@@ -67,12 +73,7 @@ export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: 
     if (direction !== undefined) move(direction);
   }, { passive: true });
   document.addEventListener('keydown', event => {
-    if (
-      event.ctrlKey
-      || event.metaKey
-      || event.altKey
-      || (event.target as HTMLElement).matches('input,textarea,select')
-    ) return;
+    if (ignoresKey(event, event.target instanceof Element && event.target.matches('input,textarea,select'))) return;
     const action = keyAction(event.key);
     if (action === undefined) return;
     event.preventDefault();
