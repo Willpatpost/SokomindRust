@@ -1,7 +1,5 @@
-# The two images share only rust-base and stubs. Past them, target server
-# (compose's api) runs server-build, and target web runs wasm-bindgen-version,
-# wasm-tools, wasm-build and web-build, so a server-only edit runs no WASM
-# step, and a WASM-only edit no server step.
+# Two targets, server (compose's api) and web, which share only rust-base and
+# stubs: a server-only edit runs no WASM step, and a WASM-only edit no server step.
 
 # The web-build stage's Node. It must equal .node-version, which CI's
 # setup-node reads; the deploy job in ci.yml fails when the two differ.
@@ -14,22 +12,19 @@ FROM rust:1.98.1-bookworm AS rust-base
 WORKDIR /app
 COPY rust-toolchain.toml ./
 
-# The workspace with stub sources (and no build.rs): Cargo needs every member's
-# manifest and a target for each before it builds any of them. Each build stage
-# compiles its dependencies against these stubs first, so that layer survives
-# crate edits, then deletes the stubs' outputs and fingerprints, which makes its
-# real build recompile the workspace crates whatever the copied files' mtimes.
+# Every member's manifest over a stub crate root, so each build stage compiles
+# its dependencies in a layer that survives source edits. It then deletes the
+# stubs' outputs, so its real build recompiles the crates whatever their mtimes.
 FROM rust-base AS stubs
 COPY Cargo.toml Cargo.lock ./
 COPY crates/core/Cargo.toml crates/core/
 COPY crates/search/Cargo.toml crates/search/
 COPY crates/wasm/Cargo.toml crates/wasm/
 COPY crates/server/Cargo.toml crates/server/
-RUN for crate in core search wasm; do mkdir -p crates/$crate/src && touch crates/$crate/src/lib.rs; done \
-    && mkdir -p crates/server/src && echo 'fn main() {}' > crates/server/src/main.rs
+RUN for crate in core search wasm; do mkdir -p crates/$crate/src && echo '//! Stub.' > crates/$crate/src/lib.rs; done \
+    && mkdir -p crates/server/src && printf '//! Stub.\nfn main() {}\n' > crates/server/src/main.rs
 
-# Copies only what the server compiles (the wasm crate keeps its stub), so a
-# WASM-only edit leaves this stage cached.
+# The server's sources; the wasm crate keeps its stub.
 FROM stubs AS server-build
 RUN cargo build --locked --release -p sokomind-server \
     && find target -name '*sokomind*' -prune -exec rm -rf {} +
@@ -65,10 +60,9 @@ RUN rustup target add wasm32-unknown-unknown
 COPY --from=wasm-bindgen-version /wasm-bindgen.version /tmp/
 RUN cargo install wasm-bindgen-cli --version "$(cat /tmp/wasm-bindgen.version)" --locked
 
-# Copies only what the WASM compiles (the server crate keeps its stub), so a
-# server-only edit leaves this stage cached. data/ is left out because only
-# test code in core and search includes it; a non-test include_str! of data/
-# in core, search or wasm must add COPY data data here.
+# The WASM's sources; the server crate keeps its stub. data/ is left out, as
+# only test code includes it: a non-test include_str! of data/ in core, search
+# or wasm must add COPY data data here.
 FROM wasm-tools AS wasm-build
 COPY --from=stubs /app ./
 RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
