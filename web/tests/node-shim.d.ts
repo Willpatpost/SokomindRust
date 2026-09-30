@@ -1,6 +1,7 @@
-// The repo installs no @types/node, so this declares just the Node APIs the
-// unit tests and playwright.config.ts use, loosely enough for type checking.
-// Delete it and list "node" in tsconfig.json's types if @types/node is added.
+// @types/node is installed for scripts/ only: tsconfig.json's empty types keeps it
+// out of here, so Node globals never type-check in the src modules these tests
+// import. This declares just the Node APIs the unit tests and playwright.config.ts
+// use, loosely enough for type checking.
 declare module 'node:test' {
   export function test(name: string, fn: () => void | Promise<void>): Promise<void>;
 }

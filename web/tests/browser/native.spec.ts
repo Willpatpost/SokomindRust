@@ -49,6 +49,26 @@ test('a solved puzzle is saved to PostgreSQL progress', async ({ page }) => {
   await expect(page.locator('#storage')).toHaveText(SAVED);
 });
 
+test('Replay best solves again without saving the same route twice', async ({ page }) => {
+  const posts: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/progress/')) posts.push(new URL(request.url()).pathname);
+  });
+  await connected(page);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#storage')).toHaveText(SAVED);
+  await page.click('#undo');
+  await expect(page.locator('#moves')).toHaveText('0');
+  await page.click('#best');
+  await expect(page.locator('#message')).toHaveText('Solved in 1 moves and 1 pushes.');
+  // A save would start at the replay's solving step; Stop turns off one tick after it.
+  await expect(page.locator('#cancel')).toBeDisabled();
+  // Requests are reported in the order they start, so once the next puzzle's
+  // progress lookup is seen, a save from the replay would have been seen too.
+  await Promise.all([page.waitForRequest('**/api/progress/tiny'), page.click('#next')]);
+  expect(posts).toEqual(['/api/progress/ultra-tiny']);
+});
+
 test('a verified server best is pulled on load', async ({ page }) => {
   await connected(page, { puzzle_id: 'ultra-tiny', route: 'D', moves: 1, pushes: 1 });
   await expect(page.locator('#best-score')).toHaveText('Best: 1 moves · 1 pushes');

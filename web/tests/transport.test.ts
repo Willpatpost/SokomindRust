@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeMetricTuple, decodeNativeReply, decodeSnapshot, decodeWorkerReply } from '../src/transport.ts';
+import { STATUSES } from '../src/protocol.ts';
+import {
+  decodeHealth, decodeMetricTuple, decodeNativeReply, decodeProgress, decodeSaveReply, decodeSnapshot, decodeWorkerReply,
+  encodeSolveRequest, nativeErrorText,
+} from '../src/transport.ts';
 import { native, progress } from './fakes.ts';
 
 test('native proofs normalize without guessing unknown kinds', () => {
@@ -13,7 +17,7 @@ test('native proofs normalize without guessing unknown kinds', () => {
 });
 test('both transport boundaries reject malformed counters, statuses and routes', () => {
   for (const patch of [ { expanded: -1 }, { generated: 0.5 }, { reserved_bytes: Infinity },
-    { moves: '1' }, { pushes: 2 }, { elapsed_ms: NaN }, { status: 'new_status' },
+    { moves: '1' }, { pushes: 2 }, { elapsed_ms: NaN }, { status: 'new_status' }, { status: 'running' },
     { route: 'XD' }, { route: 'DD' }, { route: null } ])
     assert.throws(() => decodeNativeReply({ ...native(), ...patch }));
   for (const value of [null, [], 'reply', { type: 'mystery' }, { type: 'error', message: 1 },
@@ -32,6 +36,11 @@ test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
     assert.throws(() => decodeMetricTuple(tuple, 'solved'));
   assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'));
 });
+test('every search status decodes as itself and no other string does', () => {
+  const none = [1, 2, 3, 0xffffffff, 0, 0xffffffff];
+  for (const status of STATUSES) assert.equal(decodeMetricTuple(none, status).status, status);
+  for (const status of ['Solved', 'stopped', '', null]) assert.throws(() => decodeMetricTuple(none, status), /Unknown solver status/);
+});
 test('snapshot ABI decodes the header and views the box cells', () => {
   const raw = new Uint32Array([7, 5, 2, 1, 12, 13]);
   const { boxes, ...header } = decodeSnapshot(raw, 2);
@@ -47,4 +56,38 @@ test('snapshot ABI decodes the header and views the box cells', () => {
   // A solved flag other than 0/1, more pushes than moves, or a count past MAX_ROUTE.
   for (const values of [[7, 5, 2, 2, 12], [7, 2, 5, 0, 12], [7, 100001, 0, 0, 12]])
     assert.throws(() => decodeSnapshot(new Uint32Array(values), 1), /Invalid WASM snapshot counters/);
+});
+test('solve requests encode to the server field names in a fixed order', () => {
+  const body = encodeSolveRequest({ rows: 'OOO\nORO', actions: 'D', mode: 'quality', maxStates: 1000, memoryMiB: 32, timeMs: 5000 });
+  assert.equal(body, '{"rows":["OOO","ORO"],"actions":"D","mode":"quality","time_ms":5000,"max_states":1000,"memory_mib":32}');
+});
+test('native errors show the server text as sent, and only a bare 429 points to the browser solver', () => {
+  for (const [status, error] of [[429, 'Solver busy; try the browser solver or retry later'],
+    [429, 'Too many solve requests; try the browser solver or try again shortly'],
+    [429, 'Too many requests; try the browser solver or try again shortly'], [400, 'Unknown search mode']] as const)
+    assert.equal(nativeErrorText(status, error), error);
+  assert.equal(nativeErrorText(429, undefined), 'Server returned HTTP 429. The browser solver still works: set Run on to This browser.');
+  assert.equal(nativeErrorText(502, undefined), 'Server returned HTTP 502');
+});
+test('health replies report persistence only when it is exactly true', () => {
+  assert.equal(decodeHealth({ status: 'ok', persistence: true }), true);
+  for (const value of [{ status: 'ok', persistence: false }, { status: 'ok' }, { persistence: 'true' }, [{ persistence: true }]])
+    assert.equal(decodeHealth(value), false);
+  for (const value of [null, 'ok', 1, '']) assert.equal(decodeHealth(value), undefined);
+});
+test('save replies must say whether the route improved the stored best', () => {
+  assert.equal(decodeSaveReply({ saved: true, improved: true }), true);
+  assert.equal(decodeSaveReply({ saved: true, improved: false }), false);
+  for (const value of [null, [], {}, { saved: true, improved: 'yes' }])
+    assert.throws(() => decodeSaveReply(value), /Invalid progress response/);
+});
+test('stored progress decodes to a full route with the counts the server reported', () => {
+  const stored = { puzzle_id: 'p', route: 'DD', moves: 2, pushes: 1 };
+  assert.deepEqual(decodeProgress(stored), { puzzleId: 'p', route: 'DD', moves: 2, pushes: 1 });
+  for (const [patch, error] of [[{ puzzle_id: 1 }, /Invalid progress record/], [{ route: null }, /Invalid progress record/],
+    [{ route: 'XD' }, /Invalid progress route/], [{ route: 'D'.repeat(100001) }, /Invalid progress route/],
+    [{ moves: -1 }, /Invalid progress moves/], [{ moves: '2' }, /Invalid progress moves/],
+    [{ pushes: 0.5 }, /Invalid progress pushes/]] as const)
+    assert.throws(() => decodeProgress({ ...stored, ...patch }), error);
+  for (const value of [null, [], 'DD']) assert.throws(() => decodeProgress(value), /Invalid progress record/);
 });

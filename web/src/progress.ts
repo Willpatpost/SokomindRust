@@ -1,5 +1,5 @@
 import * as storage from './storage.ts';
-import { counter, errorText, route, unboundFetch } from './transport.ts';
+import { decodeHealth, decodeProgress, decodeSaveReply, errorText, unboundFetch } from './transport.ts';
 import { browserScheduler, type Scheduler } from './scheduler.ts';
 
 interface Context { id: string; rows: string }
@@ -21,6 +21,11 @@ export class ProgressClient {
   /** Whether /api/health last reported PostgreSQL; set by probe(). */
   persistence = false;
   private context: Context | undefined;
+  /** The best last passed to `show`, which is always the current context's. */
+  private displayed: storage.Best | null = null;
+  /** By puzzle id, the last route the server has answered for: it replied to a save of
+   * that route, or returned it as the stored best, so posting it again changes nothing. */
+  private acknowledged = new Map<string, string>();
   private options: Options;
   private profile: string | null;
   private request: typeof fetch;
@@ -47,11 +52,13 @@ export class ProgressClient {
     const was = this.persistence;
     let retry = true;
     try {
+      // Part of the solve timeout chain; see TIME_MS in crates/server/src/solve.rs.
+      // 1.5 s outlasts the server's 900 ms HEALTH_TIMEOUT, which answers even when the database hangs.
       const response = await this.request('/api/health', { signal: AbortSignal.timeout(1500) });
-      const health: unknown = response.ok ? await response.json().catch(() => null) : null;
-      if (health && typeof health === 'object') {
-        this.persistence = (health as { persistence?: unknown }).persistence === true;
-        this.options.connected?.(this.persistence);
+      const persistence = response.ok ? decodeHealth(await response.json().catch(() => null)) : undefined;
+      if (persistence !== undefined) {
+        this.persistence = persistence;
+        this.options.connected?.(persistence);
       } else if (response.ok || response.status === 404) retry = false;
     } catch { /* Offline or timed out: ask again later. */ }
     if (this.persistence) {
@@ -68,7 +75,7 @@ export class ProgressClient {
     if (this.saveTimer !== undefined) this.clock.clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
     this.context = { id, rows };
-    this.options.show(this.best());
+    this.display(this.best());
     void this.pull();
   }
   session(actions: string, delayed = false) {
@@ -96,6 +103,10 @@ export class ProgressClient {
   }
   keep(fullRoute: string, moves: number, pushes: number) {
     if (!this.context) return;
+    // Only a strictly better route replaces the best, so a tie with the best on show
+    // (Replay best, or redoing the final move) returns before re-reading and replaying it.
+    // A better best another tab saved meanwhile appears on the next select instead.
+    if (this.displayed?.moves === moves && this.displayed.pushes === pushes) return;
     const old = this.best();
     let best = old;
     if (!old || moves < old.moves || (moves === old.moves && pushes < old.pushes)) {
@@ -103,14 +114,20 @@ export class ProgressClient {
       if (storage.write('best.' + this.context.id, next)) best = next;
       else this.options.status('Could not save the best route in this browser.');
     }
+    this.display(best);
+  }
+  private display(best: storage.Best | null) {
+    this.displayed = best;
     this.options.show(best);
   }
   private remote(context: Context | undefined): context is Context {
     return !!context && this.persistence && !!this.profile && context.id !== 'custom';
   }
+  /** Posts a solving route unless the server has already answered for exactly this one,
+   * as when Replay best or redoing the final move solves the puzzle again. */
   async sync(fullRoute: string) {
     const context = this.context;
-    if (!this.remote(context)) return;
+    if (!this.remote(context) || this.acknowledged.get(context.id) === fullRoute) return;
     const failed = 'Server save failed. Local progress is still available if browser storage is enabled.';
     try {
       const response = await this.request(`/api/progress/${encodeURIComponent(context.id)}`, {
@@ -125,11 +142,10 @@ export class ProgressClient {
           : response.status < 500 ? `Server save rejected: ${error ?? `HTTP ${response.status}`}` : failed);
         return;
       }
-      const value: unknown = await response.json();
+      const improved = decodeSaveReply(await response.json());
       if (this.context !== context) return;
-      if (!value || typeof value !== 'object' || typeof (value as { improved?: unknown }).improved !== 'boolean')
-        throw new Error('Invalid progress response');
-      this.options.status((value as { improved: boolean }).improved
+      this.acknowledged.set(context.id, fullRoute);
+      this.options.status(improved
         ? 'Verified best route saved in PostgreSQL for this browser profile.'
         : 'Server already stored an equal or better route for this puzzle.');
     } catch { if (this.context === context) this.options.status(failed); }
@@ -142,13 +158,12 @@ export class ProgressClient {
         headers: { 'x-profile-id': this.profile! }, signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) return;
-      const value: unknown = await response.json();
-      if (this.context !== context || !value || typeof value !== 'object') return;
-      const result = value as Record<string, unknown>, fullRoute = route(result.route);
-      if (fullRoute === undefined || result.puzzle_id !== context.id) return;
-      const checked = this.options.verify(context.rows, fullRoute);
-      if (counter(result.moves, 'progress moves') !== checked.moves || counter(result.pushes, 'progress pushes') !== checked.pushes) return;
-      this.keep(fullRoute, checked.moves, checked.pushes);
+      const stored = decodeProgress(await response.json());
+      if (this.context !== context || stored.puzzleId !== context.id) return;
+      const checked = this.options.verify(context.rows, stored.route);
+      if (stored.moves !== checked.moves || stored.pushes !== checked.pushes) return;
+      this.acknowledged.set(context.id, stored.route);
+      this.keep(stored.route, checked.moves, checked.pushes);
     } catch { /* Optional persistence must not interrupt play. */ }
   }
 }

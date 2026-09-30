@@ -1,4 +1,4 @@
-use sokomind_core::{Board, MAX_BOXES, NONE, WALL};
+use sokomind_core::{Board, MAX_BOXES, NONE, ParseError, WALL};
 
 const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
@@ -23,9 +23,12 @@ fn fingerprints_match_the_reference() {
 
 #[test]
 fn rejects_carriage_returns_and_empty_rows() {
-    assert!(Board::parse("OOOOO\r\nO R O\r\nOOOOO").is_err());
-    assert!(Board::parse("OOOOO\n\nO R O\nOOOOO").is_err());
-    assert!(Board::parse("OOOOO\nO R O\nOOOOO\n\n").is_err());
+    assert_eq!(
+        rejection("OOOOO\r\nO R O\r\nOOOOO"),
+        ParseError::CarriageReturn
+    );
+    assert_eq!(rejection("OOOOO\n\nO R O\nOOOOO"), ParseError::EmptyRow);
+    assert_eq!(rejection("OOOOO\nO R O\nOOOOO\n\n"), ParseError::EmptyRow);
     // One trailing newline is a paste artifact, not a row.
     let board = Board::parse("OOOOO\nO R O\nO A O\nO a O\nOOOOO\n").unwrap();
     assert_eq!(board.height(), 5);
@@ -41,8 +44,8 @@ fn ragged_rows_are_padded_with_walls() {
     assert_eq!(board.neighbors()[10][3], NONE);
 }
 
-/// The rejection message, panicking if the text parses.
-fn rejection(text: &str) -> String {
+/// Why the text is rejected, panicking if it parses.
+fn rejection(text: &str) -> ParseError {
     Board::parse(text)
         .err()
         .unwrap_or_else(|| panic!("accepted {text:?}"))
@@ -64,7 +67,7 @@ fn cell_limit_is_4096() {
     assert_eq!(Board::parse(&rows.join("\n")).unwrap().tiles().len(), 4096);
     // Ragged rows pad to the widest one: 65 x 64 cells.
     rows[63].push('O');
-    assert!(rejection(&rows.join("\n")).contains("1..4096 cells"));
+    assert_eq!(rejection(&rows.join("\n")), ParseError::TooManyCells);
 }
 
 #[test]
@@ -74,7 +77,7 @@ fn text_limit_is_8192_bytes() {
     assert_eq!(text.len(), 8192);
     assert_eq!(Board::parse(&text).unwrap().height(), 4096);
     text.push('O');
-    assert!(rejection(&text).contains("too large"));
+    assert_eq!(rejection(&text), ParseError::TooLarge);
 }
 
 #[test]
@@ -83,28 +86,52 @@ fn box_count_is_1_to_32() {
         Board::parse(&room(MAX_BOXES)).unwrap().labels().len(),
         MAX_BOXES
     );
-    assert!(rejection(&room(MAX_BOXES + 1)).contains("1..32 boxes"));
-    assert!(rejection("OOO\nORO\nOOO").contains("1..32 boxes"));
+    assert_eq!(rejection(&room(MAX_BOXES + 1)), ParseError::BoxCount);
+    assert_eq!(rejection("OOO\nORO\nOOO"), ParseError::BoxCount);
     // Goals alone are not boxes.
-    assert!(rejection("OOOO\nORSO\nOaOO\nOOOO").contains("1..32 boxes"));
+    assert_eq!(rejection("OOOO\nORSO\nOaOO\nOOOO"), ParseError::BoxCount);
 }
 
 #[test]
 fn rejects_unknown_symbols() {
-    // Lowercase x is reserved: plain S already marks goals for X boxes.
-    for symbol in ['#', '.', '@', '$', '*', '+', '0', 'x', '\t', '\u{e9}'] {
+    // A multi-byte character is reported at its first byte.
+    for symbol in ['#', '.', '@', '$', '*', '+', '0', '\t', '\u{e9}'] {
         let text = format!("OOOOO\nOR{symbol}XO\nO  SO\nOOOOO");
-        assert!(
-            rejection(&text).contains("Unsupported symbol at row 2, column 3"),
+        assert_eq!(
+            rejection(&text),
+            ParseError::UnsupportedSymbol { row: 2, column: 3 },
             "{symbol:?}"
+        );
+    }
+}
+
+/// No box carries O, R or S, and plain S already marks goals for X boxes,
+/// so o, r, s and x are not goals. Each is reported where it stands rather
+/// than as an unmatched goal after the whole board is read.
+#[test]
+fn reserved_goal_letters_report_their_position() {
+    for (text, row, column) in [
+        ("OOOOOO\nORoXSO\nO    O\nOOOOOO", 2, 3),
+        ("OOOOOO\nOR XSO\nOr   O\nOOOOOO", 3, 2),
+        ("OOOOOO\nOR XSO\nO  s O\nOOOOOO", 3, 4),
+        ("OOOOOO\nOR XSO\nO   xO\nOOOOOO", 3, 5),
+    ] {
+        assert_eq!(
+            rejection(text),
+            ParseError::UnsupportedSymbol { row, column },
+            "{text:?}"
+        );
+        assert_eq!(
+            rejection(text).to_string(),
+            format!("Unsupported symbol at row {row}, column {column}")
         );
     }
 }
 
 #[test]
 fn requires_exactly_one_robot() {
-    assert!(rejection("OOOOO\nO XSO\nOOOOO").contains("Exactly one robot"));
-    assert!(rejection("OOOOOO\nORXSRO\nOOOOOO").contains("Exactly one robot"));
+    assert_eq!(rejection("OOOOO\nO XSO\nOOOOO"), ParseError::RobotCount);
+    assert_eq!(rejection("OOOOOO\nORXSRO\nOOOOOO"), ParseError::RobotCount);
 }
 
 #[test]
@@ -116,9 +143,34 @@ fn every_label_needs_as_many_goals_as_boxes() {
         "OOOOOO\nORXXSO\nOOOOOO",
         "OOOOOO\nORAaaO\nOOOOOO",
     ] {
-        assert!(
-            rejection(text).contains("same number of matching goals"),
-            "{text:?}"
-        );
+        assert_eq!(rejection(text), ParseError::UnmatchedGoals, "{text:?}");
+    }
+}
+
+/// Users read these texts through the server and the web app, so they are
+/// pinned here: changing one changes what users see.
+#[test]
+fn parse_errors_keep_their_messages() {
+    let cases = [
+        (ParseError::TooLarge, "Board text is too large"),
+        (
+            ParseError::CarriageReturn,
+            "Board rows cannot contain carriage returns",
+        ),
+        (ParseError::EmptyRow, "Board rows cannot be empty"),
+        (ParseError::TooManyCells, "Board must contain 1..4096 cells"),
+        (
+            ParseError::UnsupportedSymbol { row: 2, column: 3 },
+            "Unsupported symbol at row 2, column 3",
+        ),
+        (ParseError::RobotCount, "Exactly one robot R is required"),
+        (ParseError::BoxCount, "Use 1..32 boxes"),
+        (
+            ParseError::UnmatchedGoals,
+            "Each box label must have the same number of matching goals",
+        ),
+    ];
+    for (error, message) in cases {
+        assert_eq!(error.to_string(), message);
     }
 }

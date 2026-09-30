@@ -1,15 +1,17 @@
 /** sokomind_core::MAX_ROUTE: the longest route Rust replays. */
 export const MAX_ROUTE = 100_000;
 /** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
- * At 64 MiB the memory budget binds first on boards with 14 or more boxes. */
+ * A state costs about 28 B plus 2 B per box (record, queue entry, box cells and index
+ * table), so at 64 MiB the memory budget binds first from about 20 boxes: the catalog's
+ * 20-22-box boards fill their arenas at about 0.91-0.97M records. */
 export const MAX_STATES = 1_000_000;
 /** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
  * apply to `mode`; also the values of the #mode select. */
 export const MODES = ['fast', 'quality', 'optimal'] as const;
 export type Mode = typeof MODES[number];
-/** Matches sokomind_search::Status::as_str. */
-export type SearchStatus =
-  'running' | 'solved' | 'exhausted' | 'state_limit' | 'memory_limit' | 'time_limit' | 'cancelled';
+/** Matches sokomind_search::Status::as_str, which the worker and POST /api/solve report as `status`. */
+export const STATUSES = ['running', 'solved', 'exhausted', 'state_limit', 'memory_limit', 'time_limit', 'cancelled'] as const;
+export type SearchStatus = typeof STATUSES[number];
 export type Proof =
   | { kind: 'optimal'; moves: number }
   | { kind: 'bounded'; lower: number; upper: number }
@@ -41,4 +43,7 @@ export type WorkerRequest = { type: 'solve'; request: SolveRequest } | { type: '
 // final best on 'done' whenever it improved since the last one sent.
 export interface SearchUpdate { type: 'progress' | 'done'; metrics: Metrics; elapsedMs: number; route?: string }
 export type WorkerReply = SearchUpdate | { type: 'error'; message: string };
+/** GET /api/progress/{id} as decoded by transport's decodeProgress: the profile's
+ * stored best (Record in crates/server/src/progress.rs), with the server's counts. */
+export interface ProgressRecord { puzzleId: string; route: string; moves: number; pushes: number }
 export const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);

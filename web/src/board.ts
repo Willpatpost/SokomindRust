@@ -1,13 +1,19 @@
-import type { Snapshot } from './protocol';
+import type { Snapshot } from './protocol.ts';
+// Tile encoding, as WasmGame.tiles returns it: one byte per cell in row-major
+// order, 0 for floor, WALL for a wall or row padding, and otherwise the ASCII
+// code of a goal's label (PLAIN for an S goal). Boxes and the robot come from
+// the snapshot instead.
 const WALL = 255; // sokomind_core::WALL
 const PLAIN = 88; // 'X': the label of unlettered boxes and their goals
 export class BoardView {
+  private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   /** Live computed style of the board container. */
   private wrap: CSSStyleDeclaration;
   /** The whole board fits at 4 px tiles or larger, so it never scrolls and swipes can move the robot. */
   fits = true;
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas is unavailable');
     this.ctx = ctx;

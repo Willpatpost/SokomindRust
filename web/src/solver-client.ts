@@ -1,6 +1,18 @@
 import { MAX_ROUTE, errorMessage, type SearchUpdate, type SolveRequest, type WorkerRequest } from './protocol.ts';
 import { browserScheduler, type Scheduler } from './scheduler.ts';
-import { decodeNativeReply, decodeWorkerReply, errorText, unboundFetch } from './transport.ts';
+import { decodeNativeReply, decodeWorkerReply, encodeSolveRequest, errorText, nativeErrorText, unboundFetch } from './transport.ts';
+
+/** How often a running search's elapsed time is redrawn between its replies. */
+const ELAPSED_TICK_MS = 150;
+/** How long past its time budget a worker may stay silent before it is written off. The worker
+ * enforces the budget itself; the grace covers building and posting its final route. */
+const WORKER_GRACE_MS = 2000;
+/** How long a cancelled worker has to post its final reply before it is terminated. */
+const CANCEL_GRACE_MS = 1000;
+/** How long past its time budget the page waits for a native search to answer.
+ * Part of the solve timeout chain; see TIME_MS in crates/server/src/solve.rs.
+ * The 5 s margin leaves the server time to answer after its own deadline. */
+const NATIVE_GRACE_MS = 5000;
 
 export interface WorkerPort {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
@@ -61,6 +73,12 @@ export class SolverClient {
     if (this.state.kind === 'completed') this.state = { kind: 'completed', prefix: this.state.prefix };
     this.options.changed();
   }
+  /** Redraws the elapsed time since `started` while `active` is the running search. */
+  private tick(active: Active, started: number): number {
+    return this.clock.interval(() => {
+      if (this.state === active) this.options.elapsed(this.clock.now() - started);
+    }, ELAPSED_TICK_MS);
+  }
   private finish(active: Active) {
     if (this.state !== active) return;
     this.release(active);
@@ -109,14 +127,12 @@ export class SolverClient {
       const active: Active = { kind: 'browser-running', prefix: request.actions, worker, timer: 0, watchdog: 0 };
       this.state = active;
       try {
-        active.timer = this.clock.interval(() => {
-          if (this.state === active) this.options.elapsed(this.clock.now() - started);
-        }, 150);
+        active.timer = this.tick(active, started);
         active.watchdog = this.clock.timeout(() => {
           if (this.state !== active) return;
           this.options.status(active.route !== undefined ? 'Stopped at deadline. Verified route retained.' : 'Worker deadline reached.');
           this.finish(active);
-        }, request.timeMs + 2000);
+        }, request.timeMs + WORKER_GRACE_MS);
         worker.onmessage = ({ data }) => {
           if (this.state !== active) return;
           try {
@@ -135,24 +151,16 @@ export class SolverClient {
     const active: Active = { kind: 'native-running', prefix: request.actions, abort, timer: 0, watchdog: 0 };
     this.state = active;
     try {
-      active.timer = this.clock.interval(() => {
-        if (this.state === active) this.options.elapsed(this.clock.now() - started);
-      }, 150);
+      active.timer = this.tick(active, started);
       active.watchdog = this.clock.timeout(() => {
         this.fail(active, `Server search exceeded its ${request.timeMs / 1000} s budget.`);
-      }, request.timeMs + 5000);
+      }, request.timeMs + NATIVE_GRACE_MS);
       this.options.changed();
       const response = await this.request('/api/solve', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, signal: abort.signal,
-        body: JSON.stringify({ rows: request.rows.split('\n'), actions: request.actions, mode: request.mode,
-          time_ms: request.timeMs, max_states: request.maxStates, memory_mib: request.memoryMiB }),
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: abort.signal, body: encodeSolveRequest(request),
       });
       if (this.state !== active) return;
-      if (!response.ok) {
-        const error = (await errorText(response)) ?? `Server returned HTTP ${response.status}`;
-        throw new Error(response.status === 429 && !/browser/i.test(error)
-          ? `${error}. The browser solver still works: set Run on to This browser.` : error);
-      }
+      if (!response.ok) throw new Error(nativeErrorText(response.status, await errorText(response)));
       const value: unknown = await response.json();
       if (this.state === active) this.accept(active, decodeNativeReply(value));
     } catch (error) { this.fail(active, error); }
@@ -168,7 +176,7 @@ export class SolverClient {
           if (this.state !== active) return;
           this.options.status(active.route !== undefined ? 'Stopped. Verified route retained.' : 'Stopped.');
           this.finish(active);
-        }, 1000);
+        }, CANCEL_GRACE_MS);
       } catch (error) { this.fail(active, error); }
     } else if (active.kind === 'native-running') {
       this.reset();

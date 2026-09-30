@@ -1,7 +1,19 @@
 import init, { WasmSearch } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
-import { errorMessage, type WorkerReply, type WorkerRequest } from './protocol';
-import { decodeMetricTuple } from './transport';
+import { errorMessage, type WorkerReply, type WorkerRequest } from './protocol.ts';
+import { decodeMetricTuple } from './transport.ts';
+/** Search time between yields: a 'cancel' message is only read while the loop is yielded. */
+const SLICE_MS = 8;
+/** Pops per advance() between deadline checks, as POPS_PER_CHECK in crates/server/src/solve.rs:
+ * the time limit overshoots by at most this many pops, and the clock reads between batches cost
+ * little beside them. */
+const POPS_PER_ADVANCE = 8;
+/** How often a running search posts its metrics, which keep the counters on screen moving. */
+const REPORT_MS = 150;
+/** The least time between two improved routes posted while the search runs. */
+const ROUTE_SAMPLE_MS = 500;
+// Set by 'cancel' and never cleared: SolverClient starts a fresh worker for each
+// search and terminates it when the search ends, so a worker runs one search.
 let cancelled = false;
 const post = (message: WorkerReply) => self.postMessage(message);
 // Browsers clamp nested setTimeout(0) to >= 4ms, which would idle a third
@@ -25,19 +37,24 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
     let running = true;
     while (true) {
       const slice = performance.now();
-      while (running && performance.now() - slice < 8) {
-        if (cancelled || performance.now() - started >= r.timeMs) { search.stop(!cancelled); running = false; }
-        else running = search.advance(8);
+      while (running && performance.now() - slice < SLICE_MS) {
+        if (cancelled) {
+          search.cancel();
+          running = false;
+        } else if (performance.now() - started >= r.timeMs) {
+          search.stop_time_limit();
+          running = false;
+        } else running = search.advance(POPS_PER_ADVANCE);
       }
       const elapsedMs = performance.now() - started;
       // Only a finished search needs its status string from Rust.
       const metrics = decodeMetricTuple(search.metrics(), running ? 'running' : search.status());
-      // Rebuilding a route walks every push, so a stream of Quality improvements
-      // is sampled every 500 ms; the first route and the final best always go out.
+      // Rebuilding a route walks every push, so a stream of Quality improvements is
+      // sampled every ROUTE_SAMPLE_MS; the first route and the final best always go out.
       const best = metrics.best;
       const improved = best !== undefined
-        && (reportedBest === undefined || (best < reportedBest && (!running || elapsedMs - lastRoute >= 500)));
-      if (improved || !running || elapsedMs - lastReport >= 150) {
+        && (reportedBest === undefined || (best < reportedBest && (!running || elapsedMs - lastRoute >= ROUTE_SAMPLE_MS)));
+      if (improved || !running || elapsedMs - lastReport >= REPORT_MS) {
         // Serialize only tiny telemetry and a newly improved, Rust-verified route.
         const route = improved ? search.solution() : undefined;
         if (improved) lastRoute = elapsedMs;

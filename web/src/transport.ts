@@ -1,26 +1,28 @@
-import { MAX_ROUTE, type Metrics, type Proof, type SearchStatus, type SearchUpdate, type Snapshot, type WorkerReply } from './protocol.ts';
+import {
+  MAX_ROUTE, STATUSES, type Metrics, type ProgressRecord, type Proof, type SearchStatus, type SearchUpdate, type Snapshot,
+  type SolveRequest, type WorkerReply,
+} from './protocol.ts';
 
 type ObjectValue = Record<string, unknown>;
-function object(value: unknown): ObjectValue {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid solver response');
+function object(value: unknown, name = 'solver response'): ObjectValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${name}`);
   return value as ObjectValue;
 }
-export function counter(value: unknown, name: string): number {
+function counter(value: unknown, name: string, what = 'solver'): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
-    throw new Error(`Invalid solver ${name}`);
+    throw new Error(`Invalid ${what} ${name}`);
   return value;
 }
 const optionalCounter = (value: unknown, name: string) => value == null ? undefined : counter(value, name);
-export function status(value: unknown): SearchStatus {
-  switch (value) {
-    case 'running': case 'solved': case 'exhausted': case 'state_limit': case 'memory_limit': case 'time_limit': case 'cancelled': return value;
-    default: throw new Error('Unknown solver status');
-  }
+function status(value: unknown): SearchStatus {
+  const known = STATUSES.find(item => item === value);
+  if (known === undefined) throw new Error('Unknown solver status');
+  return known;
 }
-export function route(value: unknown): string | undefined {
+function route(value: unknown, what = 'solver'): string | undefined {
   if (value == null) return undefined;
   if (typeof value !== 'string' || value.length > MAX_ROUTE || !/^[UDLR]*$/.test(value))
-    throw new Error('Invalid solver route');
+    throw new Error(`Invalid ${what} route`);
   return value;
 }
 function proof(value: unknown): Proof {
@@ -63,10 +65,14 @@ export function decodeWorkerReply(value: unknown): WorkerReply {
     return { type: 'error', message: v.message };
   }
   if (v.type !== 'progress' && v.type !== 'done') throw new Error('Unknown worker reply');
+  return decodeUpdate(v, v.type);
+}
+/** The checks a worker update and a native reply share, on the worker's field names. */
+function decodeUpdate(v: ObjectValue, type: SearchUpdate['type']): SearchUpdate {
   const m = metrics(v.metrics), r = route(v.route);
-  if ((v.type === 'progress') !== (m.status === 'running')) throw new Error('Inconsistent solver completion');
+  if ((type === 'progress') !== (m.status === 'running')) throw new Error('Inconsistent solver completion');
   if (r !== undefined && r.length !== m.best) throw new Error('Route and move count disagree');
-  return { type: v.type, metrics: m, route: r, elapsedMs: elapsed(v.elapsedMs) };
+  return { type, metrics: m, route: r, elapsedMs: elapsed(v.elapsedMs) };
 }
 function elapsed(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('Invalid solver elapsed time');
@@ -94,12 +100,10 @@ export function decodeNativeReply(value: unknown): SearchUpdate {
   const r = route(v.route), moves = optionalCounter(v.moves, 'moves'), pushes = optionalCounter(v.pushes, 'pushes');
   if ((r !== undefined) !== (moves !== undefined) || (r !== undefined) !== (pushes !== undefined)
     || (pushes !== undefined && moves !== undefined && pushes > moves)) throw new Error('Invalid native route counters');
-  const decoded = decodeWorkerReply({ type: 'done', route: r, elapsedMs: v.elapsed_ms, metrics: {
+  return decodeUpdate({ route: r, elapsedMs: v.elapsed_ms, metrics: {
     expanded: v.expanded, generated: v.generated, reservedBytes: v.reserved_bytes,
     best: moves, lowerBound: lower, proof: p, status: v.status,
-  } });
-  if (decoded.type === 'error') throw new Error(decoded.message);
-  return decoded;
+  } }, 'done');
 }
 /** WASM metrics ABI: first six u32s are stable; appended telemetry is optional. */
 export function decodeMetricTuple(values: ArrayLike<number>, searchStatus: unknown): Metrics {
@@ -125,6 +129,42 @@ export function decodeSnapshot(values: Uint32Array, boxCount: number): Snapshot 
   const player = values[0], moves = values[1], pushes = values[2], solved = values[3];
   if (solved > 1 || pushes > moves || moves > MAX_ROUTE) throw new Error('Invalid WASM snapshot counters');
   return { player, moves, pushes, solved: solved === 1, boxes: values.subarray(4) };
+}
+/** POST /api/solve's body, in the snake_case of Request in crates/server/src/solve.rs, which
+ * rejects unknown fields. */
+export function encodeSolveRequest(request: SolveRequest): string {
+  return JSON.stringify({ rows: request.rows.split('\n'), actions: request.actions, mode: request.mode,
+    time_ms: request.timeMs, max_states: request.maxStates, memory_mib: request.memoryMiB });
+}
+/** The message for a failed POST /api/solve. Each 429 text a solve can get from the API or nginx
+ * names the browser solver (the busy and rate-limit answers in crates/server/src/api.rs and
+ * solve.rs, and @api_limited in deploy/nginx.conf), so a sent error is shown as is and only a 429
+ * whose body carries no text gains that pointer. */
+export function nativeErrorText(status: number, error: string | undefined): string {
+  if (error !== undefined) return error;
+  const text = `Server returned HTTP ${status}`;
+  return status === 429 ? `${text}. The browser solver still works: set Run on to This browser.` : text;
+}
+/** GET /api/health's `persistence`, or undefined when the reply is not an object (as when a host
+ * without the API serves an app page or an empty body); an array or an object without
+ * `persistence: true` reports false. */
+export function decodeHealth(value: unknown): boolean | undefined {
+  return value && typeof value === 'object' ? (value as { persistence?: unknown }).persistence === true : undefined;
+}
+/** POST /api/progress/{id}'s `improved`: whether the route replaced the stored best. */
+export function decodeSaveReply(value: unknown): boolean {
+  const v = object(value, 'progress response');
+  if (typeof v.improved !== 'boolean') throw new Error('Invalid progress response');
+  return v.improved;
+}
+/** GET /api/progress/{id}'s stored best. The counts are the server's claim: the caller replays the
+ * route and compares them before keeping it. */
+export function decodeProgress(value: unknown): ProgressRecord {
+  const v = object(value, 'progress record'), stored = route(v.route, 'progress');
+  if (typeof v.puzzle_id !== 'string' || stored === undefined) throw new Error('Invalid progress record');
+  return {
+    puzzleId: v.puzzle_id, route: stored, moves: counter(v.moves, 'moves', 'progress'), pushes: counter(v.pushes, 'pushes', 'progress'),
+  };
 }
 export async function errorText(response: Response): Promise<string | undefined> {
   const value: unknown = await response.json().catch(() => null);

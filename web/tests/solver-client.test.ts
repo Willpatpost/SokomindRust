@@ -97,8 +97,12 @@ test('native timeout completes immediately even if a transport ignores abort', a
 test('native reply is normalized and verified, busy API failure leaves client usable', async () => {
   const good = setup({ fetch: async () => Response.json(native()) }); await good.client.solve('native', request);
   assert.equal(good.client.route, 'D'); assert.deepEqual(good.verified, ['D']); assert.equal(good.clock.tasks.size, 0);
-  const busy = setup({ fetch: async () => Response.json({ error: 'Too many solve requests' }, { status: 429 }) });
-  await busy.client.solve('native', request); assert.match(busy.statuses[0], /browser solver still works/); assert.equal(busy.client.busy, false);
+  const limited = 'Too many solve requests; try the browser solver or try again shortly';
+  const busy = setup({ fetch: async () => Response.json({ error: limited }, { status: 429 }) });
+  await busy.client.solve('native', request); assert.equal(busy.statuses[0], limited);
+  assert.equal(busy.client.busy, false); assert.equal(busy.clock.tasks.size, 0);
+  const bare = setup({ fetch: async () => new Response(null, { status: 429 }) });
+  await bare.client.solve('native', request); assert.match(bare.statuses[0], /^Server returned HTTP 429\. The browser solver still works/);
 });
 test('native default transport passes the browser fetch brand check', async () => {
   await withGlobalFetch(brandCheckedFetch(async () => Response.json(native())), async () => {

@@ -2,23 +2,15 @@ import './style.css';
 import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
 import catalog from '../../data/puzzles.json';
-import { BoardView } from './board';
-import { bindInput } from './input';
-import * as storage from './storage';
-import {
-  MAX_ROUTE,
-  MAX_STATES,
-  MODES,
-  errorMessage,
-  type SearchStatus,
-  type SearchUpdate,
-  type Snapshot,
-  type SolveRequest,
-} from './protocol';
-import { ENGINES, SolverClient } from './solver-client';
-import { decodeSnapshot } from './transport';
-import { Playback } from './playback';
-import { ProgressClient } from './progress';
+import { BoardView } from './board.ts';
+import { bindInput } from './input.ts';
+import * as storage from './storage.ts';
+import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
+import { ENGINES, SolverClient } from './solver-client.ts';
+import { decodeSnapshot } from './transport.ts';
+import { Playback } from './playback.ts';
+import { ProgressClient } from './progress.ts';
+import { statusText } from './verdict.ts';
 
 interface Puzzle { id: string; title: string; difficulty: string; rows: string[]; hint?: string }
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
@@ -184,28 +176,11 @@ function move(direction: number) {
 }
 // Every transport route is replayed on a scratch Rust game before display.
 function applyUpdate(update: SearchUpdate, route: string | undefined) {
-  const { expanded, generated, reservedBytes, lowerBound, proof, status } = update.metrics;
+  const { expanded, generated, reservedBytes } = update.metrics;
   setText('expanded', expanded.toLocaleString());
   setText('generated', generated.toLocaleString());
   setText('reserved', `${(reservedBytes / 1048576).toFixed(1)} MiB`);
-  const note = proof.kind === 'optimal' ? ' · proven move-optimal from this position'
-    : proof.kind === 'unsolvable' ? ' · proven unsolvable'
-    // Worker routes arrive throttled, so the gap is measured on the route shown.
-    : route !== undefined && lowerBound !== undefined ? ` · within ${route.length - lowerBound} of optimal`
-    : ' · optimality unproven';
-  const result = route !== undefined ? `${route.length} remaining moves${note}. ` : '';
-  const verdict: Record<SearchStatus, string> = {
-    running: 'Searching…',
-    solved: 'Search complete.',
-    exhausted: proof.kind === 'unsolvable'
-      ? 'No solution exists from this position.'
-      : 'Search ended without finding a route (not a proof — use Optimal to prove unsolvability).',
-    state_limit: 'State limit reached.',
-    memory_limit: 'Memory limit reached.',
-    time_limit: 'Time budget reached.',
-    cancelled: 'Stopped.',
-  };
-  setStatus(result + (verdict[status] ?? status));
+  setStatus(statusText(update.metrics, route));
 }
 function solve() {
   if (solver.busy) return;
@@ -310,7 +285,7 @@ async function start() {
     undo: () => button('undo').click(),
     swipeable: () => board.fits,
   });
-  button('solve').onclick = () => { void solve(); };
+  button('solve').onclick = solve;
   button('cancel').onclick = () => {
     if (playback.active) {
       playback.end();

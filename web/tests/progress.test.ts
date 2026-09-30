@@ -142,3 +142,37 @@ test('health probe stops without the API, retries offline, and shares one reques
   pending.resolve(Response.json({ error: 'busy' }, { status: 503 })); await first;
   assert.equal(clock.tasks.size, 1); assert.equal(shared.calls.length, 1);
 });
+const posts = (calls: { init?: RequestInit }[]) => calls.filter(call => call.init?.method === 'POST').length;
+test('sync posts a route the server has answered for only once, across puzzle switches', async () => {
+  const { client, calls, statuses } = setup(); connect(client, 'p');
+  await client.sync('DD'); await client.sync('DD');
+  assert.equal(posts(calls), 1); assert.deepEqual(statuses, [SAVED]);
+  client.select('q', 'rows'); client.select('p', 'rows'); await client.sync('DD');
+  assert.equal(posts(calls), 1);
+  await client.sync('DDD'); assert.equal(posts(calls), 2); assert.deepEqual(statuses, [SAVED, SAVED]);
+});
+test('sync posts a route again until the server answers for it', async () => {
+  const replies = [Response.json({ error: 'down' }, { status: 503 }), Response.json({}), Response.json({ improved: false })];
+  const { client, calls, statuses } = setup(async () => replies.shift()!); connect(client, 'p');
+  for (let i = 0; i < 4; i++) await client.sync('DD');
+  assert.equal(posts(calls), 3);
+  assert.deepEqual(statuses, [FAILED, FAILED, 'Server already stored an equal or better route for this puzzle.']);
+});
+test('sync does not post back the route pull took from the server', async () => {
+  const { client, calls } = setup(async (_url, init) => init?.method === 'POST' ? Response.json({ improved: true })
+    : Response.json({ puzzle_id: 'p', route: 'DD', moves: 2, pushes: 1 }));
+  connect(client, 'p'); await client.pull(); await client.sync('DD');
+  assert.equal(client.best()?.route, 'DD'); assert.equal(posts(calls), 0);
+  await client.sync('DDD'); assert.equal(posts(calls), 1);
+});
+test('keep returns early on a tie with the best on show, and a better route still replaces it', () => {
+  let verified = 0;
+  const { client, shown } = setup(undefined, { verify: (_rows, route) => { verified++; return { moves: route.length, pushes: 1 }; } });
+  client.select('p', 'rows'); client.keep('DDD', 3, 1);
+  assert.deepEqual(shown, [null, { rows: 'rows', route: 'DDD', moves: 3, pushes: 1 }]); assert.equal(verified, 0);
+  client.keep('UUU', 3, 1);
+  assert.equal(shown.length, 2); assert.equal(verified, 0);
+  client.keep('DD', 2, 1);
+  assert.equal(verified, 1); assert.deepEqual(shown.at(-1), { rows: 'rows', route: 'DD', moves: 2, pushes: 1 });
+  assert.equal(client.best()?.route, 'DD');
+});

@@ -1,4 +1,7 @@
-use sokomind_core::{Board, Cell, Game, MAX_ROUTE, ReplayError, State, Step, decode_direction};
+use sokomind_core::{
+    Board, Cell, Game, MAX_ROUTE, NONE, ParseError, ReplayError, State, StateError, Step,
+    decode_direction,
+};
 
 /// The robot can pace left and right forever without touching the box.
 const CORRIDOR: &str = "OOOOOOO\nO R XSO\nOOOOOOO";
@@ -33,10 +36,12 @@ fn at_replays_a_prefix_and_refuses_a_full_unsolved_one() {
         Ok(_) => panic!("{} actions should be refused", actions.len()),
         Err(error) => error,
     };
-    // A board error carries `Board::parse`'s message; replay errors keep
+    // A board error carries `Board::parse`'s error; replay errors keep
     // the index of the refused action.
-    let unparsed = Board::parse("").err().unwrap();
-    assert_eq!(refused("", ""), ReplayError::InvalidBoard(unparsed));
+    assert_eq!(
+        refused("", ""),
+        ReplayError::InvalidBoard(ParseError::EmptyRow)
+    );
     assert_eq!(
         refused(CROSSING_PAIR, "U"),
         ReplayError::Blocked { index: 0 }
@@ -79,7 +84,7 @@ fn at_replays_a_prefix_and_refuses_a_full_unsolved_one() {
 fn replay_errors_keep_their_messages() {
     let cases = [
         (
-            ReplayError::InvalidBoard("Board rows cannot be empty".into()),
+            ReplayError::InvalidBoard(ParseError::EmptyRow),
             "Board rows cannot be empty",
         ),
         (
@@ -144,6 +149,70 @@ fn board_step_reports_walks_and_pushes() {
     assert!(board.solved(&state));
 }
 
+/// Search checks every caller-built start state here, and a rejected one
+/// reaches the server log only as this message, so each names its rule.
+#[test]
+fn validate_state_names_the_broken_rule() {
+    let board = Board::parse(CROSSING_PAIR).unwrap();
+    let start = board.initial();
+    assert_eq!(board.validate_state(&start), Ok(()));
+    // The robot starts on cell 9 and the boxes on 15 and 20; cell 0 is a wall.
+    let player_at = |player: Cell| State { player, ..start };
+    let box_at = |slot: usize, cell: Cell| {
+        let mut state = start;
+        state.boxes[slot] = cell;
+        state
+    };
+    let cases = [
+        (
+            player_at(NONE),
+            StateError::PlayerOutOfBounds { cell: NONE },
+            "Invalid state: player is off the board at cell 65535",
+        ),
+        (
+            player_at(0),
+            StateError::PlayerOnWall { cell: 0 },
+            "Invalid state: player is on a wall at cell 0",
+        ),
+        (
+            box_at(1, NONE),
+            StateError::BoxOutOfBounds {
+                index: 1,
+                cell: NONE,
+            },
+            "Invalid state: box 1 is off the board at cell 65535",
+        ),
+        (
+            box_at(1, 0),
+            StateError::BoxOnWall { index: 1, cell: 0 },
+            "Invalid state: box 1 is on a wall at cell 0",
+        ),
+        (
+            player_at(15),
+            StateError::PlayerOnBox { index: 0, cell: 15 },
+            "Invalid state: player is on box 0 at cell 15",
+        ),
+        (
+            box_at(1, 15),
+            StateError::OverlappingBoxes {
+                first: 0,
+                second: 1,
+                cell: 15,
+            },
+            "Invalid state: boxes 0 and 1 share cell 15",
+        ),
+        (
+            box_at(2, 9),
+            StateError::InactiveBox { index: 2, cell: 9 },
+            "Invalid state: unused box slot 2 holds cell 9",
+        ),
+    ];
+    for (state, error, message) in cases {
+        assert_eq!(board.validate_state(&state), Err(error), "{message}");
+        assert_eq!(error.to_string(), message);
+    }
+}
+
 #[test]
 fn rules_undo_and_atomic_replay() {
     let board = Board::parse(CROSSING_PAIR).unwrap();
@@ -183,7 +252,8 @@ fn rules_undo_and_atomic_replay() {
     game.replay("DLDR").unwrap();
     assert_eq!(&snapshot(&game), trail.last().unwrap());
     // A route blocked by a wall, by the solved position, or by a bad action
-    // is refused as a whole and leaves the finished game untouched.
+    // is refused as a whole and leaves the finished game untouched. Each
+    // replays from the start position, not the solved one, so DL is legal.
     for (route, error) in [
         ("DLU", ReplayError::Blocked { index: 2 }),
         ("DLDRU", ReplayError::Blocked { index: 4 }),
