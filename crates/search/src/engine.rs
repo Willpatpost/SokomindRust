@@ -6,7 +6,7 @@ use crate::{
     reach::Reach,
 };
 use sokomind_core::{ACTIONS, Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State};
-use std::ops::Range;
+use std::ops::{ControlFlow, Range};
 
 /// What separates the modes. Everything else, from child order to pruning
 /// and limit handling, is shared.
@@ -249,6 +249,56 @@ pub(crate) struct Engine {
     interrupted_f: Option<u64>,
 }
 
+/// A popped node that [`Engine::expand`] is about to expand.
+struct Parent {
+    /// Its arena id, which each child records as its parent.
+    index: u32,
+    node: Node,
+    /// The h it was queued with.
+    queued_h: u32,
+}
+
+/// A push of the parent's box `i` in direction `d`, from `from` to `to`,
+/// with the keeper on `stand`, that passed the static check in
+/// [`Engine::expand`].
+struct Push {
+    i: usize,
+    d: usize,
+    from: Cell,
+    to: Cell,
+    stand: Cell,
+}
+
+/// A child that passed every prune in [`Engine::admit`].
+struct Child {
+    node: Node,
+    /// Its estimate in full; `node.h` holds it only while it fits.
+    h: u32,
+    /// The table slot [`Arena::find`] returned for its state.
+    slot: usize,
+}
+
+/// What [`Engine::pop`] made of one queue entry.
+enum Popped {
+    /// An unsolved node within the bound, not yet counted or closed.
+    Expand(Parent),
+    /// A stale, solved or dominated entry; the search goes on.
+    Skip,
+    /// The search ended: the queue emptied or a solved pop stopped it.
+    Stop,
+}
+
+/// What [`Engine::insert`] did with an admitted child.
+enum Inserted {
+    /// Stored and queued; the expansion goes on.
+    Queued,
+    /// The arena was full and the search started over, dropping the child
+    /// and the rest of its parent's expansion.
+    Restarted,
+    /// The search ended: a limit or a solved push stopped it.
+    Stopped,
+}
+
 impl Engine {
     pub(crate) fn new(
         board: Board,
@@ -410,198 +460,280 @@ impl Engine {
         if self.status != Status::Running {
             return;
         }
-        'pops: for _ in 0..pops {
-            let Some(key) = self.arena.dequeue() else {
-                // The queue emptied: every state was popped, dominated, or
-                // pruned by an admissible rule. Under the exact policy that
-                // makes the incumbent optimal.
-                self.status = if self.incumbent.is_some() {
-                    Status::Solved
-                } else {
-                    Status::Exhausted
-                };
-                return;
+        // Each pop runs these steps in order, and the first check that
+        // rejects something skips the rest for it:
+        // - pop: an empty queue ends the search. A stale entry (stale_pops)
+        //   is skipped, a solved node is recorded and skipped or ends the
+        //   search, and a node the bound prunes (pruned_bound) is skipped.
+        // - expand: count and close the node, flood its keeper, refresh the
+        //   deadlock occupancy, then try every push, box-major and in
+        //   direction order. A push into a wall or a box, or from a stand
+        //   the keeper cannot reach, is dropped uncounted.
+        // - admit, per push: dead cell (pruned_dead_cells), g bound
+        //   (pruned_bound), freeze deadlock (pruned_deadlocks), then the
+        //   settled child's duplicate (pruned_duplicates), assignment
+        //   (pruned_assignment), g + h bound and stand walk (pruned_bound).
+        // - insert: store and queue the child and record a solved one. A
+        //   full arena starts the search over or ends it, and so may a
+        //   solved push.
+        for _ in 0..pops {
+            let parent = match self.pop() {
+                Popped::Expand(parent) => parent,
+                Popped::Skip => continue,
+                Popped::Stop => return,
             };
-            let (index, queued_h) = (key.id(), key.h());
-            // A cheaper duplicate has since taken over this state's slot.
-            let superseded = self.arena.is_superseded(index);
-            debug_assert_eq!(
-                superseded,
-                self.arena.find(&self.arena.node(index).state).1 != Some(index)
-            );
-            if superseded {
-                self.skipped.stale_pops += 1;
-                continue;
+            if self.expand(parent).is_break() {
+                return;
             }
-            let node = self.arena.node(index);
-            if self.board.solved(&node.state) {
-                if self.best_moves().is_none_or(|best| node.g < best) {
-                    self.incumbent = Some(index);
+        }
+    }
+    /// Dequeues one entry and says what to do with it: expand its node,
+    /// skip it, or stop because the search ended.
+    #[inline]
+    fn pop(&mut self) -> Popped {
+        let Some(key) = self.arena.dequeue() else {
+            // The queue emptied: every state was popped, dominated, or
+            // pruned by an admissible rule. Under the exact policy that
+            // makes the incumbent optimal.
+            self.status = if self.incumbent.is_some() {
+                Status::Solved
+            } else {
+                Status::Exhausted
+            };
+            return Popped::Stop;
+        };
+        let (index, queued_h) = (key.id(), key.h());
+        // A cheaper duplicate has since taken over this state's slot.
+        let superseded = self.arena.is_superseded(index);
+        debug_assert_eq!(
+            superseded,
+            self.arena.find(&self.arena.node(index).state).1 != Some(index)
+        );
+        if superseded {
+            self.skipped.stale_pops += 1;
+            return Popped::Skip;
+        }
+        let node = self.arena.node(index);
+        if self.board.solved(&node.state) {
+            if self.best_moves().is_none_or(|best| node.g < best) {
+                self.incumbent = Some(index);
+            }
+            if self.policy.stop_on_goal_pop && !self.next_phase() {
+                self.status = Status::Solved;
+                return Popped::Stop;
+            }
+            return Popped::Skip;
+        }
+        if self.best_moves().is_some_and(|best| {
+            node.g >= best
+                || (self.policy.prune_popped_estimate
+                    && node.g as u64 + queued_h as u64 >= best as u64)
+        }) {
+            self.skipped.pruned_bound += 1;
+            return Popped::Skip;
+        }
+        Popped::Expand(Parent {
+            index,
+            node,
+            queued_h,
+        })
+    }
+    /// Expands a popped node: each push the static check passes goes to
+    /// [`Self::admit`], and each child it admits to [`Self::insert`]. Breaks
+    /// when the search ended during the expansion.
+    #[inline]
+    fn expand(&mut self, parent: Parent) -> ControlFlow<()> {
+        self.expanded += 1;
+        self.arena.close(parent.index);
+        self.reach.fill(&self.board, &parent.node.state);
+        self.deadlock
+            .refresh(&parent.node.state.boxes[..self.board.labels().len()]);
+        let parent_h = parent.node.known_h().unwrap_or_else(|| {
+            self.heuristic
+                .estimate(&parent.node.state)
+                .expect("queued state has an assignment")
+        });
+        let mut parent_group = ParentGroup::EMPTY;
+        for i in 0..self.board.labels().len() {
+            let from = parent.node.state.boxes[i];
+            for (d, &opposite) in OPPOSITE.iter().enumerate() {
+                let to = self.board.neighbors()[from as usize][d];
+                let stand = self.board.neighbors()[from as usize][opposite];
+                if to == NONE
+                    || stand == NONE
+                    || self.reach.blocked(to)
+                    || self.reach.distance(stand) == NONE
+                {
+                    // A box pushed onto a dead cell would only fail the
+                    // estimate below, and every check in between just
+                    // skips the child, so dropping it here changes no
+                    // count or result.
+                    continue;
                 }
-                if self.policy.stop_on_goal_pop && !self.next_phase() {
-                    self.status = Status::Solved;
-                    return;
-                }
-                continue;
-            }
-            if self.best_moves().is_some_and(|best| {
-                node.g >= best
-                    || (self.policy.prune_popped_estimate
-                        && node.g as u64 + queued_h as u64 >= best as u64)
-            }) {
-                self.skipped.pruned_bound += 1;
-                continue;
-            }
-            self.expanded += 1;
-            self.arena.close(index);
-            self.reach.fill(&self.board, &node.state);
-            self.deadlock
-                .refresh(&node.state.boxes[..self.board.labels().len()]);
-            let parent_h = node.known_h().unwrap_or_else(|| {
-                self.heuristic
-                    .estimate(&node.state)
-                    .expect("queued state has an assignment")
-            });
-            let mut parent_group = ParentGroup::EMPTY;
-            for i in 0..self.board.labels().len() {
-                let from = node.state.boxes[i];
-                for (d, &opposite) in OPPOSITE.iter().enumerate() {
-                    let to = self.board.neighbors()[from as usize][d];
-                    let stand = self.board.neighbors()[from as usize][opposite];
-                    if to == NONE
-                        || stand == NONE
-                        || self.reach.blocked(to)
-                        || self.reach.distance(stand) == NONE
-                    {
-                        // A box pushed onto a dead cell would only fail the
-                        // estimate below, and every check in between just
-                        // skips the child, so dropping it here changes no
-                        // count or result.
-                        continue;
-                    }
-                    if self.heuristic.dead(i, to) {
-                        self.skipped.pruned_dead_cells += 1;
-                        continue;
-                    }
-                    let g = Node::push_g(node.g, self.reach.distance(stand));
-                    if self.best_moves().is_some_and(|best| g >= best) {
-                        self.skipped.pruned_bound += 1;
-                        continue;
-                    }
-                    if self.deadlock.is_dead_after_push(&self.board, from, to) {
-                        self.skipped.pruned_deadlocks += 1;
-                        continue;
-                    }
-                    // Every stored state is canonical, the parent too, so
-                    // settling the pushed box canonicalizes the child.
-                    let mut next = node.state;
-                    next.player = from;
-                    next.boxes[i] = to;
-                    settle(&mut next, self.heuristic.group(i), i);
-                    debug_assert_eq!(next, {
-                        let mut sorted = next;
-                        canonicalize(&self.board, &mut sorted);
-                        sorted
-                    });
-                    let (slot, previous) = self.arena.find(&next);
-                    let previous = previous.map(|previous| self.arena.meta(previous));
-                    if previous.is_some_and(|previous| {
-                        previous.g <= g || (!self.policy.reopen_closed && previous.closed)
-                    }) {
-                        self.skipped.pruned_duplicates += 1;
-                        continue;
-                    }
-                    // A cheaper duplicate reuses the stored estimate; otherwise
-                    // the parent's group is solved lazily, only once a child
-                    // gets this far.
-                    let known = previous.and_then(|previous| previous.known_h());
-                    let Some(h) = known.or_else(|| {
-                        self.heuristic.child_estimate(
-                            parent_h,
-                            &mut parent_group,
-                            &node.state,
-                            i,
-                            to,
-                        )
-                    }) else {
-                        self.skipped.pruned_assignment += 1;
-                        continue;
-                    };
-                    if self
-                        .best_moves()
-                        .is_some_and(|best| g as u64 + h as u64 >= best as u64)
-                    {
-                        self.skipped.pruned_bound += 1;
-                        continue;
-                    }
-                    // Before its first push the child's keeper walks to the
-                    // stand of a statically legal push, so g + h + that walk
-                    // still bounds every route through the child. A prune
-                    // only: queue keys and stored estimates stay push-only.
-                    if h > 0
-                        && let Some(best) = self.best_moves()
-                    {
-                        // At least 1, since the prune above failed.
-                        let need = best - g - h;
-                        let boxes = &next.boxes[..self.board.labels().len()];
-                        // The parent's flood marks its boxes, and the pushed
-                        // box left `from` for `to`.
-                        let occupied =
-                            |cell: Cell| cell == to || (cell != from && self.reach.blocked(cell));
-                        // Pushing the same box on again starts from `from`.
-                        let ahead = self.board.neighbors()[to as usize][d];
-                        let onward =
-                            ahead != NONE && !occupied(ahead) && !self.heuristic.dead(i, ahead);
-                        if !onward && self.stand_walk(from, boxes, occupied, need) >= need {
-                            self.skipped.pruned_bound += 1;
-                            continue;
-                        }
-                    }
-                    // Past the prune above g + h < best, so a solved child
-                    // always improves the incumbent.
-                    let goal = h == 0 && self.board.solved(&next);
-                    let child = Node {
-                        state: next,
-                        g,
-                        parent: index,
-                        direction: d as u8,
-                        h: Node::store_h(h),
-                    };
-                    if self.arena.is_full() {
-                        // The rest of this expansion belongs to the discarded arena.
-                        if !goal && self.restart() {
-                            continue 'pops;
-                        }
-                        // Keep a solution discovered at the exact limit.
-                        if goal {
-                            self.incumbent = Some(self.arena.insert(child, slot));
-                        }
-                        // An expanded node is unsolved, so at least one move remains.
-                        self.stop_at_limit(node.g as u64 + queued_h.max(1) as u64);
-                        return;
-                    }
-                    let id = self.arena.insert(child, slot);
-                    self.arena
-                        .enqueue(g as u64 + self.policy.weight as u64 * h as u64, h, id);
-                    // Keep a solution even if a limit occurs before its pop.
-                    if goal {
-                        self.incumbent = Some(id);
-                        // A next phase takes over the rest of this expansion.
-                        if self.policy.stop_on_goal_push && !self.next_phase() {
-                            self.status = Status::Solved;
-                            return;
-                        }
-                    }
+                let push = Push {
+                    i,
+                    d,
+                    from,
+                    to,
+                    stand,
+                };
+                let Some(child) = self.admit(&parent, parent_h, &mut parent_group, push) else {
+                    continue;
+                };
+                match self.insert(&parent, child) {
+                    Inserted::Queued => {}
+                    // The parent went with the emptied arena; the next pop
+                    // takes the re-seeded start.
+                    Inserted::Restarted => return ControlFlow::Continue(()),
+                    Inserted::Stopped => return ControlFlow::Break(()),
                 }
             }
         }
+        ControlFlow::Continue(())
+    }
+    /// Runs one push through every prune after the static check, counting
+    /// the first that rejects it, and builds the child when none does.
+    /// `parent_h` is the parent's estimate and `parent_group` its lazily
+    /// solved label group, shared by all of its children.
+    #[inline]
+    fn admit(
+        &mut self,
+        parent: &Parent,
+        parent_h: u32,
+        parent_group: &mut ParentGroup,
+        push: Push,
+    ) -> Option<Child> {
+        let Push {
+            i,
+            d,
+            from,
+            to,
+            stand,
+        } = push;
+        if self.heuristic.dead(i, to) {
+            self.skipped.pruned_dead_cells += 1;
+            return None;
+        }
+        let g = Node::push_g(parent.node.g, self.reach.distance(stand));
+        if self.best_moves().is_some_and(|best| g >= best) {
+            self.skipped.pruned_bound += 1;
+            return None;
+        }
+        if self.deadlock.is_dead_after_push(&self.board, from, to) {
+            self.skipped.pruned_deadlocks += 1;
+            return None;
+        }
+        // Every stored state is canonical, the parent too, so settling the
+        // pushed box canonicalizes the child.
+        let mut next = parent.node.state;
+        next.player = from;
+        next.boxes[i] = to;
+        settle(&mut next, self.heuristic.group(i), i);
+        debug_assert_eq!(next, {
+            let mut sorted = next;
+            canonicalize(&self.board, &mut sorted);
+            sorted
+        });
+        let (slot, previous) = self.arena.find(&next);
+        let previous = previous.map(|previous| self.arena.meta(previous));
+        if previous.is_some_and(|previous| {
+            previous.g <= g || (!self.policy.reopen_closed && previous.closed)
+        }) {
+            self.skipped.pruned_duplicates += 1;
+            return None;
+        }
+        // A cheaper duplicate reuses the stored estimate; otherwise the
+        // parent's group is solved lazily, only once a child gets this far.
+        let known = previous.and_then(|previous| previous.known_h());
+        let Some(h) = known.or_else(|| {
+            self.heuristic
+                .child_estimate(parent_h, parent_group, &parent.node.state, i, to)
+        }) else {
+            self.skipped.pruned_assignment += 1;
+            return None;
+        };
+        if self
+            .best_moves()
+            .is_some_and(|best| g as u64 + h as u64 >= best as u64)
+        {
+            self.skipped.pruned_bound += 1;
+            return None;
+        }
+        // Before its first push the child's keeper walks to the stand of a
+        // statically legal push, so g + h + that walk still bounds every
+        // route through the child. A prune only: queue keys and stored
+        // estimates stay push-only.
+        if h > 0
+            && let Some(best) = self.best_moves()
+        {
+            // At least 1, since the prune above failed.
+            let need = best - g - h;
+            let boxes = &next.boxes[..self.board.labels().len()];
+            // The parent's flood marks its boxes, and the pushed box left
+            // `from` for `to`.
+            let occupied = |cell: Cell| cell == to || (cell != from && self.reach.blocked(cell));
+            // Pushing the same box on again starts from `from`.
+            let ahead = self.board.neighbors()[to as usize][d];
+            let onward = ahead != NONE && !occupied(ahead) && !self.heuristic.dead(i, ahead);
+            if !onward && self.stand_walk(from, boxes, occupied, need) >= need {
+                self.skipped.pruned_bound += 1;
+                return None;
+            }
+        }
+        Some(Child {
+            node: Node {
+                state: next,
+                g,
+                parent: parent.index,
+                direction: d as u8,
+                h: Node::store_h(h),
+            },
+            h,
+            slot,
+        })
+    }
+    /// Stores and queues an admitted child, recording it when it is solved.
+    /// At a full arena the search starts over or ends instead, and a solved
+    /// child may end it too.
+    #[inline]
+    fn insert(&mut self, parent: &Parent, child: Child) -> Inserted {
+        let Child { node, h, slot } = child;
+        // admit's g + h prune left g + h < best, so a solved child always
+        // improves the incumbent.
+        let goal = h == 0 && self.board.solved(&node.state);
+        if self.arena.is_full() {
+            // The rest of this expansion belongs to the discarded arena.
+            if !goal && self.restart() {
+                return Inserted::Restarted;
+            }
+            // Keep a solution discovered at the exact limit.
+            if goal {
+                self.incumbent = Some(self.arena.insert(node, slot));
+            }
+            // An expanded node is unsolved, so at least one move remains.
+            self.stop_at_limit(parent.node.g as u64 + parent.queued_h.max(1) as u64);
+            return Inserted::Stopped;
+        }
+        let id = self.arena.insert(node, slot);
+        self.arena
+            .enqueue(node.g as u64 + self.policy.weight as u64 * h as u64, h, id);
+        // Keep a solution even if a limit occurs before its pop.
+        if goal {
+            self.incumbent = Some(id);
+            // A next phase takes over the rest of this expansion.
+            if self.policy.stop_on_goal_push && !self.next_phase() {
+                self.status = Status::Solved;
+                return Inserted::Stopped;
+            }
+        }
+        Inserted::Queued
     }
     /// Every unsolved route walks to a box before its first push. Ignoring
     /// walls and all other boxes can only shorten that walk. These walking
     /// moves are disjoint from the assignment's required pushes, so they add
     /// to its admissible estimate. Keep assignment costs separately cached.
     /// Only the root queues this walk. A pushed child's player stands next
-    /// to the box it just pushed, so its box walk is 0, and `advance` uses
+    /// to the box it just pushed, so its box walk is 0, and `admit` uses
     /// its stand walk only as a prune, which keeps queue keys and stored
     /// estimates push-only.
     fn root_estimate(&self, state: &State, pushes: u32) -> u32 {
