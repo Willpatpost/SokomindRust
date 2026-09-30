@@ -9,6 +9,8 @@ PostgreSQL persistence. No frontend framework and no JavaScript game-rule duplic
 
 Requires Node 22.18+ (24 recommended), Rust 1.98.1, and a native linker (Visual
 Studio C++ Build Tools on Windows). PostgreSQL is optional for local play/search.
+`rust-toolchain.toml` pins the Rust version, and `.node-version` the exact Node
+that CI and the Docker image use (24.14.0).
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -71,8 +73,8 @@ route: `0002` drops and recreates the `progress` table to key it by layout
 fingerprint. If you need the old rows, back them up with `pg_dump` before the
 upgraded API first starts, because it migrates at startup. Browsers keep their
 profile token and local best routes, but the server only receives a route when
-that browser solves the puzzle again; opening a puzzle and letting Replay best
-play to the end re-uploads its local best.
+that browser solves the puzzle again; opening a puzzle in a page loaded after
+the upgrade and letting Replay best play to the end re-uploads its local best.
 
 Compose pins its network to `172.16.57.0/24` (`TRUSTED_SUBNET` in `.env` changes
 it), the range the API trusts (see `TRUSTED_PROXIES` under Configuration). After
@@ -81,6 +83,19 @@ upgrading a stack created before the pin, or changing `TRUSTED_SUBNET`, run
 recreates the network with the new subnet. Were the old network left in place,
 NGINX's address would fall outside `TRUSTED_PROXIES` and every client would share
 one rate-limit bucket.
+
+The `Dockerfile` builds both images. `rust-base` is the Rust 1.98.1 image with
+`rust-toolchain.toml`, and `stubs` adds the workspace manifests with stub
+sources, so each build stage compiles its dependencies first, in a layer that
+survives crate edits. Target `server` (compose's `api`) builds in
+`server-build`. Target `web` installs `wasm-bindgen-cli` in `wasm-tools`, builds
+the WASM package in `wasm-build` and the app in `web-build`, and copies the app
+into the NGINX image. The two targets share only `rust-base` and `stubs`, so a
+server-only edit runs no WASM step and a WASM-only edit no server step;
+`docker compose build api` builds only the server image. `web-build` runs the
+Node image that `ARG NODE_VERSION` names, whose default must equal
+`.node-version`, and the `rust-base` tag must equal the version
+`rust-toolchain.toml` pins; CI fails when either differs (see Validation).
 
 ## Layout and boundaries
 
@@ -97,15 +112,16 @@ one rate-limit bucket.
 | `web/src/playback.ts` | Route replay state machine: idle, playing, paused |
 | `web/src/solver-client.ts` | `SolverClient`: one search in the browser worker or on `/api/solve`, with a watchdog and cancellation; replays every route it receives and checks the proof against it |
 | `web/src/solver.worker.ts` | Module worker that runs `WasmSearch` in short slices and posts throttled progress and routes |
+| `web/src/verdict.ts` | The search status line: what is proven about the route on show, then how the search ended |
 | `web/src/progress.ts` | `ProgressClient`: `/api/health` probing and server progress reads and saves |
 | `web/src/storage.ts` | `localStorage` session, local best routes, and profile token |
-| `web/src/transport.ts` | Validating decoders for worker replies, native replies, and the WASM snapshot and metrics ABI |
+| `web/src/transport.ts` | Validating decoders for worker replies, `/api` replies, and the WASM snapshot and metrics ABI; the `/api/solve` request encoder |
 | `web/src/protocol.ts` | Constants and message types that mirror the Rust side |
 | `web/src/scheduler.ts` | Injectable clock, so tests can drive time |
 | `web/index.html`, `web/src/style.css` | Page markup and styles |
 | `data/puzzles.json` | Reference catalog snapshot, shared by frontend, backend, and benchmark corpus |
 | `migrations`, `deploy` | Database schema and NGINX configuration |
-| `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check |
+| `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |
 | `benchmarks` | Reviewed benchmark baselines (see Validation) |
 | `Dockerfile`, `compose.yaml` | Images and the full stack (see Full stack with Docker) |
 | `.github/workflows/ci.yml` | CI (see Validation) |
@@ -154,6 +170,11 @@ the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
 and route-repair strategies are not yet ported; Grand Hall performance parity
 is not claimed.
 
+Board text has one line per row: `O` is a wall, a space floor, `R` the robot,
+`X` a box whose goals are `S`, and any other uppercase letter a box whose goals
+are that letter in lowercase. `o`, `r`, `s` and `x` are reserved, because no box
+carries `O`, `R` or `S` and `X`'s goal is spelled `S`; the parser rejects them
+with their row and column, like any other unsupported symbol.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 1,000,000 states
 per arena, 64 MiB accounted search storage, and one concurrent CPU job by default
@@ -161,8 +182,9 @@ per arena, 64 MiB accounted search storage, and one concurrent CPU job by defaul
 the state cap, binds on boards with 20 or more boxes (the catalog's 20-22 box
 boards fill their arenas at about 0.91-0.97M records), and such a run reports a
 memory limit. The search memory metric is computed from reserved buffer sizes
-(arena, queue, table, route, and per-cell flood, deadlock, dead-cell, and distance
-buffers), not process RSS, allocator overhead, WASM runtime, or frontend memory.
+(arena, queue, table, and per-cell flood, deadlock, dead-cell, and distance
+buffers) plus a fixed allowance for the longest route and scratch buffers, not
+process RSS, allocator overhead, WASM runtime, or frontend memory.
 Deadline checks occur between bounded expansion batches; setup/reconstruction can
 add latency.
 
@@ -198,17 +220,23 @@ The web app calls the progress endpoints only after `/api/health` has reported
 `persistence: true`. Until it does, the app asks again after 2 s and doubles the
 wait up to 5 minutes, so a server that was busy, restarting, or started after the
 page was opened is picked up once it answers. A 404, or a 200 reply that is not
-JSON (static hosting), stops the probing.
+JSON (static hosting), stops the probing. Once the server has answered for a
+route, by replying to its save or returning it as the stored best, the page does
+not post that route for that puzzle again until it is reloaded, even when Replay
+best solves the puzzle with it again; a save that failed or was rejected is
+posted again on the next solve.
 
 Every API error body is `{"error": "..."}` (NGINX's own 413 and 5xx pages are
 not): 400 invalid input, a missing or malformed profile, a route that does not
 replay or solve, out-of-range solve limits, a memory budget too small for the
 board, or a solve position plus route over the 100,000-move replay limit; 404
 unknown endpoint, catalog puzzle, or saved route; 405 wrong method; 408 a JSON
-body not received within 10 seconds; 413 a body over 128 KiB; 415 a missing or
+body not received within 10 seconds (on a direct run: NGINX reads each whole body
+before it passes a request on); 413 a body over 128 KiB; 415 a missing or
 non-JSON content type; 422 JSON of the wrong shape; 429 rate limited, or solver
-or progress busy; 503 PostgreSQL not configured, unreachable, or timed out (each
-database operation gets 2.5 s), or a failed search allocation; 500 a server bug.
+or progress busy; 503 PostgreSQL not configured or unreachable, a database
+operation that timed out (each gets 2.5 s) or deadlocked with a concurrent one
+(both say to retry later), or a failed search allocation; 500 a server bug.
 Both progress endpoints check in the same order: profile and request shape (400),
 catalog puzzle (404), PostgreSQL (503), progress slot (429 busy); a save then
 checks its rate limit (429) before it replays the route.
@@ -265,7 +293,7 @@ number, stops startup before the database wait.
 | `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
 | `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
 | `PROGRESS_RETENTION_DAYS` | `0` | 0 keeps progress forever; 1..36500 deletes records whose best route was stored longer ago (equal or worse saves do not refresh it), at startup and hourly |
-| `PROGRESS_RETENTION_BATCH_SIZE` | `500` | Records deleted per retention batch, one short transaction each, 1..5000; a sweep runs at most 20 batches |
+| `PROGRESS_RETENTION_BATCH_SIZE` | `500` | Records deleted per retention batch, one short transaction each, 1..5000; a sweep runs at most 20 batches, so each API process deletes at most 20 times this many records per sweep (10,000 at the default, 100,000 at 5000). A sweep that runs all 20 full logs that it reached its cap; any expired records left wait for the next sweep |
 | `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
 
 libpq's `PG*` variables (such as `PGSSLMODE`) also apply as defaults. Migrations run
@@ -293,10 +321,12 @@ and `TRUSTED_PROXIES` ever differ, every client shares one rate-limit bucket.
 
 ## Validation
 
-CI (`.github/workflows/ci.yml`) runs these on every push and pull request, the
-first four on Ubuntu and Windows and the rest on Ubuntu with a PostgreSQL 18
-service. It builds the WASM package once and checks parity against the native
-records `bench:check` wrote.
+CI (`.github/workflows/ci.yml`) runs these on pushes to `main`, on pull
+requests, and on demand (`workflow_dispatch`); a push or pull request that
+changes only Markdown files or `LICENSE` starts no run. The first four run on
+Ubuntu and Windows and the rest on Ubuntu with a PostgreSQL 18 service. It
+builds the WASM package once and checks parity against the native records
+`bench:check` wrote.
 
 ```sh
 npm run fmt:check
@@ -313,10 +343,27 @@ npm run test:db
 npm run test:browser
 ```
 
-`test:rust` runs the core, search, and server tests and `test:release` the core
-and search tests optimized. `test:web` (`web/tests`) and `test:scripts`
-(`scripts/*.test.mjs`) are Node unit tests of the web modules and the benchmark
-gate and need no WASM build. `bench:check` runs
+`npm run validate` runs the same steps locally, in CI's order and with its single
+WASM build, then prints a line per step: PASS or FAIL with its duration, or SKIP
+with the reason. It skips every step after a failure; `--keep-going` runs them
+all. `--quick` skips `bench:observe`, `test:db` and `test:browser`, and `test:db`
+is a SKIP, never a PASS, while `SOKOMIND_TEST_DATABASE_URL` is unset. It exits 1
+when a step failed and 2 on an unknown option or argument, and must be started
+through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
+`--`, so quote it there: `npm run validate '--' --quick`. It runs neither
+`npm ci` nor the deploy job below.
+
+`lint:rust` runs Clippy on every target with warnings as errors, under the
+workspace lints in `Cargo.toml`: unsafe code is denied, and an exported item or
+crate root without a doc fails. `test:rust` runs the core, search, and server
+tests and `test:release` the core and search tests under the `release-test`
+profile, which keeps release optimization without debug assertions but drops
+cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries
+use `release`. `npm run check:scripts` type-checks the helpers in `scripts` from
+their JSDoc (`tsc -p scripts`, strict); neither CI nor `validate` runs it yet.
+`test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
+tests of the web modules, the benchmark gate, and the validate script, whose
+step list must match `ci.yml`'s, and need no WASM build. `bench:check` runs
 `crates/search/examples/catalog.rs` on every catalog puzzle in every mode at the
 baseline's 20,000 states and 64 MiB and compares the results with
 `benchmarks/catalog-baseline.json`. It fails on a false proof or bound, a
@@ -334,11 +381,26 @@ server tests against `SOKOMIND_TEST_DATABASE_URL`, a dedicated, disposable
 database that allows `CREATE SCHEMA`. `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
-`npx playwright install chromium`.
+`npx playwright install chromium`. With `CI` set, as in CI, a leftover
+`test.only` fails the run.
+
+CI's `deploy` job checks the deployment files and pushes and starts nothing. The
+Dockerfile's `NODE_VERSION` must equal `.node-version`, and its `rust-base` tag
+and `Cargo.toml`'s `rust-version` the version `rust-toolchain.toml` pins;
+`docker compose config` must accept `compose.yaml`, the web stage's NGINX image
+must accept `deploy/nginx.conf` (`nginx -t`), and both image targets, `server`
+and `web`, must build. It runs when a push or pull request changes a file the
+images or their configuration come from (the Dockerfile, `compose.yaml`,
+`deploy`, the workflow, and the Rust and npm manifests, locks, and version pins;
+the workflow lists them all), on every manual run, and weekly (Mondays at 06:17
+UTC), when it is the only job, because base images change upstream while the
+repository does not. A change to other sources alone waits for the weekly or a
+manual run.
 
 Rust tests live in `crates/core/tests` (`parse.rs`, `game.rs`) and
 `crates/search/tests`, besides unit tests in the search and server sources; the
-server's router tests are in `crates/server/src/integration_tests.rs`.
+server's router tests are in `crates/server/src/tests/router.rs` and its live
+PostgreSQL tests in `live_postgres.rs` beside it.
 `boundary.rs` pins the search API's errors, limits, messages, stats order, and
 proof kinds. `search.rs` checks every mode against a BFS oracle on fixed and
 seeded random boards and holds the reference solver's frozen fixtures
