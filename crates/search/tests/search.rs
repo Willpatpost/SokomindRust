@@ -1,5 +1,5 @@
 use sokomind_core::{Board, Game, State};
-use sokomind_search::{Mode, Proof, Search, Status, StopReason};
+use sokomind_search::{Mode, ParseModeError, Proof, Search, Status, StopReason};
 use std::collections::{HashSet, VecDeque};
 
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
@@ -253,10 +253,20 @@ fn mode_and_status_names_are_stable() {
         ("optimal", Mode::Optimal),
     ] {
         assert_eq!(Mode::parse(name), Ok(mode));
+        assert_eq!(name.parse::<Mode>(), Ok(mode));
+        assert_eq!(mode.as_str(), name);
+    }
+    assert_eq!(Mode::ALL, [Mode::Fast, Mode::Quality, Mode::Optimal]);
+    for mode in Mode::ALL {
+        assert_eq!(Mode::parse(mode.as_str()), Ok(mode));
     }
     for name in ["", "Fast", "exact", "optimal "] {
-        assert!(Mode::parse(name).is_err(), "{name:?}");
+        assert_eq!(Mode::parse(name), Err(ParseModeError), "{name:?}");
     }
+    assert_eq!(
+        ParseModeError.to_string(),
+        "Mode must be fast, quality, or optimal"
+    );
     for (status, name) in [
         (Status::Running, "running"),
         (Status::Solved, "solved"),
@@ -500,7 +510,8 @@ mod fixtures {
     }
 
     fixtures! {
-        // Reference catalog snapshots.
+        // Reference catalog snapshots. These are frozen copies:
+        // data/puzzles.json may change independently of them.
         ultra_tiny: "OOOOO\nO R O\nO A O\nO a O\nOOOOO" => 1,
         tiny: "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO" => 20,
         tutorial_push: "OOOOO\nO XSO\nO   O\nO R O\nOOOOO" => 4,
@@ -545,7 +556,7 @@ mod fixtures {
         es01a: "OOOOOOOOOO\nOOO      O\nOOO OOOO O\nOSRX     O\nOOOOOOOOOO" => 16,
         es01c: "OOOOOOOOOO\nOOO      O\nOOO OOOO O\nOSRX     O\nOO OOOOOOO\nOO XSOOOOO\nOO   OOOOO\nOOOOOOOOOO" => 19,
         es01d: "OOOOOOOOOO\nOOO      O\nOOO OOOO O\nOSRX     O\nOO OOOOOOO\nO     OOOO\nO X S OOOO\nO     OOOO\nOOOOOOOOOO" => 22,
-        fz_unsolvable: "OOOOOOOO\nO      O\nO OOO aO\nO    AaO\nOOOOOOAO\nOOOOOORO\nOOOOOOOO" => 15,
+        fz_false_unsolvable: "OOOOOOOO\nO      O\nO OOO aO\nO    AaO\nOOOOOOAO\nOOOOOORO\nOOOOOOOO" => 15,
         fz_corridor: "OOOOO\nO  aO\nO   O\nOOO O\nO O O\nObB O\nOSXAO\nO R O\nOOOOO" => 10,
         pd_false_optimum: "OOOOOOOOOOOOOOOOOOOOOOO\nOO  OOO  OOOOOOOOOOOOOO\nOO                R OOO\nOO OOOO O OOOOOOO O OOO\nOO OOOO O OOOOOOO O OOO\nOO OOOO O OOOOOOO O OOO\nOO OOOO O OOOOOOOXO OOO\nOS        XSO       XSO\nOOOOOOOOOOOOOOOOOOOOOOO" => 63,
         pd_false_unsolvable: "OOOOOOOOOOOOOOOOOOOOOOO\nOOOOOOO  OOOOOOOOOOOOOO\nOOOOOOO           R OOO\nOOOOOOO O OOOOOOO O OOO\nOOOOOOO O OOOOOOO O OOO\nOOOOOOO O OOOOOOO O OOO\nOOOOOOO O OOOOOOOXO OOO\nOS        XSO       XSO\nOOOOOOOOOOOOOOOOOOOOOOO" => 63,

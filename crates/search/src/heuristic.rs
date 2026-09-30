@@ -1,3 +1,9 @@
+//! Lower bound on the moves left: per label, a minimum-cost matching of the
+//! boxes to that label's goals over reverse-push distances. Each distance
+//! ignores every other box, so the bound is admissible in moves. It is
+//! incremental: a push re-solves only the pushed box's group, and a group of
+//! `REPAIR_CROSSOVER` or more boxes repairs the parent's duals with one
+//! augment instead of solving from scratch.
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, State};
 use std::mem::size_of;
 
@@ -85,8 +91,11 @@ impl ParentGroup {
 
 /// Plain reverse-push distances, cell-major per goal column: the fewest
 /// pushes a lone box needs from each cell when the keeper may stand anywhere,
-/// `NONE` when unreachable. One push changes an entry by at most one, so the
-/// estimate over this table is consistent.
+/// `NONE` when unreachable. A legal push from `from` to `to` gives
+/// d(from) <= d(to) + 1 (pulling the box back is a reverse push), so an entry
+/// drops by at most one per push. It may rise by any amount or become NONE.
+/// A min-cost matching over such entries therefore drops by at most one per
+/// push: consistent in pushes, and so in moves.
 #[cfg(any(test, not(feature = "o2")))]
 pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16> {
     let goals = columns.len();
@@ -356,8 +365,9 @@ fn cost(distance: u16) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
+    use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER, plain_distances};
     use crate::engine::canonicalize;
+    use crate::testkit::{Lcg, catalog, explore, remaining};
     use sokomind_core::{Board, Cell, NONE};
     use std::mem::size_of;
 
@@ -373,18 +383,6 @@ mod tests {
         "O        a O\n",
         "OOOOOOOOOOOO",
     );
-
-    /// Fixed-seed LCG, so every run sees the same boards and walks.
-    struct Lcg(u64);
-    impl Lcg {
-        fn below(&mut self, n: usize) -> usize {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (self.0 >> 33) as usize % n
-        }
-    }
 
     /// An open 11x9 room with `x` X boxes, one A box, their goals and the
     /// robot on distinct cells at least two steps from the wall. A box pushed
@@ -517,5 +515,46 @@ mod tests {
         }
         walk(&Board::parse(WIDE).unwrap(), 200, &mut rng, &mut counts);
         assert!(counts.iter().flatten().all(|&n| n > 0), "{counts:?}");
+    }
+
+    /// Against exact remaining moves from every primitive state of each
+    /// catalog board small enough to enumerate. The build's estimate is
+    /// admissible and `None` only where no solution exists; that is the
+    /// side-aware table under `o2`, which is admissible too. The plain table
+    /// is also consistent: a move lowers it by at most one. That is checked
+    /// on the plain table in every build, since the side-aware one is not
+    /// consistent.
+    #[test]
+    fn heuristic_is_admissible_and_consistent() {
+        let mut checked = Vec::new();
+        for (id, board) in catalog() {
+            let Some((states, edges)) = explore(&board) else {
+                continue;
+            };
+            let exact = remaining(&board, &states, &edges);
+            let build = Heuristic::new(&board);
+            let plain = Heuristic::with_table(&board, plain_distances);
+            let plain_h: Vec<_> = states.iter().map(|state| plain.estimate(state)).collect();
+            for (from, state) in states.iter().enumerate() {
+                match build.estimate(state) {
+                    Some(h) => {
+                        assert!(h <= exact[from], "{id}: {h} > {} at {state:?}", exact[from])
+                    }
+                    None => assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}"),
+                }
+                for &(to, _) in &edges[from] {
+                    let Some(next) = plain_h[to] else {
+                        continue;
+                    };
+                    let h = plain_h[from];
+                    assert!(
+                        h.is_some_and(|h| h <= next + 1),
+                        "{id}: {h:?} then {next} at {state:?}"
+                    );
+                }
+            }
+            checked.push(id);
+        }
+        assert_eq!(checked.len(), 8, "{checked:?}");
     }
 }

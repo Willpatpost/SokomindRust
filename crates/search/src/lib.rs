@@ -1,5 +1,45 @@
-//! Incremental, platform-independent push A*. The arena, queue, table and
-//! flood buffers are reserved once.
+//! Incremental, platform-independent push A* for Sokomind boards. A search
+//! reserves its arena, queue, state table and flood buffers once, within the
+//! caller's state limit and memory budget, and never grows them.
+//!
+//! A [`Search`] runs one of three [`Mode`]s over the same engine. It expands
+//! pushes rather than single steps, its costs count every move, the walks
+//! between pushes included, and every mode prunes dead cells and frozen
+//! boxes:
+//!
+//! - [`Mode::Fast`]: weighted A* that stops at its first route.
+//! - [`Mode::Quality`]: Fast, then a lighter weight that keeps shortening
+//!   that route until nothing queued can beat it or a limit hits.
+//! - [`Mode::Optimal`]: admissible A*, and the only mode that yields a
+//!   [`Proof`]: that the route is shortest, that the optimum lies between
+//!   two bounds, or that no route exists.
+//!
+//! A caller drives a search in slices. [`Search::advance`] runs a bounded
+//! number of queue pops; between slices the caller reads progress and may
+//! [`Search::stop`] the search, until [`Search::status`] leaves
+//! [`Status::Running`]. [`Search::solution`] hands over the best route as
+//! `UDLR` letters, already replayed from the start.
+//!
+//! ```
+//! use sokomind_core::{Board, Game};
+//! use sokomind_search::{Mode, Proof, Search, Status};
+//!
+//! // The robot walks around the box, then pushes it right onto its goal.
+//! let board = Board::parse("OOOOO\nO XSO\nO   O\nO R O\nOOOOO")?;
+//! let mut search = Search::new(board.clone(), board.initial(), Mode::Optimal, 10_000, 16)?;
+//! while search.status() == Status::Running {
+//!     // A worker reports progress or checks its clock between slices.
+//!     search.advance(64);
+//! }
+//! assert_eq!(search.status(), Status::Solved);
+//! assert_eq!(search.proof(), Some(Proof::Optimal { moves: 4 }));
+//! let route = search.solution()?.expect("a solved search has a route");
+//! let mut game = Game::new(board);
+//! game.replay(&route)?;
+//! assert!(game.solved());
+//! assert_eq!(game.moves(), 4);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 // The PEA* slack is one const (5.3 S2): exactly one C, never the bare switch.
 #[cfg(any(
     all(feature = "pea0", feature = "pea1"),
@@ -23,6 +63,8 @@ mod proof;
 mod reach;
 #[cfg(feature = "o2")]
 mod sides;
+#[cfg(test)]
+mod testkit;
 
 use engine::{Engine, Policy};
 use exact::ExactSearch;
@@ -30,8 +72,11 @@ pub use proof::Proof;
 use sokomind_core::{Board, MAX_ROUTE, State, StateError};
 use std::ops::RangeInclusive;
 
-/// Largest per-search state limit accepted anywhere. At 64 MiB the memory
-/// budget binds first on boards with 14 or more boxes.
+/// Largest per-search state limit accepted anywhere. A state costs a 12-byte
+/// record, two bytes per box, an 8-byte queue entry and 8 to 16 bytes of
+/// index table, so at 64 MiB the memory budget binds first from about 20
+/// boxes: 19 fit a full limit even at `MAX_CELLS` cells, and 20 do not even
+/// on a tiny board (the arena test `memory_binds_from_twenty_boxes_at_64_mib`).
 pub const MAX_STATES: usize = 1_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
@@ -40,33 +85,88 @@ pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// requests lower but never below this range's start.
 pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
 
+/// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].
+/// [`Mode::as_str`] gives its wire name: the server's `mode` field, the WASM
+/// search's `mode` argument and the benchmark corpus's `mode` key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// Weighted A* (weight 5) that ends at its first route, however long.
     Fast,
+    /// Fast until its first route, then weight 3 in the same arena, shortening
+    /// the route until the queue empties or a limit hits. When Fast fills the
+    /// arena without a route, the search starts over at weight 3.
     Quality,
+    /// Admissible A* over moves: a shortest route, proved once the search
+    /// finishes.
     Optimal,
 }
 impl Mode {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "fast" => Ok(Self::Fast),
-            "quality" => Ok(Self::Quality),
-            "optimal" => Ok(Self::Optimal),
-            _ => Err("Mode must be fast, quality, or optimal".into()),
+    /// Every mode in wire order: fast, quality, optimal.
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Quality, Self::Optimal];
+    /// The wire name [`Mode::parse`] accepts: `fast`, `quality` or `optimal`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Quality => "quality",
+            Self::Optimal => "optimal",
         }
     }
+    /// The mode whose wire name is exactly `value`; case and surrounding
+    /// whitespace count. Anything else is a [`ParseModeError`].
+    pub fn parse(value: &str) -> Result<Self, ParseModeError> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str() == value)
+            .ok_or(ParseModeError)
+    }
 }
+impl std::str::FromStr for Mode {
+    type Err = ParseModeError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+/// [`Mode::parse`] got something other than a mode's wire name. The server
+/// and the WASM search show its text as is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseModeError;
+impl std::fmt::Display for ParseModeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Mode must be fast, quality, or optimal")
+    }
+}
+impl std::error::Error for ParseModeError {}
+
+/// Where a search stands. It stays `Running` until [`Search::advance`] or
+/// [`Search::stop`] ends the search; every other status is final. A final
+/// status keeps whatever the search found: [`Search::best_moves`],
+/// [`Search::solution`] and, for `Optimal`, [`Search::proof`] and
+/// [`Search::lower_bound`] stay readable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
+    /// More pops may find or improve a route.
     Running,
+    /// Finished with a route: Fast at its first, Quality once its queue
+    /// empties, Optimal once it pops a solved state. Only an `Optimal`
+    /// search proves the route shortest; see [`Search::proof`].
     Solved,
+    /// The queue emptied without a route, or the start has no
+    /// label-compatible goal assignment. Only an `Optimal` search proves
+    /// from this that none exists.
     Exhausted,
+    /// The arena filled at the caller's `max_states`.
     StateLimit,
+    /// The arena filled at the smaller state limit that `memory_mib` allows;
+    /// see [`Search::new`].
     MemoryLimit,
+    /// Stopped by [`Search::stop`] with [`StopReason::TimeLimit`].
     TimeLimit,
+    /// Stopped by [`Search::stop`] with [`StopReason::Cancelled`].
     Cancelled,
 }
 impl Status {
+    /// The snake_case wire name, such as `state_limit`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -84,7 +184,9 @@ impl Status {
 /// terminal verdicts are determined internally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
+    /// The caller gave up on the search.
     Cancelled,
+    /// The caller's time budget ran out.
     TimeLimit,
 }
 
@@ -93,6 +195,7 @@ pub enum StopReason {
 /// `Allocation` is a resource failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
+    /// The start state does not fit the board.
     InvalidState(StateError),
     /// `max_states` is outside [`MAX_STATES_RANGE`] or `memory_mib` is
     /// outside [`MEMORY_MIB_RANGE`].
@@ -262,6 +365,27 @@ enum Kind {
     Weighted(Engine),
 }
 impl Search {
+    /// Checks `start` against `board` and the limits against
+    /// [`MAX_STATES_RANGE`] and [`MEMORY_MIB_RANGE`], then builds the
+    /// distance tables and reserves every buffer the search will use: room
+    /// for `max_states` records, or for as many as `memory_mib` MiB holds
+    /// when that is fewer, in which case filling it ends the search with
+    /// [`Status::MemoryLimit`] instead of [`Status::StateLimit`].
+    ///
+    /// `start` may be any valid position on `board`, such as a live game's;
+    /// equal-label boxes may come in any order. No state is expanded until
+    /// [`Search::advance`], and a start with no label-compatible goal
+    /// assignment gives a search that is already [`Status::Exhausted`].
+    ///
+    /// # Errors
+    ///
+    /// - [`SearchError::InvalidState`] when `start` breaks `board`'s geometry
+    ///   or occupancy.
+    /// - [`SearchError::Limits`] when either limit is outside its range.
+    /// - [`SearchError::BudgetTooSmall`] when `memory_mib` cannot hold the
+    ///   board's fixed buffers and one state.
+    /// - [`SearchError::Allocation`] when the allocator refuses a buffer the
+    ///   budget allows.
     pub fn new(
         board: Board,
         start: State,
@@ -288,8 +412,11 @@ impl Search {
         };
         Ok(Self(kind))
     }
-    /// Live certified lower bound on the optimal move count from the start;
-    /// the weighted modes claim none.
+    /// Live certified lower bound on the optimal move count from the start:
+    /// the least f of any record not yet expanded, or whose expansion a limit
+    /// cut short, capped by the best route.
+    /// `None` for the weighted modes, which claim none, and while no finite
+    /// bound exists, as after an exhausted search.
     pub fn lower_bound(&self) -> Option<u32> {
         match &self.0 {
             Kind::Exact(search) => search.lower_bound(),
@@ -297,6 +424,9 @@ impl Search {
         }
     }
     /// Terminal proof; `None` while running or without a sound certificate.
+    /// A limit or stop still yields one once a route exists: bounds, or
+    /// optimality when they meet. See [`Proof::kind`] for how each wire
+    /// format spells it.
     pub fn proof(&self) -> Option<Proof> {
         match &self.0 {
             Kind::Exact(search) => search.proof(),
@@ -319,12 +449,18 @@ impl Search {
         }
     }
 
+    /// Where the search stands; see [`Status`].
     pub fn status(&self) -> Status {
         self.engine().status()
     }
+    /// Move count of the best route found so far, if any. It never grows: a
+    /// later route replaces it only when shorter.
     pub fn best_moves(&self) -> Option<u32> {
         self.engine().best_moves()
     }
+    /// Records expanded so far, each counted once, including those a Quality
+    /// restart discarded. A cheaper route to a known state adds a new record,
+    /// so a reopened state counts again.
     pub fn expanded(&self) -> u32 {
         self.engine().expanded()
     }
@@ -334,21 +470,45 @@ impl Search {
     pub fn reexpansions(&self) -> u32 {
         self.engine().reexpansions()
     }
+    /// Records inserted so far, improved versions of known states and any a
+    /// Quality restart discarded included.
     pub fn generated(&self) -> u32 {
         self.engine().generated()
     }
+    /// Bytes charged against the memory budget: the fixed buffers and the
+    /// whole arena, reserved when the search was built.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }
+    /// Counters from the current search; see [`SearchStats`].
     pub fn stats(&self) -> SearchStats {
         self.engine().stats()
     }
+    /// Ends a running search with the status `reason` names; a search that
+    /// has already ended keeps its status.
     pub fn stop(&mut self, reason: StopReason) {
         self.engine_mut().stop(reason);
     }
+    /// Runs up to `pops` queue pops, returning early when the search ends
+    /// and at once when it has already ended. A pop that expands a record
+    /// floods the robot's reach once and tries every legal push from there;
+    /// stale, solved and dominated pops count without expanding anything.
+    /// Slicing the work this way lets a worker yield, report or stop between
+    /// calls.
     pub fn advance(&mut self, pops: u32) {
         self.engine_mut().advance(pops);
     }
+    /// The best route found so far as `UDLR` letters, rebuilt and replayed
+    /// from the start, or `None` without one. It costs O(route) plus one
+    /// flood per push, so call it once per improved route. It may be called
+    /// between slices of a running search: it borrows mutably only for flood
+    /// scratch and leaves the search as it was.
+    ///
+    /// # Errors
+    ///
+    /// [`SolutionError::TooLong`] when the route is longer than
+    /// [`MAX_ROUTE`] moves. The other variants mean an internal invariant
+    /// broke.
     pub fn solution(&mut self) -> Result<Option<String>, SolutionError> {
         self.engine_mut().solution()
     }

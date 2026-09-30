@@ -1,3 +1,6 @@
+//! Keeper reachability by breadth-first flood. Each fill bumps an epoch
+//! instead of clearing its buffers, so it costs only the cells it visits;
+//! the engine reads distances, box cells and walks from the last fill.
 #[cfg(feature = "o6")]
 use crate::keeper::CellSet;
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
@@ -5,7 +8,7 @@ use std::mem::size_of;
 
 /// Keeper-reachability flood with epoch stamps: fills cost only the cells
 /// they actually visit, and never reset their buffers between calls.
-pub struct Reach {
+pub(crate) struct Reach {
     distances: Vec<u16>,
     stamps: Vec<u32>,
     epoch: u32,
@@ -15,7 +18,7 @@ impl Reach {
     /// Distances, stamps and the queue.
     pub(crate) const BYTES_PER_CELL: usize =
         size_of::<u16>() + size_of::<u32>() + size_of::<Cell>();
-    pub fn new(cells: usize) -> Self {
+    pub(crate) fn new(cells: usize) -> Self {
         Self {
             distances: vec![NONE; cells],
             stamps: vec![0; cells],
@@ -40,7 +43,8 @@ impl Reach {
         self.distances[state.player as usize] = 0;
         self.queue.push(state.player);
     }
-    pub fn fill(&mut self, board: &Board, state: &State) {
+    /// Floods every cell the player reaches in `state`, marking box cells.
+    pub(crate) fn fill(&mut self, board: &Board, state: &State) {
         self.begin(board, state);
         let mut head = 0;
         while head < self.queue.len() {
@@ -56,14 +60,17 @@ impl Reach {
             }
         }
     }
-    pub fn distance(&self, cell: Cell) -> u16 {
+    /// Walking distance from the player to `cell` in the last fill, `NONE`
+    /// for a box cell or one the player cannot reach.
+    pub(crate) fn distance(&self, cell: Cell) -> u16 {
         if self.stamps[cell as usize] == self.epoch {
             self.distances[cell as usize]
         } else {
             NONE
         }
     }
-    pub fn blocked(&self, cell: Cell) -> bool {
+    /// Whether `cell` held a box in the last fill.
+    pub(crate) fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
     }
     /// Stamped by the last fill: a box, or a cell the player reaches.
@@ -115,7 +122,7 @@ impl Reach {
     /// first. Each step takes the first direction, in `U D L R` order, whose
     /// predecessor is one step closer to the player; box cells carry no
     /// distance, so the walk never enters one.
-    pub fn append_walk_reversed(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
+    pub(crate) fn append_walk_reversed(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
         let mut distance = self.distance(cell);
         while distance != 0 {
             let neighbors = board.neighbors()[cell as usize];

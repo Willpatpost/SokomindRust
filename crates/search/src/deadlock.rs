@@ -1,15 +1,21 @@
+//! Post-push freeze deadlocks: the greatest fixpoint of a freeze rule over
+//! the pushed box's box-adjacency component. A box stays frozen while each
+//! of its axes has a wall or another frozen box on one side, and a push that
+//! leaves one frozen off its goal leaves no solution.
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
 use std::mem::size_of;
 
 /// Occupancy marker for a cell without a box.
 const EMPTY: u8 = u8::MAX;
 
-/// Sound post-push deadlock detection: one greatest freeze fixpoint. On
-/// every state the engine expands it flags whatever the reference engine's
-/// `creates2x2Deadlock` and `createsFrozenComponentDeadlock` flag; the only
-/// 2x2 square it skips holds a box cornered off its goal, on a dead cell no
-/// expanded state has. It only ever answers "dead" for states from which no
-/// solution exists, so every mode may prune with it freely.
+/// Sound post-push deadlock detection: one greatest freeze fixpoint over the
+/// pushed box's component. Besides frozen groups of any shape, on every state
+/// the engine expands it flags each push that completes a 2x2 square of boxes
+/// and walls holding a box off its goal. The only such square it skips has a
+/// box diagonal to the pushed one, cornered off its goal by the square's two
+/// walls: a dead cell no expanded state has. It only ever answers "dead" for
+/// states from which no solution exists, so every mode may prune with it
+/// freely.
 pub(crate) struct Deadlock {
     /// Cell -> box index, or `EMPTY`. Box indices are below `MAX_BOXES`, so
     /// a byte holds one. Refreshed once per expansion.
@@ -132,7 +138,7 @@ impl Deadlock {
 #[cfg(test)]
 mod tests {
     use super::{Deadlock, EMPTY};
-    use crate::{engine::canonicalize, heuristic::Heuristic};
+    use crate::{engine::canonicalize, heuristic::Heuristic, testkit::Lcg};
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
     use std::collections::HashMap;
 
@@ -150,6 +156,14 @@ mod tests {
     /// least fixpoint both missed it.
     const LOCKED_PAIR: &str =
         "OOOOOOOO\nO      O\nO  O   O\nO CA BRO\nO   O  O\nO abc  O\nOOOOOOOO";
+    /// Pushing D left fills a 2x2 square with A, B, C and D, all off their
+    /// goals.
+    const SQUARE: &str = "OOOOOOOO\nO      O\nO  AB  O\nO  C DRO\nO      O\nOabcd  O\nOOOOOOOO";
+    /// Pushing B down fills a 2x2 square with B, A and two inner walls.
+    const WALL_SQUARE: &str = "OOOOOOO\nO  R  O\nO  B  O\nO O   O\nO OA  O\nO   abO\nOOOOOOO";
+    /// The goals form a 2x2 square that pushing D left from beside it fills.
+    const GOAL_SQUARE: &str =
+        "OOOOOOOO\nO      O\nO  ab  O\nO  cd RO\nO      O\nO ABCD O\nOOOOOOOO";
 
     fn at(board: &Board, row: usize, column: usize) -> Cell {
         (row * board.width() + column) as Cell
@@ -248,16 +262,47 @@ mod tests {
         assert!(!deadlock.is_dead_after_push(&board, b, left));
     }
 
-    /// Fixed-seed LCG, so every run sees the same rooms.
-    struct Lcg(u64);
-    impl Lcg {
-        fn below(&mut self, n: usize) -> usize {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (self.0 >> 33) as usize % n
-        }
+    #[test]
+    fn square_of_four_boxes_freezes() {
+        let board = Board::parse(SQUARE).unwrap();
+        let d = at(&board, 3, 5);
+        let boxes = [at(&board, 2, 3), at(&board, 2, 4), at(&board, 3, 3), d];
+        assert_eq!(board.initial().boxes[..4], boxes);
+        let mut deadlock = Deadlock::new(&board);
+        deadlock.refresh(&boxes);
+        // Each box has a frozen neighbor across both of its axes.
+        assert!(deadlock.is_dead_after_push(&board, d, at(&board, 3, 4)));
+        // Pushed up instead, D joins the others without closing a square.
+        assert!(!deadlock.is_dead_after_push(&board, d, at(&board, 2, 5)));
+    }
+
+    #[test]
+    fn square_of_two_boxes_and_two_walls_freezes() {
+        let board = Board::parse(WALL_SQUARE).unwrap();
+        let (a, b) = (at(&board, 4, 3), at(&board, 2, 3));
+        assert_eq!(board.initial().boxes[..2], [a, b]);
+        let mut deadlock = Deadlock::new(&board);
+        deadlock.refresh(&[a, b]);
+        // A wall blocks each box's row, and each blocks the other's column.
+        assert!(deadlock.is_dead_after_push(&board, b, at(&board, 3, 3)));
+        // With A one column right, B lands against the wall alone.
+        deadlock.refresh(&[at(&board, 4, 4), b]);
+        assert!(!deadlock.is_dead_after_push(&board, b, at(&board, 3, 3)));
+    }
+
+    /// A full square is no deadlock while every box in it is on its goal,
+    /// and is one as soon as two of them trade places.
+    #[test]
+    fn square_on_its_goals_is_not_dead() {
+        let board = Board::parse(GOAL_SQUARE).unwrap();
+        let (a, b, c) = (at(&board, 2, 3), at(&board, 2, 4), at(&board, 3, 3));
+        let (from, to) = (at(&board, 3, 5), at(&board, 3, 4));
+        let mut deadlock = Deadlock::new(&board);
+        deadlock.refresh(&[a, b, c, from]);
+        assert!(!deadlock.is_dead_after_push(&board, from, to));
+        assert!(board.solved(&state(from, &[a, b, c, to])));
+        deadlock.refresh(&[b, a, c, from]);
+        assert!(deadlock.is_dead_after_push(&board, from, to));
     }
 
     /// A walled room with a 4x4 floor holding one box set with its goals,

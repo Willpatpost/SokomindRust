@@ -799,34 +799,13 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::{Engine, Policy, canonicalize};
-    use crate::Status;
+    use crate::{Status, testkit::catalog};
     use sokomind_core::Board;
 
     /// Small enough for debug builds. At this limit Fast finds 28 catalog
     /// routes and the second phase shortens 13 of them.
     const STATES: usize = 1_000;
     const MIN_IMPROVED: usize = 10;
-
-    /// Every catalog board with its id.
-    fn catalog() -> Vec<(String, Board)> {
-        let catalog: serde_json::Value =
-            serde_json::from_str(include_str!("../../../data/puzzles.json")).unwrap();
-        catalog
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|puzzle| {
-                let rows: Vec<&str> = puzzle["rows"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row.as_str().unwrap())
-                    .collect();
-                let board = Board::parse(&rows.join("\n")).unwrap();
-                (puzzle["id"].as_str().unwrap().to_owned(), board)
-            })
-            .collect()
-    }
 
     /// Runs `policy` to a terminal status one pop at a time. Also returns
     /// the moves and expanded count when a route first appeared.
@@ -1071,74 +1050,9 @@ mod tests {
     /// 5.6 O3b: the stand walk against exact distances on the catalog.
     #[cfg(feature = "o3b")]
     mod o3b {
-        use super::{Engine, Policy, STATES, catalog};
-        use sokomind_core::{Board, Cell, NONE, State};
-        use std::collections::{HashMap, VecDeque};
-
-        /// Primitive states per board at most; 8 catalog boards fit.
-        const CAP: usize = 20_000;
-        /// Successor state and, for a push, the box index and direction.
-        type Edge = (usize, Option<(usize, usize)>);
-
-        /// Every primitive state reachable from the start, without
-        /// expanding solved ones, or `None` past `CAP` states. Box order is
-        /// the board's: estimates and walks ignore order inside a group.
-        fn explore(board: &Board) -> Option<(Vec<State>, Vec<Vec<Edge>>)> {
-            let key = |state: &State| (state.player, state.boxes);
-            let mut states = vec![board.initial()];
-            let mut index = HashMap::from([(key(&board.initial()), 0)]);
-            let mut edges = Vec::new();
-            while edges.len() < states.len() {
-                let state = states[edges.len()];
-                let mut out = Vec::new();
-                for direction in 0..4 {
-                    let mut next = state;
-                    if board.solved(&state) || board.step(&mut next, direction).is_none() {
-                        continue;
-                    }
-                    let pushed = (0..board.labels().len())
-                        .find(|&i| next.boxes[i] != state.boxes[i])
-                        .map(|i| (i, direction));
-                    let id = *index.entry(key(&next)).or_insert_with(|| {
-                        states.push(next);
-                        states.len() - 1
-                    });
-                    out.push((id, pushed));
-                }
-                edges.push(out);
-                if states.len() > CAP {
-                    return None;
-                }
-            }
-            Some((states, edges))
-        }
-
-        /// Exact moves to a solved state, `u32::MAX` without one.
-        fn remaining(board: &Board, states: &[State], edges: &[Vec<Edge>]) -> Vec<u32> {
-            let mut reverse = vec![Vec::new(); states.len()];
-            for (from, out) in edges.iter().enumerate() {
-                for &(to, _) in out {
-                    reverse[to].push(from);
-                }
-            }
-            let mut exact = vec![u32::MAX; states.len()];
-            let mut queue = VecDeque::new();
-            for (id, state) in states.iter().enumerate() {
-                if board.solved(state) {
-                    exact[id] = 0;
-                    queue.push_back(id);
-                }
-            }
-            while let Some(to) = queue.pop_front() {
-                for &from in &reverse[to] {
-                    if exact[from] == u32::MAX {
-                        exact[from] = exact[to] + 1;
-                        queue.push_back(from);
-                    }
-                }
-            }
-            exact
-        }
+        use super::{Engine, Policy, STATES};
+        use crate::testkit::{catalog, explore, remaining};
+        use sokomind_core::{Cell, NONE, State};
 
         /// The exact walk over `boxes`, occupancy read from the boxes.
         fn walk(engine: &Engine, player: Cell, boxes: &[Cell]) -> u32 {
@@ -1158,9 +1072,9 @@ mod tests {
 
         /// Admissible: never above the exact remaining moves. Consistent: a
         /// move lowers h' by at most 1 wherever it lowers h by at most 1,
-        /// which with the plain table is every move (3.3); the o2 table alone
-        /// may break that. On every catalog board whose primitive state space
-        /// fits `CAP`.
+        /// which with the plain table is every move; the o2 table alone may
+        /// break that. On every catalog board whose primitive state space
+        /// fits the testkit's exploration cap.
         #[test]
         fn stand_walk_is_admissible_and_consistent() {
             let mut checked = Vec::new();
