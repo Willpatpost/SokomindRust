@@ -1171,9 +1171,18 @@ mod tests {
 
     /// The root estimate is pushes + max(box walk, stand walk). It rises
     /// over pushes + box walk by exactly these gains, on exactly these
-    /// catalog boards: values computed independently of this code, so a
-    /// change to either walk or to the catalog shows here. The gain reads
-    /// only cells and dead masks, not the push count.
+    /// catalog boards, so a change to either walk, to the dead masks or to
+    /// the catalog shows here. The gain reads only cells and dead masks,
+    /// not the push count.
+    ///
+    /// The seven gains come from a Python replica of the engine's start
+    /// estimate, written from the stand-walk rule before this code and not
+    /// kept in the repo, which raised these 7 of the 57 boards by 2 each.
+    /// That is a second implementation of the same rule, not an
+    /// independent proof. tutorial-push checks by hand: its only statically
+    /// legal first push, right, needs a stand 3 steps from the keeper, 2
+    /// more than the step to the box's side, so its root is 1 + 3 = 4, the
+    /// optimum the crate example proves.
     #[test]
     fn stand_walk_raises_exactly_these_root_estimates() {
         const RAISED: [(&str, u32); 7] = [

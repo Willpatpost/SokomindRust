@@ -165,6 +165,8 @@ impl WasmSearch {
     /// - `[1]` states generated.
     /// - `[2]` accounted reserved bytes.
     /// - `[3]` moves in the best route found, or `u32::MAX` before the first.
+    ///   The count saturates at `u32::MAX - 1` (see [`Search::best_moves`]),
+    ///   so `u32::MAX` always means no route.
     /// - `[4]` proof kind: 0 none, 1 bounded, 2 optimal, 3 unsolvable, as the
     ///   table on [`Proof::kind`] lists.
     /// - `[5]` the live certified lower bound on the optimal moves, or

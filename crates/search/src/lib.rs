@@ -14,6 +14,19 @@
 //!   [`Proof`]: that the route is shortest, that the optimum lies between
 //!   two bounds, or that no route exists.
 //!
+//! Every mode queues by one estimate of the remaining moves: a minimum-cost
+//! assignment of each label's boxes to its goals, counted in pushes. The
+//! start state adds the keeper's walk to its first push, the larger of two
+//! Manhattan distances: to a cell beside the nearest box, and to the stand
+//! of the nearest statically legal push, one whose target cell and stand
+//! are free floor and whose target is not a dead cell for that box. Every
+//! route from an unsolved state opens with such a push, walls and other
+//! boxes only lengthen the walk to it, and those walking moves are disjoint
+//! from the pushes the assignment counts, so the sum stays admissible. On
+//! a pushed child the same stand walk only prunes: a child whose moves so
+//! far, estimate and walk reach the best route's length is dropped, and
+//! queue keys stay push-only.
+//!
 //! A caller drives a search in slices. [`Search::advance`] runs a bounded
 //! number of queue pops; between slices the caller reads progress and may
 //! [`Search::stop`] the search, until [`Search::status`] leaves
