@@ -6,6 +6,10 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+# The toolchain rust-toolchain.toml pins, which the Dockerfile's rust base image
+# also names; change all three together (CI's deploy job fails when they differ).
+rust-version = "1.98.1"
+publish = false
 
 [workspace.dependencies]
 sokomind-core = { path = "crates/core" }
@@ -13,11 +17,30 @@ sokomind-search = { path = "crates/search" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Every crate opts in with `[lints] workspace = true`. deny rather than forbid
+# keeps a reviewed local #[allow] possible; lint:rust passes -D warnings, so a
+# missing doc on a public item or on a crate root (build.rs included) fails it.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+# Server binary and catalog benchmark: one codegen unit and thin LTO for speed.
+# Only debuginfo is stripped, so panic backtraces and profilers still name functions.
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = true
+strip = "debuginfo"
 
+# Browser WASM (scripts/build-wasm.mjs): full LTO and a full strip keep the download small.
 [profile.wasm-release]
 inherits = "release"
 lto = true
+strip = true
+
+# test:release: release semantics (no debug assertions or overflow checks), built
+# faster: lto = false keeps only crate-local thin LTO, and 16 codegen units run in
+# parallel. Shipped binaries still use [profile.release].
+[profile.release-test]
+inherits = "release"
+lto = false
+codegen-units = 16

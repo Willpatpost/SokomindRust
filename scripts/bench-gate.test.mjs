@@ -2,14 +2,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { compare, formatReport, invariants, scoreboard, scoreboardDelta, serialize, toCase, upgrade } from './bench-gate.mjs';
 
+/** @typedef {import('./bench-gate.mjs').Case} Case */
+/** @typedef {import('./bench-gate.mjs').Finding} Finding */
+
 const full = (overrides = {}) => ({
   id: 'a', mode: 'optimal', fingerprint: 'fa', status: 'solved', moves: 10, pushes: 4, proof: 'optimal', lower_bound: 10,
   expanded: 100, generated: 200, reserved_bytes: 4096, first_route_expanded: 90, first_route_generated: 180,
   stats: { unique_states: 150, duplicate_improvements: 3 }, ...overrides,
 });
 const fast = (overrides = {}) => full({ mode: 'fast', proof: 'none', lower_bound: null, ...overrides });
+/**
+ * @param {Case} before
+ * @param {Case} after
+ */
 const diff = (before, after, sameConfig = true) => compare([before], [after], { sameConfig });
+/** @param {readonly Finding[]} findings */
 const rules = findings => findings.map(f => `${f.rule}:${f.field}`);
+/** @param {readonly Finding[]} findings */
 const fields = findings => findings.map(f => f.field);
 const CONFIG = { maxStates: 20000, memoryMiB: 64 };
 
@@ -23,6 +32,7 @@ test('serialize is deterministic: sorted keys, catalog then mode order, one case
   assert.equal(lines.length, 1 + 5 + 1 + cases.length + 2 + 1);
   assert.deepEqual(lines.slice(1, 6).map(line => line.trim().split('"')[1]),
     ['catalogHash', 'maxStates', 'memoryMiB', 'sourceRevision', 'version']);
+  /** @type {{ cases: Record<string, unknown>[] }} */
   const parsed = JSON.parse(text);
   assert.deepEqual(parsed.cases.map(c => `${c.id}:${c.mode}`), ['b:fast', 'b:optimal', 'a:fast', 'a:optimal']);
   assert.deepEqual(Object.keys(parsed.cases[0]), Object.keys(parsed.cases[0]).sort());
@@ -89,7 +99,10 @@ test('S2 flags accounted-memory growth only at the same config', () => {
 });
 
 test('toCase keeps every field present, and v1 baselines upgrade with unknown keys every rule skips', () => {
-  const record = toCase({ id: 'a', mode: 'fast', sample: 0, route: 'DD', search_us: 5, proof: { kind: 'none' }, moves: 2, stats: { unique_states: 1 } });
+  // Deliberately partial: toCase must still set every field, to null when the record lacks it.
+  const partial = { id: 'a', mode: 'fast', sample: 0, route: 'DD', search_us: 5, proof: { kind: 'none' }, moves: 2,
+    stats: { unique_states: 1 } };
+  const record = toCase(/** @type {any} */ (partial));
   assert.equal(record.proof, 'none');
   assert.equal(record.first_route_expanded, null);
   assert.ok(!('route' in record) && !('search_us' in record) && !('sample' in record));
@@ -103,7 +116,7 @@ test('toCase keeps every field present, and v1 baselines upgrade with unknown ke
   assert.deepEqual(upgraded.cases[0], { id: 'a', mode: 'optimal', moves: 10, expanded: 100, generated: 200, reserved_bytes: 4096, proof: 'optimal' });
   assert.ok(!('proof' in upgraded.cases[1]) && !('status' in upgraded.cases[1]));
   const result = compare(upgraded.cases, [full(), fast()], { sameConfig: true });
-  for (const bucket of ['hard', 'soft', 'improved', 'changed']) assert.deepEqual(result[bucket], [], bucket);
+  for (const bucket of /** @type {const} */ (['hard', 'soft', 'improved', 'changed'])) assert.deepEqual(result[bucket], [], bucket);
   assert.ok(result.recorded.some(f => f.key === 'a:optimal' && f.field === 'lower_bound'));
   assert.ok(result.recorded.some(f => f.key === 'a:fast' && f.field === 'stats.unique_states'));
   assert.equal(upgrade(upgraded), upgraded);
@@ -111,6 +124,10 @@ test('toCase keeps every field present, and v1 baselines upgrade with unknown ke
 });
 
 test('invariants I1-I3 catch false proofs and bounds, using only matching evidence', () => {
+  /**
+   * @param {readonly import('./bench-gate.mjs').RunCase[]} cases
+   * @param {readonly Case[]} [evidence]
+   */
   const found = (cases, evidence) => invariants(cases, evidence).map(f => `${f.key} ${f.rule}`);
   assert.deepEqual(found([full(), fast(), fast({ mode: 'quality' })]), []);
   assert.deepEqual(found([fast({ proof: 'optimal' })]), ['a:fast I1']);
@@ -140,6 +157,7 @@ test('improvements are reported but never fail the gate; catalog changes are har
   assert.deepEqual([...result.hard, ...result.soft], []);
   assert.deepEqual(rules(result.improved), ['R1:moves', 'R2:proof', 'R3:status', 'R4:lower_bound', 'S2:reserved_bytes']);
   assert.deepEqual(fields(result.changed), ['expanded', 'generated']);
+  /** @param {import('./bench-gate.mjs').Diff} diff */
   const report = diff => formatReport({ action: 'check', cases: [after], config: CONFIG, diff, failures: [],
     baseline: 'abc', source: 'def', catalogChangesAreHard: true });
   const { text, hard } = report(result);
@@ -152,6 +170,10 @@ test('improvements are reported but never fail the gate; catalog changes are har
 });
 
 test('scoreboard counts routes, proofs, capped lower bounds and records per proof', () => {
+  /**
+   * @param {string} id
+   * @param {string} mode
+   */
   const at = (id, mode, overrides = {}) => full({ id, mode, proof: 'none', lower_bound: null,
     stats: { unique_states: 10, duplicate_improvements: 1 }, ...overrides });
   const cases = [

@@ -14,22 +14,34 @@ import { root } from './toolchain.mjs';
 // BENCH_FEATURES must match the one `npm run wasm` built web/wasm with.
 const FEATURES = process.env.BENCH_FEATURES ?? '';
 const { values: options } = parseArgs({ options: { native: { type: 'string' } }, strict: true, allowPositionals: false });
+/**
+ * The native records in a file bench:check wrote, once they are shown to cover this catalog and build.
+ * @param {string} path
+ * @returns {import('./corpus.mjs').CorpusRecord[]}
+ */
 function recorded(path) {
   const file = JSON.parse(readFileSync(resolve(root, path), 'utf8'));
   assert.equal(file.catalogHash, catalogHash, `${path} was recorded for another catalog; rerun npm run bench:check`);
   assert.equal(file.features ?? '', FEATURES, `${path} was measured with cargo features "${file.features ?? ''}", not BENCH_FEATURES="${FEATURES}"`);
-  const cases = Array.isArray(file.records) ? file.records.map(record => `${record.id}/${record.mode}`) : [];
+  const records = /** @type {unknown} */ (file.records);
+  const cases = Array.isArray(records) ? records.map(record => `${record.id}/${record.mode}`) : [];
   assert.deepEqual(cases, catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
     `${path} must hold one record per catalog puzzle and mode, as bench:check writes it`);
-  return file.records;
+  return /** @type {import('./corpus.mjs').CorpusRecord[]} */ (records);
 }
 
-/** Runs one of the web app's own WASM decoders, naming the case that fails it. */
+/**
+ * Runs one of the web app's own WASM decoders, naming the case that fails it.
+ * @template T
+ * @param {string} context
+ * @param {() => T} run
+ * @returns {T}
+ */
 function decode(context, run) {
-  try { return run(); } catch (error) { throw new Error(`${context}: ${error.message}`, { cause: error }); }
+  try { return run(); } catch (error) { throw new Error(`${context}: ${/** @type {Error} */ (error).message}`, { cause: error }); }
 }
 
-const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')));
+const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')).href);
 const wasm = await init({ module_or_path: readFileSync(resolve(root, 'web/wasm/sokomind_bg.wasm')) });
 const native = options.native ? recorded(options.native) : nativeCorpus([], FEATURES);
 const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')]));

@@ -1,15 +1,30 @@
 name: Validate
-on: [push, pull_request, workflow_dispatch]
+# Pushes to main and pull requests (not every branch push, so an open pull
+# request is validated once per update, not twice). Docs-only changes skip it;
+# workflow_dispatch runs it on demand. The weekly schedule runs only the deploy
+# job, whose base images change upstream while this repository does not.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', LICENSE]
+  pull_request:
+    paths-ignore: ['**.md', LICENSE]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC
 
 permissions:
   contents: read
 
+# A newer run for the same event and ref (branch or pull request) cancels the
+# superseded one. The event keeps the weekly run from cancelling a push's run.
 concurrency:
-  group: validate-${{ github.workflow }}-${{ github.ref }}
+  group: validate-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   rust:
+    if: github.event_name != 'schedule'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -19,7 +34,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24.14.0'
+          node-version-file: .node-version
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       # After the toolchain step: the cache key includes the active rustc version.
@@ -30,6 +45,7 @@ jobs:
       - run: npm run test:release
 
   integration:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -49,12 +65,14 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24.14.0'
+          node-version-file: .node-version
           cache: npm
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Cargo.lock is the only wasm-bindgen version pin; build-wasm.mjs checks the CLI against it.
+      # The CLI must equal the wasm-bindgen crate that crates/wasm/Cargo.toml pins
+      # with `=` and Cargo.lock records; the two must agree. scripts/build-wasm.mjs
+      # (which checks the installed CLI) and the Dockerfile parse the lock the same way.
       - name: Read the wasm-bindgen version from Cargo.lock
         id: wasm-bindgen
         run: |
@@ -82,7 +100,26 @@ jobs:
       - run: node scripts/parity.mjs --native target/bench/catalog.json
       - run: npm run bench:observe
       - run: npm run test:db
-      - run: npx playwright install --with-deps chromium
+      # Browsers are cached per Playwright version. The system packages they need
+      # are not, so a cache hit still installs those.
+      - name: Read the Playwright version
+        id: playwright
+        run: |
+          version=$(npx playwright --version | sed -n 's/^Version //p')
+          if [ -z "$version" ]; then
+            echo "::error::npx playwright --version printed no version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       - run: npm run test:browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
@@ -95,3 +132,110 @@ jobs:
             playwright-report/
             test-results/
           if-no-files-found: ignore
+
+  # Runs the deploy job when a push or pull request changes a file that shapes
+  # the images or their config, and on every weekly or manual run. A change to
+  # sources alone waits for the weekly run.
+  deploy-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.diff.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Diff the deploy inputs against the base
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          paths=(Dockerfile .dockerignore compose.yaml deploy .github/workflows/ci.yml
+            rust-toolchain.toml Cargo.toml Cargo.lock 'crates/*/Cargo.toml'
+            .node-version package.json package-lock.json
+            web/tsconfig.json web/tests/tsconfig.json web/vite.config.ts)
+          # No base (a weekly or manual run), or one that cannot be fetched (such as
+          # the all-zero one of a branch's first push), counts as a change.
+          if [ -n "$BASE" ] && git fetch --quiet --depth=1 origin "$BASE" \
+            && git diff --quiet "$BASE" HEAD -- "${paths[@]}"; then
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  # compose.yaml parses, nginx accepts deploy/nginx.conf, and both images build.
+  # Nothing is pushed or started.
+  deploy:
+    needs: deploy-changes
+    if: needs.deploy-changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The Dockerfile cannot read .node-version, so its NODE_VERSION default is a copy.
+      - name: Check the Dockerfile's NODE_VERSION against .node-version
+        run: |
+          expected=$(tr -d '\r\n' < .node-version)
+          actual=$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error file=Dockerfile::ARG NODE_VERSION is '$actual', but .node-version says '$expected'"
+            exit 1
+          fi
+      # Likewise the rust base image and Cargo.toml's rust-version copy the channel
+      # rust-toolchain.toml pins. deploy-changes lists all three files, so an edit
+      # to any of them runs this check.
+      - name: Check the Rust version copies against rust-toolchain.toml
+        run: |
+          expected=$(sed -n 's/^channel = "\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          image=$(sed -n 's/^FROM rust:\([^ -]*\)-.* AS rust-base.*/\1/p' Dockerfile)
+          msrv=$(sed -n 's/^rust-version = "\([^"]*\)".*/\1/p' Cargo.toml)
+          if [ -z "$expected" ]; then
+            echo "::error file=rust-toolchain.toml::No channel line was found"
+            exit 1
+          fi
+          status=0
+          if [ "$image" != "$expected" ]; then
+            echo "::error file=Dockerfile::The rust-base image tag is '$image', but rust-toolchain.toml pins '$expected'"
+            status=1
+          fi
+          if [ "$msrv" != "$expected" ]; then
+            echo "::error file=Cargo.toml::rust-version is '$msrv', but rust-toolchain.toml pins '$expected'"
+            status=1
+          fi
+          exit $status
+      # compose.yaml refuses to load without POSTGRES_PASSWORD; any value will do.
+      - name: Check compose.yaml
+        env:
+          POSTGRES_PASSWORD: ci
+        run: docker compose config --quiet
+      # The nginx image and conf path come from the Dockerfile's web stage, so this
+      # tests what that image runs. --add-host stands in for compose's network,
+      # where the upstream's api name resolves.
+      - name: Check deploy/nginx.conf
+        run: |
+          image=$(sed -n 's/^FROM \(nginx:[^ ]*\) AS web$/\1/p' Dockerfile)
+          conf=$(sed -n 's|^COPY deploy/nginx.conf \(/[^ ]*\)$|\1|p' Dockerfile)
+          if [ -z "$image" ] || [ -z "$conf" ]; then
+            echo "::error file=Dockerfile::The web stage's nginx image or conf path was not found"
+            exit 1
+          fi
+          docker run --rm --add-host api:127.0.0.1 \
+            -v "$PWD/deploy/nginx.conf:$conf:ro" "$image" nginx -t
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # compose.yaml's two build targets. Each keeps its own cache scope, because a
+      # shared one would let the second build's export replace the first's; mode=max
+      # also caches the intermediate stages, where the dependency builds are.
+      - name: Build the server image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: server
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+      - name: Build the web image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: web
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max

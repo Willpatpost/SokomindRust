@@ -1,46 +1,87 @@
-FROM rust:1.98.1-bookworm AS rust-build
+# The two images share only rust-base and stubs. Past them, target server
+# (compose's api) runs server-build, and target web runs wasm-tools, wasm-build
+# and web-build, so a server-only edit runs no WASM step, and a WASM-only edit
+# no server step.
+
+# The web-build stage's Node. It must equal .node-version, which CI's
+# setup-node reads; the deploy job in ci.yml fails when the two differ.
+ARG NODE_VERSION=24.14.0
+
+# The toolchain rust-toolchain.toml pins. The file comes first, so every cargo
+# and rustup call below uses it. The deploy job in ci.yml fails when this tag,
+# or Cargo.toml's rust-version, differs from it.
+FROM rust:1.98.1-bookworm AS rust-base
 WORKDIR /app
-# Manifests first: the toolchain install survives crate and web edits.
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-# wasm-bindgen-cli must equal wasm-bindgen's version in Cargo.lock. This stage
-# runs wasm-bindgen without scripts/build-wasm.mjs, which checks that, so it
-# reads the version from Cargo.lock the way CI does (tr drops CRLF endings).
-RUN version=$(tr -d '\r' < Cargo.lock | grep -m1 -A1 -x 'name = "wasm-bindgen"' | sed -n 's/^version = "\(.*\)"$/\1/p') \
-    && if [ -z "$version" ]; then echo 'Cargo.lock does not list wasm-bindgen' >&2; exit 1; fi \
-    && rustup target add wasm32-unknown-unknown \
-    && cargo install wasm-bindgen-cli --version "$version" --locked
-# Dependencies alone, against stub sources (and no build.rs), so crate edits
-# reuse this layer. Deleting the stubs' outputs and fingerprints makes the real
-# build below recompile the workspace crates whatever the copied files' mtimes.
+COPY rust-toolchain.toml ./
+
+# The workspace with stub sources (and no build.rs): Cargo needs every member's
+# manifest and a target for each before it builds any of them. Each build stage
+# compiles its dependencies against these stubs first, so that layer survives
+# crate edits, then deletes the stubs' outputs and fingerprints, which makes its
+# real build recompile the workspace crates whatever the copied files' mtimes.
+FROM rust-base AS stubs
+COPY Cargo.toml Cargo.lock ./
 COPY crates/core/Cargo.toml crates/core/
 COPY crates/search/Cargo.toml crates/search/
 COPY crates/wasm/Cargo.toml crates/wasm/
 COPY crates/server/Cargo.toml crates/server/
 RUN for crate in core search wasm; do mkdir -p crates/$crate/src && touch crates/$crate/src/lib.rs; done \
-    && mkdir -p crates/server/src && echo 'fn main() {}' > crates/server/src/main.rs \
-    && cargo build --locked --release -p sokomind-server \
-    && cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
+    && mkdir -p crates/server/src && echo 'fn main() {}' > crates/server/src/main.rs
+
+# Copies only what the server compiles (the wasm crate keeps its stub), so a
+# WASM-only edit leaves this stage cached.
+FROM stubs AS server-build
+RUN cargo build --locked --release -p sokomind-server \
     && find target -name '*sokomind*' -prune -exec rm -rf {} +
-COPY crates crates
+COPY crates/core crates/core
+COPY crates/search crates/search
+COPY crates/server crates/server
 COPY data data
 COPY migrations migrations
 RUN cargo build --locked --release -p sokomind-server
-RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release && wasm-bindgen --target web --out-dir web/wasm --out-name sokomind target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm
 
 FROM debian:bookworm-slim AS server
-COPY --from=rust-build /app/target/release/sokomind-server /usr/local/bin/sokomind-server
+COPY --from=server-build /app/target/release/sokomind-server /usr/local/bin/sokomind-server
 USER 65532:65532
 ENV BIND_ADDR=0.0.0.0:3000
 EXPOSE 3000
 ENTRYPOINT ["sokomind-server"]
 
-FROM node:24-bookworm-slim AS web-build
+# wasm-bindgen-cli must equal wasm-bindgen's version in Cargo.lock. wasm-build
+# runs wasm-bindgen without scripts/build-wasm.mjs, which checks that, so this
+# stage reads the version from Cargo.lock (tr drops CRLF endings). ci.yml and
+# scripts/build-wasm.mjs parse the lock the same way; keep the three in step.
+# Only Cargo.lock is copied, so a manifest edit keeps the installed CLI.
+FROM rust-base AS wasm-tools
+RUN rustup target add wasm32-unknown-unknown
+COPY Cargo.lock ./
+RUN version=$(tr -d '\r' < Cargo.lock | grep -m1 -A1 -x 'name = "wasm-bindgen"' | sed -n 's/^version = "\(.*\)"$/\1/p') \
+    && if [ -z "$version" ]; then echo 'Cargo.lock does not list wasm-bindgen' >&2; exit 1; fi \
+    && cargo install wasm-bindgen-cli --version "$version" --locked
+
+# Copies only what the WASM compiles (the server crate keeps its stub), so a
+# server-only edit leaves this stage cached. data/ is left out because only
+# test code in core and search includes it; a non-test include_str! of data/
+# in core, search or wasm must add COPY data data here.
+FROM wasm-tools AS wasm-build
+COPY --from=stubs /app ./
+RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
+    && find target -name '*sokomind*' -prune -exec rm -rf {} +
+COPY crates/core crates/core
+COPY crates/search crates/search
+COPY crates/wasm crates/wasm
+# Mirrors the cargo build and wasm-bindgen commands in scripts/build-wasm.mjs;
+# change both together.
+RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
+    && wasm-bindgen --target web --out-dir web/wasm --out-name sokomind target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm
+
+FROM node:${NODE_VERSION}-bookworm-slim AS web-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY web web
 COPY data data
-COPY --from=rust-build /app/web/wasm web/wasm
+COPY --from=wasm-build /app/web/wasm web/wasm
 RUN npm run build:web
 
 # deploy/nginx.conf's upstream needs 1.27.3+ ("resolve"). 1.30 is the

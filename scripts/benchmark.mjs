@@ -16,8 +16,15 @@ import { parseArgs } from 'node:util';
 import {
   MODES, SCHEMA_VERSION, compare, formatReport, invariants, key, scoreboard, scoreboardDelta, serialize, toCase, upgrade,
 } from './bench-gate.mjs';
-import { catalog, catalogHash, nativeCorpus, sourceRevision, summarize } from './corpus.mjs';
+import { catalog, catalogHash, nativeCorpus, sourceRevision } from './corpus.mjs';
 import { root } from './toolchain.mjs';
+
+/** @typedef {import('./corpus.mjs').CorpusRecord} CorpusRecord */
+/** @typedef {import('./bench-gate.mjs').Case} Case */
+/**
+ * A committed observe-reference case: a case plus its median timings.
+ * @typedef {Case & { search_us: number, first_route_us: number | null }} ObserveCase
+ */
 
 const BASELINE = resolve(root, 'benchmarks/catalog-baseline.json');
 const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
@@ -28,27 +35,60 @@ const FEATURES = process.env.BENCH_FEATURES ?? '';
 const order = catalog.map(puzzle => puzzle.id);
 
 const [action, ...rest] = process.argv.slice(2);
+/** @param {string} path */
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
+/**
+ * @param {string} text
+ * @param {string} name
+ */
 const count = (text, name) => {
   const value = Number(text);
   assert(Number.isSafeInteger(value) && value > 0, `--${name} needs a positive integer`);
   return value;
 };
+/**
+ * @template {import('node:util').ParseArgsOptionsConfig} T
+ * @param {T} spec
+ */
 const options = spec => parseArgs({ args: rest, options: spec, strict: true, allowPositionals: false }).values;
+/**
+ * @param {{ maxStates: number, memoryMiB: number }} config
+ * @param {string[]} [extra]
+ */
 const corpus = (config, extra = []) =>
   nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra], FEATURES);
 const unrecorded = () => assert(!FEATURES, `BENCH_FEATURES=${FEATURES} runs are measurements; unset it to record`);
+/** @param {readonly number[]} list */
+const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+/**
+ * @param {string} name
+ * @param {string} text
+ */
 function save(name, text) {
   mkdirSync(resolve(root, 'target/bench'), { recursive: true });
   writeFileSync(resolve(root, 'target/bench', name), text);
 }
+/**
+ * Saves the records to target/bench/catalog.json and prints each mode's median search time.
+ * @param {CorpusRecord[]} records
+ */
 function raw(records) {
   save('catalog.json', JSON.stringify({ catalogHash, features: FEATURES || undefined, records }, null, 2) + '\n');
-  console.table(summarize(records));
+  const medians = MODES.flatMap(mode => {
+    const times = records.filter(r => r.mode === mode).map(r => r.search_us);
+    return times.length ? [`${mode} ${(median(times) / 1000).toFixed(1)} ms`] : [];
+  });
+  console.log(`Median search time (observational): ${medians.join(', ') || 'no runs'}.`);
 }
-// v1 files carry no fingerprints, so their routes count as evidence only for the same catalog.
+/**
+ * The cases of a parsed baseline file (or null) whose routes count as evidence.
+ * v1 files carry no fingerprints, so theirs count only for the same catalog.
+ * @param {any} baseline
+ * @returns {Case[]}
+ */
 const evidence = baseline => baseline && (baseline.version >= SCHEMA_VERSION || baseline.catalogHash === catalogHash)
   ? upgrade(baseline).cases : [];
+/** @param {import('./bench-gate.mjs').ReportFields} fields */
 function report(fields) {
   save('report.txt', formatReport(fields).text + '\n');
   const result = formatReport({ ...fields, limit: 25 });
@@ -114,8 +154,12 @@ function update() {
   return true;
 }
 
-// Hard boards at production scale. CI gates only on invariants and crashes;
-// the deltas against the committed reference are for review.
+// Hard boards at production scale, each searched --repeat times; the table
+// shows the median timings. It fails on an invariant failure (the catalog
+// baseline's and the committed reference's routes count as evidence), a crash,
+// a board missing from the catalog, or repeats that differ in anything but
+// timings. The deltas against the committed reference are for review and never
+// fail it; --update records a new reference only when the invariants hold.
 function observe() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, repeat: { type: 'string' }, update: { type: 'boolean' } });
   if (values.update) unrecorded();
@@ -125,8 +169,9 @@ function observe() {
   };
   const repeat = values.repeat ? count(values.repeat, 'repeat') : OBSERVE.repeat;
   for (const id of OBSERVE.puzzles) assert(order.includes(id), `Observe board ${id} is not in the catalog`);
-  const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+  /** @param {CorpusRecord} r */
   const strip = r => Object.fromEntries(Object.entries(r).filter(([name]) => !TIMINGS.includes(name)));
+  /** @type {CorpusRecord[]} */
   const records = [];
   for (const id of OBSERVE.puzzles) {
     const samples = corpus(config, ['--puzzle', id, '--repeat', String(repeat)]);
@@ -143,7 +188,12 @@ function observe() {
   const reference = existsSync(REFERENCE) ? read(REFERENCE) : null;
   const failures = invariants(cases, [...evidence(read(BASELINE)), ...(reference?.cases ?? [])]);
   const comparable = reference?.maxStates === config.maxStates && reference?.memoryMiB === config.memoryMiB;
-  const prior = new Map(comparable ? reference.cases.map(c => [key(c), c]) : []);
+  /** @type {Map<string, ObserveCase>} */
+  const prior = new Map(comparable ? /** @type {ObserveCase[]} */ (reference.cases).map(c => [key(c), c]) : []);
+  /**
+   * @param {number | null} now
+   * @param {number | null | undefined} then
+   */
   const delta = (now, then) => now === null || then === null || then === undefined ? '' : now - then;
   console.table(cases.map(c => {
     const p = prior.get(key(c));
@@ -172,11 +222,14 @@ function observe() {
 }
 
 function passThrough() {
-  raw(nativeCorpus(process.argv.slice(2), FEATURES));
+  const records = nativeCorpus(process.argv.slice(2), FEATURES);
+  raw(records);
+  console.table(scoreboard(records.map(toCase)));
   console.log('Raw measurements: target/bench/catalog.json; timings are observational and exclude compilation.');
   return true;
 }
 
+/** @type {Record<string, () => boolean>} */
 const actions = { '--check': check, '--update': update, '--observe': observe };
 if (FEATURES) console.log(`*** Measuring with cargo features: ${FEATURES} ***`);
 if (!(actions[action] ?? passThrough)()) process.exitCode = 1;

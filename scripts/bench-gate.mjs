@@ -4,18 +4,115 @@
 //
 // A key missing from a case means "unknown" (v1 baselines never recorded
 // status, bounds or stats), and every rule skips it.
+
+/**
+ * A baseline or evidence case. Only id and mode are always present.
+ * @typedef {object} Case
+ * @property {string} id
+ * @property {string} mode
+ * @property {string | null} [fingerprint]
+ * @property {string | null} [status]
+ * @property {number | null} [moves]
+ * @property {number | null} [pushes]
+ * @property {string | null} [proof] The proof kind.
+ * @property {number | null} [lower_bound]
+ * @property {number | null} [expanded]
+ * @property {number | null} [generated]
+ * @property {number | null} [reserved_bytes]
+ * @property {number | null} [first_route_expanded]
+ * @property {number | null} [first_route_generated]
+ * @property {Record<string, number> | null} [stats]
+ */
+
+/**
+ * A case of the current run, as toCase builds it: every key is present.
+ * @typedef {object} RunCase
+ * @property {string} id
+ * @property {string} mode
+ * @property {string} fingerprint
+ * @property {string} status
+ * @property {number | null} moves
+ * @property {number | null} pushes
+ * @property {string} proof The proof kind.
+ * @property {number | null} lower_bound
+ * @property {number} expanded
+ * @property {number} generated
+ * @property {number} reserved_bytes
+ * @property {number | null} first_route_expanded
+ * @property {number | null} first_route_generated
+ * @property {Record<string, number> | null} stats
+ */
+
+/**
+ * One difference between two cases; `rule` is null for changed and recorded fields.
+ * @typedef {{ key: string, rule: string | null, field: string, from: unknown, to: unknown }} Finding
+ */
+
+/**
+ * The result of compare: findings by bucket, and the keys found on one side only.
+ * @typedef {object} Diff
+ * @property {Finding[]} hard
+ * @property {Finding[]} soft
+ * @property {Finding[]} improved
+ * @property {Finding[]} changed
+ * @property {Finding[]} recorded
+ * @property {string[]} missing Keys only in the baseline.
+ * @property {string[]} extra Keys only in the new run.
+ */
+
+/** @typedef {{ key: string, rule: string, message: string }} Failure */
+
+/**
+ * A baseline file after upgrade.
+ * @typedef {object} Baseline
+ * @property {number} version
+ * @property {string} sourceRevision
+ * @property {string} [catalogHash]
+ * @property {number} maxStates
+ * @property {number} memoryMiB
+ * @property {Case[]} cases
+ */
+
+/**
+ * A case as v1 baselines stored it.
+ * @typedef {object} V1Case
+ * @property {string} id
+ * @property {string} mode
+ * @property {number | null} moves
+ * @property {boolean} proven
+ * @property {number} expanded
+ * @property {number} generated
+ * @property {number} reserved_bytes
+ */
+
 export const SCHEMA_VERSION = 2;
 export const MODES = ['fast', 'quality', 'optimal'];
+// Typed wide so that membership tests accept a missing or null status or proof.
+/** @type {ReadonlySet<string | null | undefined>} */
 export const FINISHED = new Set(['solved', 'exhausted']);
+/** @type {ReadonlySet<string | null | undefined>} */
 export const CAPPED = new Set(['state_limit', 'memory_limit', 'time_limit']);
+/** @type {ReadonlySet<string | null | undefined>} */
 const PROOFS = new Set(['optimal', 'unsolvable']);
 
+/** @param {{ id: string, mode: string }} c */
 export const key = c => `${c.id}:${c.mode}`;
+/** @param {string | null | undefined} status */
 const rank = status => FINISHED.has(status) ? 2 : CAPPED.has(status) ? 1 : 0;
+/**
+ * @template T
+ * @param {T | undefined} value
+ * @returns {value is T}
+ */
 const known = value => value !== undefined;
+/** @param {number} previous */
 const tolerance = previous => Math.max(previous + 32, Math.ceil(previous * 1.2));
 
-/** One catalog.rs record as a baseline case; every field is present (null when absent). */
+/**
+ * One catalog.rs record as a baseline case; every field is present (null when absent).
+ * @param {import('./corpus.mjs').CorpusRecord} r
+ * @returns {RunCase}
+ */
 export function toCase(r) {
   return {
     id: r.id, mode: r.mode, fingerprint: r.fingerprint ?? null, status: r.status ?? null,
@@ -26,26 +123,41 @@ export function toCase(r) {
   };
 }
 
-/** Read any supported baseline as v2. v1 knew only moves, proven and counts. */
+/**
+ * Read any supported baseline as v2. v1 knew only moves, proven and counts.
+ * @param {any} baseline A parsed baseline file.
+ * @returns {Baseline}
+ */
 export function upgrade(baseline) {
   if (baseline.version === SCHEMA_VERSION) return baseline;
   if (baseline.version !== 1) throw new Error(`Unsupported benchmark baseline version ${baseline.version}`);
-  const cases = baseline.cases.map(({ id, mode, moves, proven, expanded, generated, reserved_bytes }) =>
+  const cases = /** @type {V1Case[]} */ (baseline.cases).map(({ id, mode, moves, proven, expanded, generated, reserved_bytes }) =>
     ({ id, mode, moves, expanded, generated, reserved_bytes, ...(proven ? { proof: 'optimal' } : {}) }));
   return { ...baseline, version: SCHEMA_VERSION, cases };
 }
 
+/**
+ * A copy of a JSON value with every object's keys in sorted order.
+ * @param {any} value
+ * @returns {any}
+ */
 export function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.keys(value).sort().map(name => [name, sortKeys(value[name])]));
 }
 
-/** Deterministic text: sorted header keys, then one case per line in catalog
- * order (ids from `order`) and mode order, LF endings, trailing newline. */
+/**
+ * Deterministic text: sorted header keys, then one case per line in catalog
+ * order (ids from `order`) and mode order, LF endings, trailing newline.
+ * @param {{ [name: string]: unknown, cases: readonly Record<string, any>[] }} file
+ * @param {readonly string[]} order
+ * @returns {string}
+ */
 export function serialize({ cases, ...header }, order) {
   const index = new Map(order.map((id, i) => [id, i]));
-  const at = id => index.has(id) ? index.get(id) : order.length;
+  /** @param {string} id */
+  const at = id => index.get(id) ?? order.length;
   const sorted = [...cases].sort((a, b) => at(a.id) - at(b.id)
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || MODES.indexOf(a.mode) - MODES.indexOf(b.mode));
   return ['{',
@@ -55,8 +167,13 @@ export function serialize({ cases, ...header }, order) {
     '  ]', '}', ''].join('\n');
 }
 
-/** Known fields of a case, with stats flattened to "stats.<name>". */
+/**
+ * Known fields of a case, with stats flattened to "stats.<name>".
+ * @param {Case} c
+ * @returns {Record<string, any>}
+ */
 function fields(c) {
+  /** @type {Record<string, any>} */
   const out = {};
   for (const [name, value] of Object.entries(c)) {
     if (name === 'id' || name === 'mode' || !known(value)) continue;
@@ -67,26 +184,48 @@ function fields(c) {
 }
 
 /**
- * Hard rules (update needs --accept-regressions to record them):
+ * Diffs a baseline's cases (prev) against a new run's (cur), matched by key.
+ * Hard rules:
  *   R1 moves never worsen and a route is never lost;
  *   R2 an optimal or unsolvable proof is retained;
  *   R3 Optimal never drops status rank (finished > capped > other);
  *   R4 an Optimal lower bound never falls, unless the run is now proven unsolvable.
  * Soft rules:
- *   S1 expanded/generated stay within max(+32, 1.2x), judged only when both runs finished;
+ *   S1 expanded/generated stay within max(+32, 1.2x), judged only when both runs
+ *      finished (against a v1 case, which has no status, when the new run finished);
  *   S2 reserved_bytes never grows at the same config;
  *   S3 Fast/Quality never drop status rank.
- * Every other difference is reported as changed, and unknown-to-known as recorded.
+ * A move the other way on a ruled field is improved. Every other difference is
+ * changed, and unknown-to-known is recorded. Keys only in prev are missing, and
+ * keys only in cur are extra.
+ *
+ * bench:check fails on any hard or soft finding and, through formatReport,
+ * counts missing and extra cases as hard. bench:update records soft findings
+ * and missing or extra cases, and refuses hard findings unless run with
+ * --accept-regressions. Improved, changed and recorded findings never fail
+ * either. Invariant failures (see invariants) fail every caller, with no override.
+ * @param {readonly Case[]} prev
+ * @param {readonly Case[]} cur
+ * @param {{ sameConfig: boolean }} options sameConfig: both runs used the same state and memory limits.
+ * @returns {Diff}
  */
 export function compare(prev, cur, { sameConfig }) {
+  /** @type {Diff} */
   const out = { hard: [], soft: [], improved: [], changed: [], recorded: [], missing: [], extra: [] };
   const before = new Map(prev.map(c => [key(c), c])), now = new Map(cur.map(c => [key(c), c]));
   for (const k of before.keys()) if (!now.has(k)) out.missing.push(k);
   for (const k of now.keys()) if (!before.has(k)) out.extra.push(k);
   for (const [k, p] of before) {
-    if (!now.has(k)) continue;
-    const c = now.get(k), P = fields(p), C = fields(c), flagged = new Set();
+    const c = now.get(k);
+    if (!c) continue;
+    const P = fields(p), C = fields(c), flagged = new Set();
+    /** @param {string} field */
     const both = field => known(P[field]) && known(C[field]);
+    /**
+     * @param {'hard' | 'soft' | 'improved' | 'changed' | 'recorded'} bucket
+     * @param {string | null} rule
+     * @param {string} field
+     */
     const note = (bucket, rule, field) => {
       flagged.add(field);
       out[bucket].push({ key: k, rule, field, from: P[field], to: C[field] });
@@ -135,10 +274,19 @@ export function compare(prev, cur, { sameConfig }) {
  *      sits alongside, a replay-verified route from any mode or evidence case
  *      of the same id. Evidence with a fingerprint must match the current
  *      board; evidence without one (v1) must be pre-filtered by the caller.
+ * @param {readonly RunCase[]} cases
+ * @param {readonly Case[]} [evidence]
+ * @returns {Failure[]}
  */
 export function invariants(cases, evidence = []) {
-  const failures = [], best = new Map();
+  /** @type {Failure[]} */
+  const failures = [];
+  const best = new Map();
   const fingerprints = new Map(cases.map(c => [c.id, c.fingerprint]));
+  /**
+   * @param {string} id
+   * @param {number | null | undefined} moves
+   */
   const offer = (id, moves) => {
     if (moves !== null && known(moves) && (!best.has(id) || moves < best.get(id))) best.set(id, moves);
   };
@@ -147,18 +295,22 @@ export function invariants(cases, evidence = []) {
     if (fingerprints.has(e.id) && (!known(e.fingerprint) || e.fingerprint === fingerprints.get(e.id))) offer(e.id, e.moves);
   }
   for (const c of cases) {
+    /**
+     * @param {string} rule
+     * @param {string} message
+     */
     const fail = (rule, message) => failures.push({ key: key(c), rule, message });
     const { moves, lower_bound: lower, proof } = c;
     if (c.mode !== 'optimal') {
       if (proof !== 'none' || lower !== null) fail('I1', `${c.mode} claims proof=${proof} lower_bound=${lower}`);
       continue;
     }
-    const consistent = {
+    const consistent = /** @type {Record<string, boolean>} */ ({
       optimal: moves !== null && lower === moves,
       bounded: moves !== null && lower !== null && lower < moves,
       unsolvable: c.status === 'exhausted' && moves === null,
       none: moves === null,
-    }[proof];
+    })[proof];
     if (!consistent) fail('I2', `proof=${proof} disagrees with moves=${moves} lower_bound=${lower} status=${c.status}`);
     if (!best.has(c.id)) continue;
     const route = best.get(c.id);
@@ -169,8 +321,15 @@ export function invariants(cases, evidence = []) {
   return failures;
 }
 
-/** Per-mode totals; the delta between two scoreboards shows a change's net effect. */
+/**
+ * Per-mode totals; the delta between two scoreboards shows a change's net effect.
+ * @param {readonly Case[]} cases
+ */
 export function scoreboard(cases) {
+  /**
+   * @param {readonly Case[]} list
+   * @param {(c: Case) => number | null | undefined} value
+   */
   const sum = (list, value) => list.reduce((total, c) => total + (value(c) ?? 0), 0);
   return MODES.map(mode => {
     const all = cases.filter(c => c.mode === mode);
@@ -187,13 +346,23 @@ export function scoreboard(cases) {
   });
 }
 
-/** Row-wise after - before for numeric scoreboard columns. */
+/**
+ * Row-wise after - before for numeric scoreboard columns.
+ * @param {readonly Record<string, any>[]} before
+ * @param {readonly Record<string, any>[]} after
+ */
 export function scoreboardDelta(before, after) {
   return after.map((row, i) => Object.fromEntries(Object.entries(row).map(([name, value]) =>
     [name, typeof value === 'number' && typeof before[i]?.[name] === 'number' ? value - before[i][name] : value])));
 }
 
+/** @param {unknown} value */
 const show = value => value === undefined ? '?' : JSON.stringify(value);
+/**
+ * @param {string} title
+ * @param {readonly Finding[]} findings
+ * @param {number} limit Findings listed one per line; more are tallied by field.
+ */
 function section(title, findings, limit) {
   if (!findings.length) return [`${title}: none`];
   const lines = [`${title} (${findings.length}):`];
@@ -207,8 +376,26 @@ function section(title, findings, limit) {
   return lines;
 }
 
-/** Report sections plus one greppable BENCH line. With catalogChangesAreHard,
- * missing and extra cases count as hard findings (check); update only lists them. */
+/**
+ * What formatReport prints.
+ * @typedef {object} ReportFields
+ * @property {string} action
+ * @property {readonly Case[]} cases
+ * @property {{ maxStates: number, memoryMiB: number }} config
+ * @property {Diff} diff
+ * @property {readonly Failure[]} failures
+ * @property {string} [baseline] The baseline's source revision.
+ * @property {string} source
+ * @property {boolean} [catalogChangesAreHard]
+ * @property {number} [limit] Improved, changed and recorded findings listed per section.
+ */
+
+/**
+ * Report sections plus one greppable BENCH line. With catalogChangesAreHard,
+ * missing and extra cases count as hard findings (check); update only lists them.
+ * @param {ReportFields} report
+ * @returns {{ text: string, hard: number }}
+ */
 export function formatReport({ action, cases, config, diff, failures, baseline, source, catalogChangesAreHard, limit = Infinity }) {
   const catalog = diff.missing.length + diff.extra.length;
   const hard = diff.hard.length + (catalogChangesAreHard ? catalog : 0);

@@ -3,7 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-// The CLI must equal the wasm-bindgen crate that Cargo.lock resolves.
+// The CLI must equal the wasm-bindgen crate that Cargo.lock resolves. ci.yml and
+// the Dockerfile read the version from Cargo.lock the same way (the Dockerfile
+// installs the CLI where there is no Node to run this); keep the three in step.
 const lock = readFileSync(resolve(root, 'Cargo.lock'), 'utf8');
 const PINNED = /name = "wasm-bindgen"\r?\nversion = "([^"]+)"/.exec(lock)?.[1];
 if (!PINNED) {
@@ -12,11 +14,11 @@ if (!PINNED) {
 }
 const version = spawnSync('wasm-bindgen', ['--version'], { env, encoding: 'utf8' });
 if (version.error || version.status !== 0) {
-  console.error('wasm-bindgen is not runnable. See README setup.');
+  console.error('wasm-bindgen is not runnable. See "Run locally" in README.md.');
   process.exit(1);
 }
 if (!version.stdout.trim().endsWith(PINNED)) {
-  console.error(`wasm-bindgen ${PINNED} is required (found: ${version.stdout.trim()}). See README setup.`);
+  console.error(`wasm-bindgen ${PINNED} is required (found: ${version.stdout.trim()}). See "Run locally" in README.md.`);
   process.exit(1);
 }
 // BENCH_FEATURES (see scripts/benchmark.mjs) names sokomind-search features, so
@@ -24,6 +26,7 @@ if (!version.stdout.trim().endsWith(PINNED)) {
 // web/wasm then holds the experiment.
 const features = (process.env.BENCH_FEATURES ?? '').split(/[\s,]+/).filter(Boolean).map(f => `sokomind-search/${f}`);
 if (features.length) console.log(`*** Building WASM with cargo features: ${features.join(',')} ***`);
+// The Dockerfile runs the same two commands; change both together.
 run('cargo', ['build', '--locked', '-p', 'sokomind-wasm', '--target', 'wasm32-unknown-unknown', '--profile', 'wasm-release',
   ...(features.length ? ['--features', features.join(',')] : [])]);
 run('wasm-bindgen', ['--target', 'web', '--out-dir', 'web/wasm', '--out-name', 'sokomind', 'target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm']);

@@ -46,6 +46,9 @@ services:
       db:
         condition: service_healthy
     init: true
+    # Part of the solve timeout chain; see TIME_MS in
+    # crates/server/src/solve.rs. It outlasts the longest solve, so a shutdown
+    # lets one still running finish.
     stop_grace_period: 35s
   # The required edge: nginx serves the web app and proxies /api to the API,
   # which serves nothing else and is never published.

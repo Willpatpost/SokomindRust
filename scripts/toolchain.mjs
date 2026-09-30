@@ -14,8 +14,30 @@ if (existsSync(localCargo)) {
   env[pathKey] = `${resolve(localCargo, 'bin')}${delimiter}${env[pathKey]}`;
 }
 env[pathKey] = `${resolve(root, '.tools/bin')}${delimiter}${env[pathKey]}`;
-export function run(command, args) {
+
+/**
+ * Runs a command in the repo root, with the project-local tools on the path and
+ * output shared with this process. Returns its exit code, or 1 when it could not
+ * start or was killed by a signal.
+ * @param {string} command
+ * @param {readonly string[]} args
+ * @returns {number}
+ */
+export function attempt(command, args) {
   const result = spawnSync(command, args, { cwd: root, env, stdio: 'inherit', shell: false });
-  if (result.error) { console.error(`${command}: ${result.error.message}. See README setup.`); process.exit(1); }
-  if (result.status !== 0) process.exit(result.status || 1);
+  if (result.error) {
+    console.error(`${command}: ${result.error.message}. See "Run locally" in README.md.`);
+    return 1;
+  }
+  return result.status ?? 1;
+}
+
+/**
+ * Like attempt, but a failure ends this process with the command's exit code.
+ * @param {string} command
+ * @param {readonly string[]} args
+ */
+export function run(command, args) {
+  const code = attempt(command, args);
+  if (code !== 0) process.exit(code);
 }

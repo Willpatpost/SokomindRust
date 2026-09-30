@@ -1,0 +1,20 @@
+// Type-checks the scripts from their JSDoc: npm run check:scripts.
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // parity.mjs imports the web app's decoders from web/src/transport.ts.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.mjs"],
+  // A temporary measurement script without type annotations.
+  "exclude": ["factorial.mjs"]
+}
