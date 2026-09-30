@@ -1,4 +1,6 @@
 import { browserScheduler, type Scheduler } from './scheduler.ts';
+/** The time between two replayed moves. */
+const STEP_INTERVAL_MS = 70;
 export type PlaybackState =
   | { kind: 'idle' }
   | { kind: 'playing'; route: string; index: number; timer: number }
@@ -28,7 +30,7 @@ export class Playback {
       if (state.index >= state.route.length) { this.end(); return; }
       if (!this.step('UDLR'.indexOf(state.route[state.index++]))) { this.end(true); return; }
       this.changed();
-    }, 70);
+    }, STEP_INTERVAL_MS);
   }
   toggle(route?: string) {
     const state = this.state;

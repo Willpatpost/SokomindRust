@@ -21,8 +21,8 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// Under the page's 1.5 s health timeout (web/src/progress.ts) even when the
-/// database hangs. Part of the solve timeout chain; see TIME_MS in
+/// Under the page's 1.5 s HEALTH_TIMEOUT_MS (web/src/progress.ts) even when
+/// the database hangs. Part of the solve timeout chain; see TIME_MS in
 /// crates/server/src/solve.rs.
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(900);
 /// How long one database probe answers /api/health, so the database sees at

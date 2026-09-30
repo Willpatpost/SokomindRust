@@ -33,8 +33,8 @@ use std::{
 ///   so nginx never cuts off an answer the page still expects.
 ///
 /// Health follows the same rule: HEALTH_TIMEOUT, 900 ms in
-/// crates/server/src/api.rs, stays under the page's 1.5 s health timeout in
-/// web/src/progress.ts.
+/// crates/server/src/api.rs, stays under the page's 1.5 s HEALTH_TIMEOUT_MS
+/// in web/src/progress.ts.
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
 /// Pops the search makes between cancel and deadline checks: a stop waits
 /// for at most this many pops, and one atomic load and clock read per batch

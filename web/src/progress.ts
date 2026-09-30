@@ -17,6 +17,15 @@ interface Options {
 /** Health re-probe backoff: the first retry waits 2 s, and each further miss
  * doubles the wait up to 5 minutes. */
 const PROBE_FIRST_MS = 2000, PROBE_MAX_MS = 300_000;
+/** How long a health probe waits for /api/health. Part of the solve timeout chain; see TIME_MS in
+ * crates/server/src/solve.rs. 1.5 s outlasts the server's 900 ms HEALTH_TIMEOUT, which answers
+ * even when the database hangs. */
+const HEALTH_TIMEOUT_MS = 1500;
+/** How long a delayed session save waits for another move: each move restarts the wait, so a run
+ * of moves writes browser storage once. */
+const SAVE_DELAY_MS = 350;
+/** How long a progress read or save waits for the server before it is abandoned. */
+const REQUEST_TIMEOUT_MS = 5000;
 export class ProgressClient {
   /** Whether /api/health last reported PostgreSQL; set by probe(). */
   persistence = false;
@@ -52,9 +61,7 @@ export class ProgressClient {
     const was = this.persistence;
     let retry = true;
     try {
-      // Part of the solve timeout chain; see TIME_MS in crates/server/src/solve.rs.
-      // 1.5 s outlasts the server's 900 ms HEALTH_TIMEOUT, which answers even when the database hangs.
-      const response = await this.request('/api/health', { signal: AbortSignal.timeout(1500) });
+      const response = await this.request('/api/health', { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
       const persistence = response.ok ? decodeHealth(await response.json().catch(() => null)) : undefined;
       if (persistence !== undefined) {
         this.persistence = persistence;
@@ -89,7 +96,7 @@ export class ProgressClient {
       if (!storage.write('session', { ...context, actions }))
         this.options.status('Browser storage is unavailable. This session has not been saved.');
     };
-    if (delayed) this.saveTimer = this.clock.timeout(save, 350);
+    if (delayed) this.saveTimer = this.clock.timeout(save, SAVE_DELAY_MS);
     else save();
   }
   best(): storage.Best | null {
@@ -132,7 +139,7 @@ export class ProgressClient {
     try {
       const response = await this.request(`/api/progress/${encodeURIComponent(context.id)}`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-profile-id': this.profile! },
-        body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(5000),
+        body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (this.context !== context) return;
       if (!response.ok) {
@@ -155,7 +162,7 @@ export class ProgressClient {
     if (!this.remote(context)) return;
     try {
       const response = await this.request(`/api/progress/${encodeURIComponent(context.id)}`, {
-        headers: { 'x-profile-id': this.profile! }, signal: AbortSignal.timeout(5000),
+        headers: { 'x-profile-id': this.profile! }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) return;
       const stored = decodeProgress(await response.json());
