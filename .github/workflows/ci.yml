@@ -30,16 +30,20 @@ jobs:
     if: github.event_name != 'schedule'
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Exact runner images, as in every job: a -latest label moves to a new
+        # image without a commit here. Move them deliberately, with a run first.
+        os: [ubuntu-24.04, windows-2025-vs2026]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
+      # With no argument, installs the channel, components and target that
+      # rust-toolchain.toml names.
       - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
+        run: rustup toolchain install
       # After the toolchain step: the cache key includes the active rustc version.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: npm run fmt:check
@@ -49,7 +53,7 @@ jobs:
 
   integration:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -65,13 +69,13 @@ jobs:
     env:
       SOKOMIND_TEST_DATABASE_URL: postgres://postgres:test-only@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: npm
       - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The CLI must equal the wasm-bindgen crate that crates/wasm/Cargo.toml pins
       # with `=` and Cargo.lock records; the two must agree. scripts/build-wasm.mjs
@@ -86,7 +90,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Install prebuilt wasm-bindgen
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
           fallback: none
@@ -106,9 +110,11 @@ jobs:
       - run: node scripts/parity.mjs --native target/bench/catalog.json
       - run: npm run bench:observe
       - run: npm run test:db
-      # Browsers are cached per Playwright version. The system packages they need
-      # are not, so a cache hit still installs those.
-      - name: Read the Playwright version
+      # Browsers are cached per runner image and Playwright version: Playwright
+      # downloads a build per OS release, and the runner's ImageOS (ubuntu24, for
+      # example) names it. The system packages they need are not cached, so a
+      # cache hit still installs those.
+      - name: Read the Playwright version and runner image
         id: playwright
         run: |
           version=$(npx playwright --version | sed -n 's/^Version //p')
@@ -117,17 +123,18 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+          echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+          key: playwright-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
       - if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
       - if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
       - run: npm run test:browser
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: validation-results
@@ -145,11 +152,11 @@ jobs:
   # import only node: modules and local files, so this needs no npm ci.
   node-floor:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.18.0
       - run: node --test scripts/*.test.mjs web/tests/*.test.ts
@@ -158,12 +165,12 @@ jobs:
   # the images or their config, and on every weekly or manual run. A change to
   # sources alone waits for the weekly run.
   deploy-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       deploy: ${{ steps.diff.outputs.deploy }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Diff the deploy inputs against the base
         id: diff
         env:
@@ -187,10 +194,10 @@ jobs:
   deploy:
     needs: deploy-changes
     if: needs.deploy-changes.outputs.deploy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Dockerfile cannot read .node-version, so its NODE_VERSION default is a copy.
       - name: Check the Dockerfile's NODE_VERSION against .node-version
         run: |
