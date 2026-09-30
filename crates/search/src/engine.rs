@@ -6,6 +6,7 @@ use crate::{
     reach::Reach,
 };
 use sokomind_core::{ACTIONS, Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State};
+use std::ops::Range;
 
 /// What separates the modes. Everything else, from child order to pruning
 /// and limit handling, is shared.
@@ -173,7 +174,8 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
 /// Labels are grouped in slot order (see [`State`]), so sorting each run of
 /// equal labels keeps every box on a slot of its own label. Only call this
 /// on search-owned state copies: a live `Game` must keep its box order,
-/// because undo records box indices.
+/// because undo records box indices. The engine sorts only its start this
+/// way; after each push [`settle`] restores the order.
 pub(crate) fn canonicalize(board: &Board, state: &mut State) {
     let labels = board.labels();
     let mut begin = 0;
@@ -185,6 +187,28 @@ pub(crate) fn canonicalize(board: &Board, state: &mut State) {
         state.boxes[begin..end].sort_unstable();
         begin = end;
     }
+}
+
+/// Restores [`canonicalize`]'s order in a state that had it until box `i`
+/// alone moved. `group` is the box's label group ([`Heuristic::group`]):
+/// the box shifts left or right within it, one neighbor at a time, until
+/// the group is sorted again. The other boxes kept their sorted order and
+/// no two boxes share a cell, so the result is exactly the full sort's, at
+/// the cost of the boxes it passes instead of a sort of every group.
+pub(crate) fn settle(state: &mut State, group: Range<usize>, i: usize) {
+    let cell = state.boxes[i];
+    let mut slot = i;
+    while slot > group.start && state.boxes[slot - 1] > cell {
+        state.boxes[slot] = state.boxes[slot - 1];
+        slot -= 1;
+    }
+    // After a shift left the right neighbor is a box just passed, above
+    // `cell`, so this shifts only a box that did not move left.
+    while slot + 1 < group.end && state.boxes[slot + 1] < cell {
+        state.boxes[slot] = state.boxes[slot + 1];
+        slot += 1;
+    }
+    state.boxes[slot] = cell;
 }
 
 /// What the engine counts as it skips pops and children: pops whose node a
@@ -468,10 +492,17 @@ impl Engine {
                         self.skipped.pruned_deadlocks += 1;
                         continue;
                     }
+                    // Every stored state is canonical, the parent too, so
+                    // settling the pushed box canonicalizes the child.
                     let mut next = node.state;
                     next.player = from;
                     next.boxes[i] = to;
-                    canonicalize(&self.board, &mut next);
+                    settle(&mut next, self.heuristic.group(i), i);
+                    debug_assert_eq!(next, {
+                        let mut sorted = next;
+                        canonicalize(&self.board, &mut sorted);
+                        sorted
+                    });
                     let (slot, previous) = self.arena.find(&next);
                     let previous = previous.map(|previous| self.arena.meta(previous));
                     if previous.is_some_and(|previous| {
@@ -688,10 +719,11 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Policy, canonicalize};
+    use super::{Engine, Policy, canonicalize, settle};
     use crate::{
         Status,
-        testkit::{catalog, explore, remaining},
+        heuristic::Heuristic,
+        testkit::{Lcg, catalog, explore, remaining},
     };
     use sokomind_core::{Board, Cell, NONE, State};
 
@@ -856,6 +888,53 @@ mod tests {
         state.boxes[..4].copy_from_slice(&[a2, a1, b2, b1]);
         canonicalize(&board, &mut state);
         assert_eq!(state, start);
+    }
+
+    /// After any one-box move from a canonical state, settling the moved box
+    /// gives exactly canonicalize's order. Random moves on every catalog
+    /// board, which ignore the keeper since neither order reads it, reach
+    /// one-box groups, boxes that keep their slot, and boxes that pass two
+    /// or more others to either end of their group.
+    #[test]
+    fn settle_matches_canonicalize_after_every_move() {
+        let mut rng = Lcg(1);
+        // One-box group, same slot, to the group's start past at least two
+        // boxes, to its end past at least two.
+        let mut seen = [0; 4];
+        for (id, board) in catalog() {
+            let heuristic = Heuristic::new(&board);
+            let n = board.labels().len();
+            let mut state = board.initial();
+            for _ in 0..1_000 {
+                let i = rng.below(n);
+                let to = board.neighbors()[state.boxes[i] as usize][rng.below(4)];
+                if to == NONE || state.boxes[..n].contains(&to) {
+                    continue;
+                }
+                let mut moved = state;
+                moved.boxes[i] = to;
+                let mut sorted = moved;
+                canonicalize(&board, &mut sorted);
+                let group = heuristic.group(i);
+                settle(&mut moved, group.clone(), i);
+                assert_eq!(moved, sorted, "{id}: box {i} to {to} in {state:?}");
+                let slot = moved.boxes[..n]
+                    .iter()
+                    .position(|&cell| cell == to)
+                    .unwrap();
+                if group.len() == 1 {
+                    seen[0] += 1;
+                } else if slot == i {
+                    seen[1] += 1;
+                } else if slot == group.start && i >= slot + 2 {
+                    seen[2] += 1;
+                } else if slot + 1 == group.end && slot >= i + 2 {
+                    seen[3] += 1;
+                }
+                state = moved;
+            }
+        }
+        assert!(seen.iter().all(|&count| count > 0), "{seen:?}");
     }
 
     /// The exact walk over `boxes`, occupancy read from the boxes.

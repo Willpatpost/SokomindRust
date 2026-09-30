@@ -5,7 +5,7 @@
 //! `REPAIR_CROSSOVER` or more boxes repairs the parent's duals with one
 //! augment instead of solving from scratch.
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, State};
-use std::mem::size_of;
+use std::{mem::size_of, ops::Range};
 
 const INF: i32 = 1_000_000;
 // INF exceeds every finite matching, and a full row of INF costs cannot
@@ -178,6 +178,14 @@ impl Heuristic {
     /// `child_estimate` would return `None`, and callers may prune first.
     pub(crate) fn dead(&self, i: usize, cell: Cell) -> bool {
         (self.dead[cell as usize] >> self.group_of[i]) & 1 != 0
+    }
+
+    /// Box `i`'s label group as a range of box slots: `i` and every box
+    /// interchangeable with it, the run of equal labels that
+    /// [`canonicalize`](crate::engine::canonicalize) sorts.
+    pub(crate) fn group(&self, i: usize) -> Range<usize> {
+        let group = &self.groups[self.group_of[i] as usize];
+        group.start..group.start + group.len
     }
 
     /// Distances from `cell` to each of `group`'s goals, in column order.
@@ -418,7 +426,7 @@ mod tests {
             let mut cache = ParentGroup::EMPTY;
             let mut options = Vec::new();
             for i in 0..boxes {
-                let len = heuristic.groups[heuristic.group_of[i] as usize].len;
+                let len = heuristic.group(i).len();
                 let path = if len == 1 {
                     0
                 } else if len < REPAIR_CROSSOVER {
