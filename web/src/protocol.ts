@@ -2,9 +2,11 @@
 export const MAX_ROUTE = 100_000;
 /** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
  * A state costs about 28 B plus 2 B per box (record, queue entry, box cells and index
- * table), so at 64 MiB the memory budget binds first from about 20 boxes: the catalog's
- * 20-22-box boards fill their arenas at about 0.91-0.97M records. */
-export const MAX_STATES = 1_000_000;
+ * table), so the memory budget always binds first: on the catalog's boards 64 MiB holds
+ * about 0.91-2.10M states, and 256 MiB, the largest budget a search accepts, 3.67-8.39M.
+ * Every solve sends this cap, so its memory budget alone sizes the arena, which reserves
+ * as many states as the budget holds up front, even on a small board. */
+export const MAX_STATES = 60_000_000;
 /** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
  * apply to `mode`; also the values of the #mode select. */
 export const MODES = ['fast', 'quality', 'optimal'] as const;

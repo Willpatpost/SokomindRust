@@ -122,7 +122,7 @@ async fn solve_limits_follow_the_state_cap() {
     let (status, body) = request(app.clone(), "POST", "/api/solve", over).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let error = body["error"].as_str().unwrap();
-    assert!(error.contains("1..1000000 states"), "{error}");
+    assert!(error.contains("1..60000000 states"), "{error}");
     // At the cap, the 4 MiB budget sizes the arena down instead of failing.
     let mut at_cap = solve_body();
     at_cap["max_states"] = json!(sokomind_search::MAX_STATES);
