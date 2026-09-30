@@ -1,3 +1,4 @@
+//! `POST /api/solve`: one native search, bounded in time, states and memory.
 use crate::api::{ApiJson, App, Error};
 use axum::{
     Json,
@@ -20,7 +21,25 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// A native solve's time budget. Its upper end heads the solve timeout
+/// chain, whose links change together and must keep 30 s (this range's top)
+/// < 35 s (compose grace, and the page's 30 s + 5 s wait) < 40 s (nginx):
+/// - web/src/solver-client.ts: the page gives up on a native solve at
+///   `time_ms` + 5 s, 35 s at most, which leaves the server time to finish
+///   and send its answer after the deadline.
+/// - compose.yaml: `stop_grace_period: 35s` lets a solve that is running at
+///   shutdown finish, since graceful shutdown waits for in-flight requests.
+/// - deploy/nginx.conf: `proxy_read_timeout 40s` outlasts the page's wait,
+///   so nginx never cuts off an answer the page still expects.
+///
+/// Health follows the same rule: HEALTH_TIMEOUT, 900 ms in
+/// crates/server/src/api.rs, stays under the page's 1.5 s health timeout in
+/// web/src/progress.ts.
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
+/// Pops the search makes between cancel and deadline checks: a stop waits
+/// for at most this many pops, and one atomic load and clock read per batch
+/// cost little beside them.
+const POPS_PER_CHECK: u32 = 8;
 /// Native solves take the search crate's state range as is and cap its
 /// memory range lower, so every accepted request is a valid search limit.
 const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=64;
@@ -55,17 +74,25 @@ fn search_error(error: SearchError) -> Error {
     }
 }
 
+/// A solve request's JSON body. Unknown fields are rejected, so a typo
+/// cannot silently fall back to a default.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
+    /// The puzzle's rows, in the catalog's text format.
     rows: Vec<String>,
+    /// Moves already played from `rows`; the search starts after them.
     #[serde(default)]
     actions: String,
+    /// The search mode, as [`Mode::parse`] reads it.
     mode: String,
+    /// The time budget in milliseconds, within [`TIME_MS`]; 5000 by default.
     #[serde(default = "default_ms")]
     time_ms: u64,
+    /// The state cap, within [`MAX_STATES_RANGE`]; its top by default.
     #[serde(default = "default_states")]
     max_states: usize,
+    /// The memory budget in MiB, within [`MEMORY_MIB`]; its top by default.
     #[serde(default = "default_memory")]
     memory_mib: usize,
 }
@@ -78,11 +105,15 @@ fn default_states() -> usize {
 fn default_memory() -> usize {
     *MEMORY_MIB.end()
 }
+/// What the search proved about the shortest route, in moves.
 #[derive(Serialize)]
 struct ProofBody {
+    /// [`Proof::kind`]: optimal, bounded or unsolvable.
     kind: &'static str,
+    /// No route is shorter than this; omitted for an unsolvable puzzle.
     #[serde(skip_serializing_if = "Option::is_none")]
     lower_bound: Option<u32>,
+    /// The route's move count; omitted for an unsolvable puzzle.
     #[serde(skip_serializing_if = "Option::is_none")]
     upper_bound: Option<u32>,
 }
@@ -102,17 +133,29 @@ fn proof_body(proof: Option<Proof>) -> Option<ProofBody> {
         upper_bound,
     })
 }
+/// A finished search's JSON answer, whether or not it found a route.
 #[derive(Serialize)]
 pub struct ResultBody {
+    /// Why the search ended, from [`Status::as_str`].
     status: &'static str,
+    /// The moves found after `actions`, or `null`.
     route: Option<String>,
+    /// The route's moves, or `null` without a route.
     moves: Option<u32>,
+    /// The route's pushes, or `null` without a route.
     pushes: Option<u32>,
+    /// Records the search expanded, each counted once.
     expanded: u32,
+    /// Records the search inserted, improved versions of known states
+    /// included.
     generated: u32,
+    /// Bytes charged against `memory_mib`, all reserved up front.
     reserved_bytes: usize,
+    /// Wall-clock time the search took, in milliseconds.
     elapsed_ms: u64,
+    /// What the search proved, or `null` when it proved nothing.
     proof: Option<ProofBody>,
+    /// Every [`SearchStats`] counter by name, as integers.
     stats: serde_json::Value,
 }
 struct CancelOnDrop(Arc<AtomicBool>);
@@ -122,6 +165,9 @@ impl Drop for CancelOnDrop {
     }
 }
 
+/// `POST /api/solve`: runs one native search on a blocking thread within
+/// the request's limits and answers with the [`ResultBody`]. A dropped
+/// request cancels its search.
 pub async fn solve(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -134,20 +180,19 @@ pub async fn solve(
     {
         return Err(limits());
     }
-    let mode = Mode::parse(&request.mode).map_err(Error::bad)?;
-    let permit = app
-        .slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::too_many("Solver busy; try the browser solver or retry later"))?;
+    let mode = Mode::parse(&request.mode).map_err(|error| Error::bad(error.to_string()))?;
+    let permit = app.solve_permit()?;
     // The busy slot only stops concurrent solves; this stops one client
     // from taking every slot the moment it frees. Charged after the slot is
-    // taken, so a busy answer does not spend the budget.
-    if !app.solves.allow(app.proxies.client(&headers, peer.ip())) {
-        return Err(Error::too_many(
-            "Too many solve requests; try again shortly",
-        ));
-    }
+    // taken, so a busy answer does not spend the budget. The page shows the
+    // refusal as sent (nativeErrorText in web/src/transport.ts), so, like
+    // the busy text, it names the browser solver.
+    app.charge(
+        &app.solves,
+        &headers,
+        peer,
+        "Too many solve requests; try the browser solver or try again shortly",
+    )?;
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancel.clone());
     // CPU search never occupies an async Tokio worker; no unbounded job queue.
@@ -173,7 +218,7 @@ pub async fn solve(
             } else if started.elapsed() >= deadline {
                 search.stop(StopReason::TimeLimit);
             } else {
-                search.advance(8);
+                search.advance(POPS_PER_CHECK);
             }
         }
         // Checked on the incumbent's length before reconstruction, which
@@ -240,10 +285,10 @@ mod tests {
             ),
         ];
         for (error, status) in cases {
-            assert_eq!(search_error(error.clone()).0, status, "{error:?}");
+            assert_eq!(search_error(error.clone()).status, status, "{error:?}");
         }
         // Out-of-range limits get the same message as the request check.
-        assert_eq!(search_error(SearchError::Limits).1, limits().1);
+        assert_eq!(search_error(SearchError::Limits).message, limits().message);
     }
 
     #[test]

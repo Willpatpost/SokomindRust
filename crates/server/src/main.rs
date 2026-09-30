@@ -1,12 +1,50 @@
+//! Sokomind's HTTP API, which must run behind nginx: nginx serves the web
+//! app, adds the security headers and bounds slow clients, so this binary
+//! answers only these routes:
+//! - `GET /api/health`: whether the API and its database answer
+//!   ([`api::health`]).
+//! - `POST /api/solve`: one native search under the server's limits
+//!   ([`solve::solve`]).
+//! - `GET /api/progress/{id}`: a browser profile's best route for a catalog
+//!   puzzle, from PostgreSQL ([`progress::get`]).
+//! - `POST /api/progress/{id}`: replays a route and keeps it when it beats
+//!   the saved one ([`progress::save`]).
+//!
+//! Every error body is `{"error": "..."}` ([`api::Error`]): 400 invalid
+//! input; 404 an unknown endpoint, catalog puzzle or saved route; 405 a wrong
+//! method; 408 a body still arriving after [`api::BODY_TIMEOUT`]; 413 a body
+//! over [`BODY_LIMIT`]; 415 a missing or non-JSON content type; 422 JSON of
+//! the wrong shape; 429 a busy server or a spent rate budget; 503
+//! persistence off, unreachable or interrupted, or a failed search
+//! allocation; 500 a server bug.
+//!
+//! Handlers admit a request in one order, cheapest and most client-caused
+//! first, and skip the steps a route does not have: a solve names no catalog
+//! puzzle and needs no database, and a read spends no rate budget.
+//! 1. The request itself: 400.
+//! 2. The catalog puzzle: 404.
+//! 3. Persistence: 503.
+//! 4. A free solve or progress slot: 429 busy, at once, since nothing queues.
+//! 5. The client's solve or save budget: 429. It is charged last, so a
+//!    request refused earlier spends none of it.
+//!
+//! Parsing a position and replaying a route cost CPU, so both run after
+//! admission, on a blocking thread, and their 400 comes after every step.
+//!
+//! Settings come from the environment once at startup: [`config`] reads and
+//! checks them, and README's Configuration table lists them.
+// A binary's docs are for its maintainers, and cargo documents a binary's
+// private items, so these links resolve.
+#![allow(rustdoc::private_intra_doc_links)]
 mod api;
 mod client;
 mod config;
 mod database;
-#[cfg(test)]
-mod integration_tests;
 mod limit;
 mod progress;
 mod solve;
+#[cfg(test)]
+mod tests;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -17,6 +55,7 @@ use config::Config;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
+/// The largest request body the JSON extractor reads; a larger one is 413.
 const BODY_LIMIT: usize = 128 * 1024;
 
 #[tokio::main]
@@ -38,8 +77,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Sokomind API listening at http://{}", config.bind);
     let state = api::App::new(config, catalog, db);
     // axum's serve() gives hyper no timer, so hyper's 30 s header read
-    // timeout never arms; nginx, the required edge, bounds slow clients and
-    // connection counts.
+    // timeout never arms. Behind nginx, the required edge, that is moot:
+    // nginx reads each whole request before passing it on and bounds slow
+    // clients and connection counts. A direct run has only BODY_TIMEOUT,
+    // which bounds bodies but not headers.
     axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
@@ -50,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// API only: nginx serves the web app and adds the security and cache
-/// headers. Any unrouted path, under /api or not, is a JSON 404.
+/// headers. Any unrouted path the API receives is a JSON 404.
 fn router(state: api::App) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
@@ -84,59 +125,5 @@ async fn shutdown() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn router_fallbacks_and_health_without_database() {
-        use axum::{body::Body, extract::connect_info::MockConnectInfo, http::Request};
-        use serde_json::{Value, json};
-        use tower::ServiceExt;
-
-        let state = api::App::new(Config::defaults(), api::load_catalog().unwrap(), None);
-        let app = router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let not_found = json!({ "error": "Unknown API endpoint" });
-        let cases = [
-            ("GET", "/api", StatusCode::NOT_FOUND, not_found.clone()),
-            ("GET", "/api/", StatusCode::NOT_FOUND, not_found.clone()),
-            ("GET", "/api/x", StatusCode::NOT_FOUND, not_found.clone()),
-            (
-                "GET",
-                "/api/puzzles",
-                StatusCode::NOT_FOUND,
-                not_found.clone(),
-            ),
-            ("GET", "/api/progress", StatusCode::NOT_FOUND, not_found),
-            (
-                "GET",
-                "/api/solve",
-                StatusCode::METHOD_NOT_ALLOWED,
-                json!({ "error": "Method not allowed" }),
-            ),
-            (
-                "GET",
-                "/api/health",
-                StatusCode::OK,
-                json!({ "status": "ok", "persistence": false }),
-            ),
-        ];
-        for (method, path, status, body) in cases {
-            let request = Request::builder()
-                .method(method)
-                .uri(path)
-                .body(Body::empty())
-                .unwrap();
-            let response = app.clone().oneshot(request).await.unwrap();
-            assert_eq!(response.status(), status, "{method} {path}");
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let json: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(json, body, "{method} {path}");
-        }
     }
 }

@@ -1,3 +1,4 @@
+//! PostgreSQL: migrations, the bounded request pool and retention.
 use crate::{api::Error, config};
 use sqlx::{
     PgPool,
@@ -6,14 +7,38 @@ use sqlx::{
 };
 use std::time::{Duration, Instant};
 
+/// How long a pool waits for a connection; a request that waits longer
+/// fails with 503.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
+/// The deadline [`run`] gives one request's database work, pool acquisition
+/// included.
 pub const EXECUTION_TIMEOUT: Duration = Duration::from_millis(2500);
+/// The longest one request-pool statement may run.
+pub const STATEMENT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// The longest one request-pool statement may wait for a lock.
+pub const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
+// Each limit must sit below the next: a lock wait is part of a statement, so
+// a longer lock_timeout would never fire, and the database should end a
+// statement itself before `run` stops waiting and leaves it running.
+const _: () = assert!(
+    LOCK_TIMEOUT.as_millis() < STATEMENT_TIMEOUT.as_millis()
+        && STATEMENT_TIMEOUT.as_millis() < EXECUTION_TIMEOUT.as_millis()
+);
 /// Direct runs can race the database startup; retry briefly so compose's
 /// restart policy is a backstop, not the only defense.
 const RETRY_WINDOW: Duration = Duration::from_secs(30);
 const RETRY_PAUSE: Duration = Duration::from_secs(1);
 const RETENTION_SWEEP: Duration = Duration::from_secs(3600);
+/// Batches per sweep, so a large backlog drains over several sweeps instead
+/// of in one long burst of deletes: each replica deletes at most this many
+/// times PROGRESS_RETENTION_BATCH_SIZE records per `RETENTION_SWEEP`.
 const RETENTION_MAX_BATCHES: usize = 20;
+/// statement_timeout, or a cancel request, stopped the statement.
+const QUERY_CANCELED: &str = "57014";
+/// lock_timeout ran out while the statement waited for a lock.
+const LOCK_NOT_AVAILABLE: &str = "55P03";
+/// The database ended the statement to break a deadlock.
+const DEADLOCK_DETECTED: &str = "40P01";
 
 /// Startup's database work: applies pending migrations on a connection of
 /// their own, opens the bounded request pool, and starts the retention sweep
@@ -74,10 +99,37 @@ pub fn unreachable(error: &sqlx::Error) -> bool {
     }
 }
 
-/// Per-session limits also stop SQL after an HTTP client drops its request.
-/// Keep lock_timeout below statement_timeout, and both below our deadline.
+/// Why a database operation stopped short in a way a retry may get past.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interruption {
+    /// A statement, lock or execution deadline ran out.
+    TimedOut,
+    /// A concurrent transaction deadlocked with it.
+    Conflict,
+}
+
+/// Why the database stopped `error`'s statement, if it did, rather than
+/// rejecting it.
+pub fn interrupted(error: &sqlx::Error) -> Option<Interruption> {
+    let sqlx::Error::Database(error) = error else {
+        return None;
+    };
+    match &*error.code()? {
+        QUERY_CANCELED | LOCK_NOT_AVAILABLE => Some(Interruption::TimedOut),
+        DEADLOCK_DETECTED => Some(Interruption::Conflict),
+        _ => None,
+    }
+}
+
+/// Sets [`STATEMENT_TIMEOUT`] and [`LOCK_TIMEOUT`] as per-session limits,
+/// which also stop SQL after an HTTP client drops its request.
 pub fn bounded_options(options: PgConnectOptions) -> PgConnectOptions {
-    options.options([("statement_timeout", "1500ms"), ("lock_timeout", "500ms")])
+    let statement = format!("{}ms", STATEMENT_TIMEOUT.as_millis());
+    let lock = format!("{}ms", LOCK_TIMEOUT.as_millis());
+    options.options([
+        ("statement_timeout", statement.as_str()),
+        ("lock_timeout", lock.as_str()),
+    ])
 }
 
 /// Migrations run without the request limits: an index build or backfill can
@@ -111,7 +163,7 @@ pub async fn migrate(migrator: PgPool) -> Result<(), MigrateError> {
 pub async fn run<T>(future: impl Future<Output = Result<T, sqlx::Error>>) -> Result<T, Error> {
     match tokio::time::timeout(EXECUTION_TIMEOUT, future).await {
         Ok(result) => result.map_err(Error::database),
-        Err(_) => Err(Error::database_timeout()),
+        Err(_) => Err(Error::interrupted(Interruption::TimedOut)),
     }
 }
 
@@ -139,7 +191,7 @@ async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
     let mut sweep = tokio::time::interval(RETENTION_SWEEP);
     loop {
         sweep.tick().await;
-        let mut deleted = 0;
+        let (mut deleted, mut full) = (0, 0);
         for _ in 0..RETENTION_MAX_BATCHES {
             match expire_batch(&db, days, batch_size).await {
                 Ok(count) => {
@@ -147,9 +199,10 @@ async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
                     if count < batch_size as u64 {
                         break;
                     }
+                    full += 1;
                 }
                 Err(error) => {
-                    eprintln!("Progress retention sweep failed: {}", error.1);
+                    eprintln!("Progress retention sweep failed: {}", error.message);
                     break;
                 }
             }
@@ -158,6 +211,11 @@ async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
         if deleted > 0 {
             eprintln!("Deleted {deleted} progress records older than {days} days");
         }
+        if full == RETENTION_MAX_BATCHES {
+            eprintln!(
+                "Progress retention sweep reached its cap of {RETENTION_MAX_BATCHES} batches; any remaining expired records wait for the next sweep"
+            );
+        }
     }
 }
 
@@ -165,6 +223,42 @@ async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+    use sqlx::error::{DatabaseError, ErrorKind};
+    use std::{borrow::Cow, error::Error as StdError, fmt};
+
+    /// A database error that carries only its SQLSTATE, which is all
+    /// `interrupted` and `unreachable` read.
+    #[derive(Debug)]
+    struct Code(&'static str);
+    impl fmt::Display for Code {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "SQLSTATE {}", self.0)
+        }
+    }
+    impl StdError for Code {}
+    impl DatabaseError for Code {
+        fn message(&self) -> &str {
+            self.0
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(self.0.into())
+        }
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other
+        }
+    }
+    fn sqlstate(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(Code(code)))
+    }
 
     #[test]
     fn migration_limits_come_last_so_they_win() {
@@ -189,14 +283,47 @@ mod tests {
         assert!(!unreachable(&sqlx::Error::Configuration("bad url".into())));
     }
 
+    #[test]
+    fn only_database_errors_are_interruptions() {
+        assert_eq!(interrupted(&sqlx::Error::PoolTimedOut), None);
+        assert_eq!(interrupted(&sqlx::Error::RowNotFound), None);
+    }
+
+    #[test]
+    fn sqlstates_name_their_interruption() {
+        let timed_out = Some(Interruption::TimedOut);
+        assert_eq!(interrupted(&sqlstate("57014")), timed_out);
+        assert_eq!(interrupted(&sqlstate("55P03")), timed_out);
+        assert_eq!(
+            interrupted(&sqlstate("40P01")),
+            Some(Interruption::Conflict)
+        );
+        assert_eq!(interrupted(&sqlstate("23505")), None);
+    }
+
+    #[test]
+    fn database_errors_answer_by_sqlstate() {
+        let conflict = Error::database(sqlstate("40P01"));
+        assert_eq!(conflict.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            conflict.message,
+            "PostgreSQL operation conflicted with a concurrent one; retry later"
+        );
+        let down = Error::database(sqlstate("08006"));
+        assert_eq!(down.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(down.message, "PostgreSQL persistence is unavailable");
+        let violation = Error::database(sqlstate("23505"));
+        assert_eq!(violation.status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     #[tokio::test]
     async fn execution_deadline_is_service_unavailable() {
         let started = std::time::Instant::now();
         let error = run(std::future::pending::<Result<(), sqlx::Error>>())
             .await
             .unwrap_err();
-        assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(error.1, "PostgreSQL operation timed out; retry later");
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.message, "PostgreSQL operation timed out; retry later");
         assert!(started.elapsed() < Duration::from_secs(4));
     }
 }

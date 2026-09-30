@@ -1,3 +1,4 @@
+//! `/api/progress/{id}`: a browser profile's best route per catalog puzzle.
 use crate::api::{ApiJson, ApiPath, App, Error};
 use crate::database;
 use axum::{
@@ -6,12 +7,15 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
-use sokomind_core::Game;
+use sokomind_core::{Game, MAX_ROUTE};
 use std::net::SocketAddr;
 
-/// Twenty times the longest route the catalog can need, bounding stored
-/// rows to ~10 KB; anything longer is wandering, not a best route.
+/// About ten times the longest known solution to a catalog puzzle (988
+/// moves), bounding stored rows to ~10 KB; anything longer is wandering, not
+/// a best route. It must stay within core's `MAX_ROUTE`, which the progress
+/// table's CHECK mirrors.
 const MAX_SAVED_ROUTE: usize = 10_000;
+const _: () = assert!(MAX_SAVED_ROUTE <= MAX_ROUTE);
 
 fn profile(headers: &HeaderMap) -> Result<&str, Error> {
     let value = headers
@@ -23,20 +27,30 @@ fn profile(headers: &HeaderMap) -> Result<&str, Error> {
     }
     Ok(value)
 }
+/// A saved best route, as the progress table holds it and a read returns
+/// it.
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Record {
+    /// The catalog puzzle's id.
     puzzle_id: String,
+    /// The route's moves, counted by the server's replay.
     moves: i32,
+    /// The route's pushes, counted the same way.
     pushes: i32,
+    /// The route as `UDLR` letters from the puzzle's start.
     route: String,
 }
+/// A save's JSON body: only the route, since the server replays it to count
+/// moves and pushes and trusts no client counter.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Save {
+    /// The route as `UDLR` letters from the puzzle's start, at most
+    /// [`MAX_SAVED_ROUTE`] of them.
     route: String,
 }
 
-pub(crate) const FETCH: &str = "
+const FETCH: &str = "
 SELECT puzzle_id, moves, pushes, route FROM progress
 WHERE profile = $1 AND puzzle_id = $2 AND fingerprint = $3";
 pub(crate) const UPSERT: &str = "
@@ -49,10 +63,9 @@ SET moves = EXCLUDED.moves,
     updated_at = now()
 WHERE (EXCLUDED.moves, EXCLUDED.pushes) < (progress.moves, progress.pushes)";
 
-// Both handlers check in the same order, cheapest and most client-caused
-// first: the request itself (400), the catalog puzzle (404), persistence
-// (503), a progress slot (429 busy), then, for saves, the rate budget (429).
-
+/// `GET /api/progress/{id}`: the `x-profile-id` profile's [`Record`] for the
+/// catalog's current layout of `id`, or 404 when it has none. Admission
+/// follows the crate's shared order and spends no rate budget.
 pub async fn get(
     State(app): State<App>,
     headers: HeaderMap,
@@ -75,6 +88,10 @@ pub async fn get(
     .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "No saved route"))?;
     Ok(Json(record))
 }
+/// `POST /api/progress/{id}`: replays the [`Save`] route on `id` and keeps it
+/// when it has fewer moves, then fewer pushes, than the profile's saved one.
+/// Answers `{"saved": true, "improved": bool}`; admission follows the
+/// crate's shared order, charging the save budget last.
 pub async fn save(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -91,9 +108,12 @@ pub async fn save(
     let permit = app.progress_permit()?;
     // Charged last: the budget guards replays and writes, so malformed,
     // misaddressed or busy saves should not spend it.
-    if !app.saves.allow(app.proxies.client(&headers, peer.ip())) {
-        return Err(Error::too_many("Too many saves; try again shortly"));
-    }
+    app.charge(
+        &app.saves,
+        &headers,
+        peer,
+        "Too many saves; try again shortly",
+    )?;
     let route = body.route;
     // Replay is pure CPU: keep it off the async runtime, like the solver.
     let (_permit, moves, pushes, fingerprint, route) = tokio::task::spawn_blocking(move || {
@@ -171,8 +191,8 @@ mod tests {
             match (profile(&headers), expected) {
                 (Ok(got), Ok(want)) => assert_eq!(got, want),
                 (Err(error), Err(want)) => {
-                    assert_eq!(error.0, StatusCode::BAD_REQUEST);
-                    assert_eq!(error.1, want);
+                    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+                    assert_eq!(error.message, want);
                 }
                 _ => panic!("unexpected result for {value:?}"),
             }

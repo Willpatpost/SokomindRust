@@ -1,7 +1,8 @@
+//! Per-client rate limits for saves and native solves.
 use crate::client::prefix;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 const MAX_TRACKED: usize = 65_536;
@@ -25,6 +26,7 @@ struct Windows {
     swept: Instant,
 }
 impl RateLimiter {
+    /// At most `max` requests per client in each `window`.
     pub fn new(max: u32, window: Duration) -> Self {
         Self::with_capacity(max, window, MAX_TRACKED)
     }
@@ -39,12 +41,16 @@ impl RateLimiter {
             }),
         }
     }
+    /// Whether `ip`'s client may make one more request in its window; a
+    /// request it allows is counted, a refused one is not.
     pub fn allow(&self, ip: IpAddr) -> bool {
         self.allow_at(ip, Instant::now())
     }
     fn allow_at(&self, ip: IpAddr, now: Instant) -> bool {
         let key = key(ip);
-        let mut state = self.state.lock().unwrap();
+        // Nothing panics while holding the lock, but a poisoned limiter must
+        // never fail every later save and solve; its windows stay usable.
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Windows { clients, swept } = &mut *state;
         if now.saturating_duration_since(*swept) >= self.window {
             clients.retain(|_, (start, _)| now.saturating_duration_since(*start) < self.window);

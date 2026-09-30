@@ -1,11 +1,13 @@
+//! State the handlers share, the `{error}` type every failure answers with,
+//! the JSON and path extractors that keep that shape, and /api/health.
 use crate::client::TrustedProxies;
 use crate::config::Config;
-use crate::database;
+use crate::database::{self, Interruption};
 use crate::limit::RateLimiter;
 use axum::{
     Json,
     extract::{FromRequest, FromRequestParts, Path, Request, State},
-    http::{StatusCode, request::Parts},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, de::DeserializeOwned};
@@ -13,32 +15,48 @@ use sokomind_core::Board;
 use sqlx::PgPool;
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, Instant},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// Under the frontend's 1.5 s health timeout even when the database hangs.
+/// Under the page's 1.5 s health timeout (web/src/progress.ts) even when the
+/// database hangs. Part of the solve timeout chain; see TIME_MS in
+/// crates/server/src/solve.rs.
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(900);
 /// How long one database probe answers /api/health, so the database sees at
 /// most one probe a second however often health is polled.
 const HEALTH_TTL: Duration = Duration::from_secs(1);
-/// Bodies are at most 128 KiB; a client still sending after this long is
-/// holding a connection and a handler open, not uploading.
-const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bounds slow request bodies on direct runs: bodies are at most 128 KiB, so
+/// a client still sending after this long is holding a connection and a
+/// handler open, not uploading. Behind nginx it never fires, because nginx
+/// reads each whole body before passing the request on.
+pub const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Saves each client address may make per `RATE_WINDOW`.
 pub const SAVES_PER_MINUTE: u32 = 60;
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 
+/// What every handler shares. Each request gets a clone, which shares the
+/// slots, budgets and caches behind it rather than copying them.
 #[derive(Clone)]
 pub struct App {
+    /// The bounded request pool; `None` when persistence is off.
     pub db: Option<PgPool>,
+    /// The embedded catalog, keyed by puzzle id.
     pub catalog: Arc<HashMap<String, Board>>,
-    pub slots: Arc<Semaphore>,
+    /// One permit per native solve that may run at once.
+    pub solve_slots: Arc<Semaphore>,
+    /// One permit per progress read or save that may run at once.
     pub progress_slots: Arc<Semaphore>,
+    /// The peers trusted to name, through X-Forwarded-For, the client a
+    /// budget charges.
     pub proxies: Arc<TrustedProxies>,
+    /// Each client's save budget, [`SAVES_PER_MINUTE`].
     pub saves: Arc<RateLimiter>,
+    /// Each client's native solve budget, `SOLVE_RATE_PER_MINUTE`.
     pub solves: Arc<RateLimiter>,
+    /// The cached database probe behind /api/health.
     pub health: Arc<Health>,
 }
 impl App {
@@ -48,7 +66,7 @@ impl App {
         Self {
             db,
             catalog: Arc::new(catalog),
-            slots: Arc::new(Semaphore::new(config.solve_concurrency)),
+            solve_slots: Arc::new(Semaphore::new(config.solve_concurrency as usize)),
             progress_slots: Arc::new(Semaphore::new(config.progress_concurrency as usize)),
             proxies: Arc::new(config.proxies),
             saves: Arc::new(RateLimiter::new(SAVES_PER_MINUTE, RATE_WINDOW)),
@@ -56,20 +74,51 @@ impl App {
             health: Arc::default(),
         }
     }
-    pub fn progress_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
-        self.progress_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Error::too_many("Progress busy; retry later"))
+    /// A solve slot, held until the permit drops; see [`permit`].
+    pub fn solve_permit(&self) -> Result<OwnedSemaphorePermit, Error> {
+        permit(
+            &self.solve_slots,
+            "Solver busy; try the browser solver or retry later",
+        )
     }
+    /// A progress slot, held until the permit drops; see [`permit`].
+    pub fn progress_permit(&self) -> Result<OwnedSemaphorePermit, Error> {
+        permit(&self.progress_slots, "Progress busy; retry later")
+    }
+    /// Spends one request of `budget` for the client that `headers` and
+    /// `peer` name, or answers 429 with `refused` when that client has none
+    /// left. Handlers charge last, so a request refused for any other reason
+    /// spends nothing.
+    pub fn charge(
+        &self,
+        budget: &RateLimiter,
+        headers: &HeaderMap,
+        peer: SocketAddr,
+        refused: &str,
+    ) -> Result<(), Error> {
+        if budget.allow(self.proxies.client(headers, peer.ip())) {
+            Ok(())
+        } else {
+            Err(Error::too_many(refused))
+        }
+    }
+    /// The request pool, or 503 when persistence is off.
     pub fn db(&self) -> Result<&PgPool, Error> {
         self.db.as_ref().ok_or_else(Error::unavailable)
     }
+    /// The catalog's board for `id`, or 404.
     pub fn puzzle(&self, id: &str) -> Result<&Board, Error> {
         self.catalog
             .get(id)
             .ok_or_else(|| Error::new(StatusCode::NOT_FOUND, "Unknown catalog puzzle"))
     }
+}
+/// A free slot of `slots`, or 429 with `busy` at once when none is free:
+/// nothing queues, so a busy server answers without holding the request.
+fn permit(slots: &Arc<Semaphore>, busy: &str) -> Result<OwnedSemaphorePermit, Error> {
+    Arc::clone(slots)
+        .try_acquire_owned()
+        .map_err(|_| Error::too_many(busy))
 }
 /// The fields of a `data/puzzles.json` entry the server needs; serde
 /// ignores the rest.
@@ -127,40 +176,58 @@ where
         }
     }
 }
+/// A failed request: its status and the message its `{error}` body carries.
 #[derive(Debug)]
-pub struct Error(pub StatusCode, pub String);
+pub struct Error {
+    /// The response status.
+    pub status: StatusCode,
+    /// The body's `error`, written for the person using the page.
+    pub message: String,
+}
 impl Error {
+    /// `status` with `message` as its `error`.
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self(status, message.into())
+        Self {
+            status,
+            message: message.into(),
+        }
     }
+    /// 400: the request itself is invalid.
     pub fn bad(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, message)
     }
+    /// 429: every slot is busy, or the client's budget is spent.
     pub fn too_many(message: impl Into<String>) -> Self {
         Self::new(StatusCode::TOO_MANY_REQUESTS, message)
     }
+    /// 404 for a path no route matches.
     pub fn not_found() -> Self {
         Self::new(StatusCode::NOT_FOUND, "Unknown API endpoint")
     }
+    /// 503: persistence is off, or the database cannot be reached.
     pub fn unavailable() -> Self {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "PostgreSQL persistence is unavailable",
         )
     }
-    pub fn database_timeout() -> Self {
-        Self::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "PostgreSQL operation timed out; retry later",
-        )
+    /// 503: a database operation was stopped and may succeed on a retry.
+    pub fn interrupted(interruption: Interruption) -> Self {
+        let message = match interruption {
+            Interruption::TimedOut => "PostgreSQL operation timed out; retry later",
+            Interruption::Conflict => {
+                "PostgreSQL operation conflicted with a concurrent one; retry later"
+            }
+        };
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
     }
-    /// Transient resource/lock failures can be retried, while malformed SQL
-    /// and constraint errors remain internal failures.
+    /// Interrupted operations and an unreachable database are retryable
+    /// 503s, while malformed SQL and constraint errors remain internal
+    /// failures.
     pub fn database(error: sqlx::Error) -> Self {
-        if matches!(&error, sqlx::Error::Database(error) if error.code().is_some_and(|code| matches!(&*code, "57014" | "55P03" | "40P01")))
-        {
+        if let Some(interruption) = database::interrupted(&error) {
             eprintln!("database operation interrupted: {error}");
-            Self::database_timeout()
+            Self::interrupted(interruption)
         } else if database::unreachable(&error) {
             eprintln!("database unavailable: {error}");
             Self::unavailable()
@@ -168,6 +235,8 @@ impl Error {
             Self::internal(error)
         }
     }
+    /// 500 for a server bug. `message` goes to stderr, never to the client,
+    /// which gets a fixed message.
     pub fn internal(message: impl std::fmt::Display) -> Self {
         eprintln!("request failed: {message}");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "Server operation failed")
@@ -175,9 +244,16 @@ impl Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response()
+        (
+            self.status,
+            Json(serde_json::json!({ "error": self.message })),
+        )
+            .into_response()
     }
 }
+/// `GET /api/health`: always 200 `{"status": "ok", "persistence": bool}`.
+/// `persistence` is false when persistence is off, and otherwise the cached
+/// probe answer [`Health`] keeps.
 pub async fn health(State(app): State<App>) -> Json<serde_json::Value> {
     let persistence = match &app.db {
         Some(db) => app.health.persistence(db).await,
@@ -301,7 +377,7 @@ mod tests {
         let request = request.body(Body::from(body)).unwrap();
         match ApiJson::<Shape>::from_request(request, &()).await {
             Ok(ApiJson(shape)) => Ok(shape),
-            Err(error) => Err(error.0),
+            Err(error) => Err(error.status),
         }
     }
 
@@ -406,8 +482,8 @@ mod tests {
     #[test]
     fn unreachable_databases_are_503_and_failed_queries_500() {
         let closed = Error::database(sqlx::Error::PoolClosed);
-        assert_eq!(closed.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(closed.status, StatusCode::SERVICE_UNAVAILABLE);
         let failed = Error::database(sqlx::Error::RowNotFound);
-        assert_eq!(failed.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(failed.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

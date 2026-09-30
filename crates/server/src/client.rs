@@ -1,3 +1,4 @@
+//! Which client a request comes from, for the per-client rate limits.
 use axum::http::HeaderMap;
 use std::net::IpAddr;
 

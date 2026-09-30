@@ -1,3 +1,4 @@
+//! The server's settings, read from the environment once at startup.
 use crate::client::TrustedProxies;
 use sqlx::postgres::PgConnectOptions;
 use std::{env, error::Error, fmt::Display, ops::RangeInclusive, str::FromStr};
@@ -8,10 +9,15 @@ const MAX_RETENTION_DAYS: i32 = 36_500;
 /// The server's settings, read once at startup. Their defaults are written
 /// here and in README's Configuration table, nowhere else.
 pub struct Config {
+    /// BIND_ADDR: the address the API listens on.
     pub bind: String,
+    /// TRUSTED_PROXIES: whose X-Forwarded-For names the client.
     pub proxies: TrustedProxies,
-    pub solve_concurrency: usize,
+    /// SOLVE_CONCURRENCY: native solves that may run at once.
+    pub solve_concurrency: u32,
+    /// SOLVE_RATE_PER_MINUTE: native solves each client may start a minute.
     pub solve_rate: u32,
+    /// PROGRESS_CONCURRENCY: progress reads and saves that may run at once.
     pub progress_concurrency: u32,
     /// `None` turns server progress persistence off.
     pub database: Option<Database>,
@@ -20,11 +26,16 @@ pub struct Config {
 /// Where PostgreSQL is and how the server uses it; see
 /// [`crate::database::open`].
 pub struct Database {
-    /// Without the request limits, which the request pool adds.
+    /// DATABASE_URL or the DATABASE_* parts, without the request limits,
+    /// which the request pool adds.
     pub options: PgConnectOptions,
+    /// DB_POOL_SIZE: the request pool's connections; see [`pool_size()`].
     pub pool_size: u32,
-    /// Progress older than this many days expires; `None` keeps it forever.
+    /// PROGRESS_RETENTION_DAYS: progress older than this many days expires;
+    /// `None` keeps it forever.
     pub retention_days: Option<i32>,
+    /// PROGRESS_RETENTION_BATCH_SIZE: the most records one retention batch
+    /// deletes.
     pub retention_batch_size: i64,
 }
 
