@@ -1,3 +1,6 @@
+//! Board parsing through the public API: fingerprints, text, cell and box
+//! limits, and every parse error with its message.
+
 use sokomind_core::{Board, MAX_BOXES, NONE, ParseError, WALL};
 
 const FIRST: &str = "OOOOO\nO R O\nO A O\nO a O\nOOOOO";

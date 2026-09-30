@@ -1,3 +1,6 @@
+//! The search API's edges: malformed positions, the exported limits, error
+//! messages, interruption, and the stats and proof wire names.
+
 use sokomind_core::{Board, NONE, StateError};
 use sokomind_search::{
     MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, Mode, Proof, Search, SearchError, SearchStats,

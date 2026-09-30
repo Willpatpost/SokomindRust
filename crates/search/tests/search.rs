@@ -1,3 +1,7 @@
+//! Search results against breadth-first search on fixed and generated
+//! boards, the bounds that stopped searches report, and the experiment
+//! features' own checks.
+
 use sokomind_core::{Board, Game, State};
 use sokomind_search::{Mode, ParseModeError, Proof, Search, Status, StopReason};
 use std::collections::{HashSet, VecDeque};

@@ -360,7 +360,8 @@ through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
 
 `lint:rust` runs Clippy on every target with warnings as errors, under the
 workspace lints in `Cargo.toml`: unsafe code is denied, and an exported item or
-crate root without a doc fails. `test:rust` runs the core, search, and server
+crate root (tests and examples included) without a doc fails. `--keep-going`
+lets one run report every failing target, not just the first. `test:rust` runs the core, search, and server
 tests and `test:release` the core and search tests under the `release-test`
 profile, which keeps release optimization without debug assertions but drops
 cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries

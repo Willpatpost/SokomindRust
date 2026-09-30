@@ -1,3 +1,6 @@
+//! Game rules through the public API: route limits, prefix replay, board
+//! steps, state validation, undo, and replay errors.
+
 use sokomind_core::{
     Board, Cell, Game, MAX_ROUTE, NONE, ParseError, ReplayError, State, StateError, Step,
     decode_direction,
