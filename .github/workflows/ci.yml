@@ -48,6 +48,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: npm run fmt:check
       - run: npm run lint:rust
+      # -D warnings through a step env:, which both runners' shells honor; an
+      # inline VAR=x fails under pwsh and in npm scripts on Windows (cmd.exe).
+      # scripts/validate.mjs sets the same variable for this step.
+      - run: npm run doc:rust
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: npm run test:rust
       - run: npm run test:release
 
@@ -95,6 +101,7 @@ jobs:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
           fallback: none
       - run: npm ci
+      - run: npm run format:check
       # Cheap checks first. bench:check compares the catalog hash before it builds anything.
       - run: npm run test:web
       - run: npm run test:scripts

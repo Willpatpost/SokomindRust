@@ -21,10 +21,11 @@ env[pathKey] = `${resolve(root, '.tools/bin')}${delimiter}${env[pathKey]}`;
  * start or was killed by a signal.
  * @param {string} command
  * @param {readonly string[]} args
+ * @param {Readonly<Record<string, string>>} [extra] Variables set for this command only, over env.
  * @returns {number}
  */
-export function attempt(command, args) {
-  const result = spawnSync(command, args, { cwd: root, env, stdio: 'inherit', shell: false });
+export function attempt(command, args, extra) {
+  const result = spawnSync(command, args, { cwd: root, env: { ...env, ...extra }, stdio: 'inherit', shell: false });
   if (result.error) {
     console.error(`${command}: ${result.error.message}. See "Run locally" in README.md.`);
     return 1;

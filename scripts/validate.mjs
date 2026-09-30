@@ -1,7 +1,7 @@
 // The npm and node steps of CI's rust and integration jobs (.github/workflows/ci.yml),
-// in the same order, as one local command. npm ci, the node-floor job and the deploy
-// job's Docker and version-copy checks run only in CI. It ends with a PASS/FAIL/SKIP
-// line per step.
+// in the same order and with the same step env:, as one local command. npm ci, the
+// node-floor job and the deploy job's Docker and version-copy checks run only in CI.
+// It ends with a PASS/FAIL/SKIP line per step.
 //   npm run validate                      stops at the first failure
 //   npm run validate -- --keep-going      runs every step, then fails if any failed
 //   npm run validate -- --quick           skips bench:observe, test:db and test:browser
@@ -14,8 +14,9 @@ import { attempt } from './toolchain.mjs';
 
 /**
  * One step: an npm script or node command line (split on spaces, so no quoting),
- * with the reason it is skipped, if it is.
- * @typedef {{ command: string, skip?: string }} Step
+ * with the reason it is skipped, if it is, and the variables it runs with on top
+ * of this process's environment (a step env: in ci.yml).
+ * @typedef {{ command: string, skip?: string, env?: Readonly<Record<string, string>> }} Step
  */
 
 /**
@@ -28,7 +29,8 @@ const QUICK = 'skipped by --quick';
 const STOPPED = 'an earlier step failed; --keep-going runs every step';
 
 /**
- * The steps in ci.yml's order; validate.test.mjs checks that they match its run lines.
+ * The steps in ci.yml's order; validate.test.mjs checks that they match its run lines
+ * and env: blocks.
  * @param {{ quick: boolean, database: boolean }} options database: SOKOMIND_TEST_DATABASE_URL is set.
  * @returns {Step[]}
  */
@@ -43,8 +45,12 @@ export function plan({ quick, database }) {
   return [
     step('npm run fmt:check'),
     step('npm run lint:rust'),
+    // Without -D warnings, rustdoc reports a broken doc link and still passes.
+    { command: 'npm run doc:rust', env: { RUSTDOCFLAGS: '-D warnings' } },
     step('npm run test:rust'),
     step('npm run test:release'),
+    // The integration job's first step after npm ci.
+    step('npm run format:check'),
     step('npm run test:web'),
     step('npm run test:scripts'),
     step('npm run check:scripts'),
@@ -65,21 +71,22 @@ export function plan({ quick, database }) {
  * Runs the steps in order and times each one. Without keepGoing, every step after
  * a failure is skipped.
  * @param {readonly Step[]} steps
- * @param {{ keepGoing: boolean, run: (command: string) => number, now: () => number }} options
- *   run starts a command and returns its exit code; now reads a clock in milliseconds.
+ * @param {{ keepGoing: boolean, run: (command: string, env?: Step['env']) => number, now: () => number }} options
+ *   run starts a command with a step's env and returns its exit code; now reads a
+ *   clock in milliseconds.
  * @returns {Outcome[]}
  */
 export function execute(steps, { keepGoing, run, now }) {
   /** @type {Outcome[]} */
   const outcomes = [];
   let failed = false;
-  for (const { command, skip } of steps) {
+  for (const { command, skip, env } of steps) {
     if (skip || (failed && !keepGoing)) {
       outcomes.push({ command, result: 'SKIP', note: skip || STOPPED });
       continue;
     }
     const start = now();
-    const code = run(command);
+    const code = run(command, env);
     const ms = now() - start;
     if (code === 0) {
       outcomes.push({ command, result: 'PASS', ms });
@@ -147,12 +154,16 @@ function main() {
     console.error(`npm_execpath is not set; run this through npm.\n${USAGE}`);
     return 2;
   }
-  /** @param {string} command */
-  const run = command => {
-    console.log(`\n> ${command}`);
+  /**
+   * @param {string} command
+   * @param {Step['env']} env
+   */
+  const run = (command, env) => {
+    const set = Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`);
+    console.log(`\n> ${command}${set.length ? ` (with ${set.join(', ')})` : ''}`);
     const [program, ...args] = command.split(' ');
     if (program !== 'npm' && program !== 'node') throw new Error(`Step ${command} must start with npm or node`);
-    return attempt(process.execPath, program === 'npm' ? [npm, ...args] : args);
+    return attempt(process.execPath, program === 'npm' ? [npm, ...args] : args, env);
   };
   const steps = plan({ quick: !!options.quick, database: !!process.env.SOKOMIND_TEST_DATABASE_URL });
   const outcomes = execute(steps, { keepGoing: !!options['keep-going'], run, now: () => performance.now() });

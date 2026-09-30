@@ -39,14 +39,50 @@ function fake(keepGoing, failing) {
   return { ran, outcomes };
 }
 
-test('the steps are the npm and node scripts steps of ci.yml, in its order', () => {
-  const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-  const ci = workflow.split(/\r?\n/).flatMap(line => {
-    const match = /^\s*(?:- )?run: ((?:npm run |node scripts\/).+?)\s*$/.exec(line);
-    return match ? [match[1]] : [];
+/**
+ * The npm run and node scripts steps of ci.yml, in its order, each with the
+ * variables of its step's env: block (not the job's).
+ * @returns {Step[]}
+ */
+function ciSteps() {
+  const lines = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').split(/\r?\n/);
+  /** @param {string} line */
+  const indent = line => line.length - line.trimStart().length;
+  return lines.flatMap((line, i) => {
+    const match = /^(\s*)(- )?run: ((?:npm run |node scripts\/).+?)\s*$/.exec(line);
+    if (!match) return [];
+    const [, lead, dash, command] = match;
+    // The step's keys sit at this indent, and its values below them are deeper.
+    const keys = lead.length + (dash ? 2 : 0);
+    let first = i;
+    if (!dash) while (indent(lines[first - 1]) >= keys) first--;
+    let last = i;
+    while (last + 1 < lines.length && indent(lines[last + 1]) >= keys) last++;
+    const body = lines.slice(first, last + 1);
+    const at = body.findIndex(l => indent(l) === keys && l.trim() === 'env:');
+    if (at < 0) return [{ command }];
+    /** @type {Record<string, string>} */
+    const env = {};
+    for (const l of body.slice(at + 1)) {
+      if (indent(l) <= keys) break;
+      const pair = /^\s*([A-Za-z_]\w*): *(.*?)\s*$/.exec(l);
+      assert.ok(pair, `ci.yml: cannot read "${l.trim()}" in the env: of ${command}`);
+      env[pair[1]] = pair[2].replace(/^(['"])(.*)\1$/, '$2');
+    }
+    return [{ command, env }];
   });
+}
+
+test('the steps are the npm and node scripts steps of ci.yml, in its order', () => {
+  const ci = ciSteps();
   assert.ok(ci.length > 0, 'ci.yml has no npm run or node scripts steps');
-  assert.deepEqual(commands(plan({ quick: false, database: true })), ci);
+  assert.deepEqual(commands(plan({ quick: false, database: true })), commands(ci));
+});
+
+test("each step runs with the variables of its ci.yml step's env:", () => {
+  /** @param {readonly Step[]} steps */
+  const envs = steps => steps.map(s => ({ command: s.command, env: s.env ?? {} }));
+  assert.deepEqual(envs(plan({ quick: false, database: true })), envs(ciSteps()));
 });
 
 test('--quick skips exactly bench:observe, test:db and test:browser', () => {
@@ -78,6 +114,21 @@ test('--keep-going runs every step that is not skipped', () => {
   const { ran, outcomes } = fake(true, ['npm run a']);
   assert.deepEqual(ran, ['npm run a', 'npm run b', 'npm run d']);
   assert.deepEqual(outcomes.map(o => o.result), ['FAIL', 'PASS', 'SKIP', 'PASS']);
+});
+
+test("execute passes each step's env to run", () => {
+  /** @type {Step['env'][]} */
+  const seen = [];
+  const steps = [{ command: 'npm run a', env: { A: '1' } }, { command: 'npm run b' }];
+  execute(steps, {
+    keepGoing: false,
+    run: (command, env) => {
+      seen.push(env);
+      return 0;
+    },
+    now: () => 0,
+  });
+  assert.deepEqual(seen, [{ A: '1' }, undefined]);
 });
 
 test('the summary shows SKIP, never PASS, for a skipped step and counts every result', () => {
