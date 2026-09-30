@@ -134,6 +134,20 @@ async fn solve_limits_follow_the_state_cap() {
 }
 
 #[tokio::test]
+async fn solve_memory_caps_at_128_mib() {
+    let state = app_state(None);
+    let app = test_router(state.clone());
+    let mut over = solve_body();
+    over["memory_mib"] = json!(129);
+    let (status, body) = request(app, "POST", "/api/solve", over).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("4..128 MiB"), "{error}");
+    // Refused before it takes a solve slot.
+    assert_eq!(state.solve_slots.available_permits(), 1);
+}
+
+#[tokio::test]
 async fn busy_solves_keep_the_rate_budget() {
     let state = app_with(None, |config| config.solve_rate = 1);
     let app = test_router(state.clone());

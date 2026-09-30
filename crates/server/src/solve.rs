@@ -42,7 +42,12 @@ const TIME_MS: RangeInclusive<u64> = 10..=30_000;
 const POPS_PER_CHECK: u32 = 8;
 /// Native solves take the search crate's state range as is and cap its
 /// memory range lower, so every accepted request is a valid search limit.
-const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=64;
+/// 128 MiB holds about 1.83-4.19M states on the catalog's boards. Each
+/// SOLVE_CONCURRENCY slot reserves up to this cap, so solves reserve at most
+/// 128 MiB by default and 1 GiB at the 8-slot maximum. compose.yaml gives
+/// the API no memory limit; a host that sets one must allow for that on top
+/// of the process itself.
+const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=128;
 const _: () = assert!(*MEMORY_MIB.end() <= *MEMORY_MIB_RANGE.end());
 
 fn limits() -> Error {
