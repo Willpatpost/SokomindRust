@@ -168,7 +168,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          paths=(Dockerfile .dockerignore compose.yaml deploy .github/workflows/ci.yml
+          paths=(Dockerfile .dockerignore compose.yaml .env.example deploy .github/workflows/ci.yml
             rust-toolchain.toml Cargo.toml Cargo.lock 'crates/*/Cargo.toml'
             .node-version package.json package-lock.json
             web/tsconfig.json web/tests/tsconfig.json web/vite.config.ts)
@@ -186,8 +186,9 @@ jobs:
           fi
           echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
 
-  # compose.yaml parses, nginx accepts deploy/nginx.conf, and both images build.
-  # Nothing is pushed or started.
+  # compose.yaml parses, nginx accepts deploy/nginx.conf, both images build, and
+  # the stack they make starts and answers through nginx (the smoke test at the
+  # end). Nothing is pushed.
   deploy:
     needs: deploy-changes
     if: needs.deploy-changes.outputs.deploy == 'true'
@@ -247,13 +248,16 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # compose.yaml's two build targets. Each keeps its own cache scope, because a
       # shared one would let the second build's export replace the first's; mode=max
-      # also caches the intermediate stages, where the dependency builds are.
+      # also caches the intermediate stages, where the dependency builds are. load
+      # puts each image in the runner's Docker, under the tag the smoke test's
+      # compose.override.yaml gives its service.
       - name: Build the server image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: server
-          outputs: type=cacheonly
+          load: true
+          tags: sokomind-smoke-api
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
       - name: Build the web image
@@ -261,6 +265,102 @@ jobs:
         with:
           context: .
           target: web
-          outputs: type=cacheonly
+          load: true
+          tags: sokomind-smoke-web
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
+      # The runtime smoke test, about two minutes. The stack starts as README's
+      # "Full stack with Docker" starts it, with .env copied from .env.example
+      # (so deploy-changes lists that file), except that compose.override.yaml,
+      # which compose merges over compose.yaml by default, runs the images built
+      # above instead of building them again. --wait returns once db is healthy
+      # and api and web are running. Every check goes through nginx's published
+      # port, so between them they cover:
+      # - /api/health reporting persistence: nginx's upstream finds the api
+      #   container, and the API reached PostgreSQL with compose's credentials
+      #   and ran its migrations.
+      # - One small /api/solve: the native search, within the server's limits.
+      # - A progress save, then a read of it: a write and a read through the
+      #   migrated schema.
+      # - The app shell at /, and the WASM served as application/wasm, the type
+      #   the browser's streaming compile needs.
+      - name: Start the compose stack
+        id: compose-up
+        timeout-minutes: 5
+        run: |
+          cp .env.example .env
+          cat > compose.override.yaml <<'EOF'
+          services:
+            api:
+              image: sokomind-smoke-api
+              pull_policy: never
+            web:
+              image: sokomind-smoke-web
+              pull_policy: never
+          EOF
+          docker compose up --detach --wait --wait-timeout 120 --no-build
+      - name: Smoke-test the stack through nginx
+        timeout-minutes: 3
+        run: |
+          base=http://127.0.0.1:8080
+          reply="$RUNNER_TEMP/reply"
+          # Fails unless the curl request in the arguments after the first two
+          # answers status $1 with a body for which jq filter $2 prints true.
+          # Comparing jq's output, not its exit status, also fails an empty body.
+          expect() {
+            local status=$1 filter=$2 got
+            shift 2
+            got=$(curl -sS --max-time 15 -o "$reply" -w '%{http_code}' "$@")
+            echo "$got $(cat "$reply")"
+            if [ "$got" != "$status" ] || [ "$(jq "$filter" "$reply")" != true ]; then
+              echo "::error::Expected $status and $filter from curl $*"
+              exit 1
+            fi
+          }
+          # The API answers only once it has migrated the database, so poll
+          # (nginx's health_limit allows 2 requests a second).
+          deadline=$((SECONDS + 90))
+          until [ "$(curl -fs --max-time 5 "$base/api/health" | jq .persistence)" = true ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::/api/health did not report persistence through nginx within 90 s"
+              exit 1
+            fi
+            sleep 1
+          done
+          expect 200 '.status == "ok" and .persistence == true' "$base/api/health"
+          # The catalog's ultra-tiny board, solved by one push down: solve_body in
+          # crates/server/src/tests/mod.rs, which the router tests send.
+          expect 200 '.status == "solved" and .route == "D" and .proof.kind == "optimal"' \
+            -H 'Content-Type: application/json' \
+            -d '{"rows":["OOOOO","O R O","O A O","O a O","OOOOO"],"mode":"optimal","time_ms":1000,"max_states":1000,"memory_mib":4}' \
+            "$base/api/solve"
+          profile=0123456789abcdef0123456789abcdef
+          expect 200 '.saved == true and .improved == true' \
+            -H 'Content-Type: application/json' -H "x-profile-id: $profile" \
+            -d '{"route":"D"}' "$base/api/progress/ultra-tiny"
+          expect 200 '.route == "D" and .moves == 1' -H "x-profile-id: $profile" "$base/api/progress/ultra-tiny"
+          curl -fsS --max-time 15 -o "$RUNNER_TEMP/index.html" "$base/"
+          if ! grep -q '<title>Sokomind' "$RUNNER_TEMP/index.html"; then
+            echo "::error::nginx did not serve the app shell at /"
+            exit 1
+          fi
+          wasm=$(docker compose exec -T web ls /usr/share/nginx/html/assets | grep '\.wasm$' | sed -n 1p)
+          if [ -z "$wasm" ]; then
+            echo "::error::The web image has no .wasm file in /usr/share/nginx/html/assets"
+            exit 1
+          fi
+          type=$(curl -fsS --max-time 15 -o /dev/null -w '%{content_type}' "$base/assets/$wasm")
+          if [ "$type" != application/wasm ]; then
+            echo "::error::nginx served /assets/$wasm as '$type', not application/wasm"
+            exit 1
+          fi
+      - name: Print the compose stack's state and logs
+        if: failure() && steps.compose-up.outcome != 'skipped'
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --timestamps
+      # Also after a failed check or a cancellation, once the stack was started.
+      - name: Stop the compose stack and delete its volume
+        if: always() && steps.compose-up.outcome != 'skipped'
+        timeout-minutes: 2
+        run: docker compose down --volumes
