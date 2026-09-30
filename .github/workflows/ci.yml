@@ -153,21 +153,6 @@ jobs:
             test-results/
           if-no-files-found: ignore
 
-  # package.json's engines floor. Node 22.18 is the first release with type
-  # stripping on by default and import.meta.main, which the unit tests and
-  # scripts/validate.mjs need; the other jobs run .node-version. The unit tests
-  # import only node: modules and local files, so this needs no npm ci.
-  node-floor:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.18.0
-      - run: node --test scripts/*.test.mjs web/tests/*.test.ts
-
   # Runs the deploy job when a push or pull request changes a file that shapes
   # the images or their config, and on every weekly or manual run. A change to
   # sources alone waits for the weekly run.

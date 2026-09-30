@@ -1,7 +1,7 @@
 // The npm and node steps of CI's rust and integration jobs (.github/workflows/ci.yml),
-// in the same order and with the same step env:, as one local command. npm ci, the
-// node-floor job and the deploy job's Docker and version-copy checks run only in CI.
-// It ends with a PASS/FAIL/SKIP line per step.
+// in the same order and with the same step env:, as one local command. npm ci and the
+// deploy job's Docker and version-copy checks run only in CI. It ends with a
+// PASS/FAIL/SKIP line per step.
 //   npm run validate                      stops at the first failure
 //   npm run validate -- --keep-going      runs every step, then fails if any failed
 //   npm run validate -- --quick           skips bench:observe, test:db and test:browser
@@ -172,7 +172,8 @@ function main() {
 }
 
 // Only when run directly: validate.test.mjs imports the functions above. Node
-// releases older than package.json's engines lack import.meta.main, and would
-// otherwise skip main() and exit 0 as if every step had passed.
-if (import.meta.main === undefined) throw new Error(`Node ${process.version} is older than package.json's engines (>=22.18.0)`);
+// releases without import.meta.main (before 22.18, and 23.0 to 24.1), all older
+// than package.json's engines, would otherwise skip main() and exit 0 as if every
+// step had passed.
+if (import.meta.main === undefined) throw new Error(`Node ${process.version} is older than package.json's engines (>=24.14.0)`);
 if (import.meta.main) process.exitCode = main();
