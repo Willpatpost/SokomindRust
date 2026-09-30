@@ -1,32 +1,11 @@
 // Pure benchmark-gate logic: baseline schema, regression rules, false-proof
 // invariants and the scoreboard. No filesystem or process access, so
 // scripts/bench-gate.test.mjs can exercise every rule without cargo.
-//
-// A key missing from a case means "unknown" (v1 baselines never recorded
-// status, bounds or stats), and every rule skips it.
 
 /**
- * A baseline or evidence case. Only id and mode are always present.
+ * A case of the current run as toCase builds it, or of a committed file as load()
+ * checks it: every key is present, and null means the run had no such value.
  * @typedef {object} Case
- * @property {string} id
- * @property {string} mode
- * @property {string | null} [fingerprint]
- * @property {string | null} [status]
- * @property {number | null} [moves]
- * @property {number | null} [pushes]
- * @property {string | null} [proof] The proof kind.
- * @property {number | null} [lower_bound]
- * @property {number | null} [expanded]
- * @property {number | null} [generated]
- * @property {number | null} [reserved_bytes]
- * @property {number | null} [first_route_expanded]
- * @property {number | null} [first_route_generated]
- * @property {Record<string, number> | null} [stats]
- */
-
-/**
- * A case of the current run, as toCase builds it: every key is present.
- * @typedef {object} RunCase
  * @property {string} id
  * @property {string} mode
  * @property {string} fingerprint
@@ -44,7 +23,7 @@
  */
 
 /**
- * One difference between two cases; `rule` is null for changed and recorded fields.
+ * One difference between two cases; `rule` is null for changed fields.
  * @typedef {{ key: string, rule: string | null, field: string, from: unknown, to: unknown }} Finding
  */
 
@@ -55,7 +34,6 @@
  * @property {Finding[]} soft
  * @property {Finding[]} improved
  * @property {Finding[]} changed
- * @property {Finding[]} recorded
  * @property {string[]} missing Keys only in the baseline.
  * @property {string[]} extra Keys only in the new run.
  */
@@ -63,55 +41,53 @@
 /** @typedef {{ key: string, rule: string, message: string }} Failure */
 
 /**
- * A baseline file after upgrade.
+ * A baseline or observe-reference file as load() returns it.
  * @typedef {object} Baseline
  * @property {number} version
  * @property {string} sourceRevision
- * @property {string} [catalogHash]
+ * @property {string} catalogHash
  * @property {number} maxStates
  * @property {number} memoryMiB
  * @property {Case[]} cases
  */
 
-/**
- * A case as v1 baselines stored it.
- * @typedef {object} V1Case
- * @property {string} id
- * @property {string} mode
- * @property {number | null} moves
- * @property {boolean} proven
- * @property {number} expanded
- * @property {number} generated
- * @property {number} reserved_bytes
- */
-
 export const SCHEMA_VERSION = 2;
 export const MODES = ['fast', 'quality', 'optimal'];
-// Typed wide so that membership tests accept a missing or null status or proof.
-/** @type {ReadonlySet<string | null | undefined>} */
+/** @type {ReadonlySet<string>} */
 export const FINISHED = new Set(['solved', 'exhausted']);
-/** @type {ReadonlySet<string | null | undefined>} */
+/** @type {ReadonlySet<string>} */
 export const CAPPED = new Set(['state_limit', 'memory_limit', 'time_limit']);
-/** @type {ReadonlySet<string | null | undefined>} */
+/** @type {ReadonlySet<string>} */
 const PROOFS = new Set(['optimal', 'unsolvable']);
+// Every key of a Case, and so every key load() requires of a committed case.
+const CASE_KEYS = [
+  'id',
+  'mode',
+  'fingerprint',
+  'status',
+  'moves',
+  'pushes',
+  'proof',
+  'lower_bound',
+  'expanded',
+  'generated',
+  'reserved_bytes',
+  'first_route_expanded',
+  'first_route_generated',
+  'stats',
+];
 
 /** @param {{ id: string, mode: string }} c */
 export const key = c => `${c.id}:${c.mode}`;
-/** @param {string | null | undefined} status */
+/** @param {string} status */
 const rank = status => FINISHED.has(status) ? 2 : CAPPED.has(status) ? 1 : 0;
-/**
- * @template T
- * @param {T | undefined} value
- * @returns {value is T}
- */
-const known = value => value !== undefined;
 /** @param {number} previous */
 const tolerance = previous => Math.max(previous + 32, Math.ceil(previous * 1.2));
 
 /**
  * One catalog.rs record as a baseline case; every field is present (null when absent).
  * @param {import('./corpus.mjs').CorpusRecord} r
- * @returns {RunCase}
+ * @returns {Case}
  */
 export function toCase(r) {
   return {
@@ -124,16 +100,25 @@ export function toCase(r) {
 }
 
 /**
- * Read any supported baseline as v2. v1 knew only moves, proven and counts.
- * @param {any} baseline A parsed baseline file.
- * @returns {Baseline}
+ * A parsed baseline or observe-reference file, checked so that no rule meets a
+ * missing value: it must be at SCHEMA_VERSION, and every case must carry every
+ * Case key, with a string fingerprint, since invariants trusts a route as
+ * evidence only on the board it was found on. Anything else throws, naming the
+ * file and the command that regenerates it.
+ * @param {any} file A parsed JSON file.
+ * @param {string} name The file's path, for the error.
+ * @param {string} update The npm command that rewrites the file.
+ * @returns {Baseline} The file itself.
  */
-export function upgrade(baseline) {
-  if (baseline.version === SCHEMA_VERSION) return baseline;
-  if (baseline.version !== 1) throw new Error(`Unsupported benchmark baseline version ${baseline.version}`);
-  const cases = /** @type {V1Case[]} */ (baseline.cases).map(({ id, mode, moves, proven, expanded, generated, reserved_bytes }) =>
-    ({ id, mode, moves, expanded, generated, reserved_bytes, ...(proven ? { proof: 'optimal' } : {}) }));
-  return { ...baseline, version: SCHEMA_VERSION, cases };
+export function load(file, name, update) {
+  const regenerate = `Regenerate the file: delete it, then run ${update}.`;
+  if (file.version !== SCHEMA_VERSION) throw new Error(`${name} has schema version ${file.version}, not ${SCHEMA_VERSION}. ${regenerate}`);
+  if (!Array.isArray(file.cases)) throw new Error(`${name} has no cases array. ${regenerate}`);
+  for (const c of file.cases) {
+    const lacking = CASE_KEYS.filter(field => !Object.hasOwn(c, field) || (field === 'fingerprint' && typeof c.fingerprint !== 'string'));
+    if (lacking.length) throw new Error(`${name}: case ${key(c)} lacks ${lacking.join(', ')}. ${regenerate}`);
+  }
+  return file;
 }
 
 /**
@@ -168,7 +153,7 @@ export function serialize({ cases, ...header }, order) {
 }
 
 /**
- * Known fields of a case, with stats flattened to "stats.<name>".
+ * The compared fields of a case: all but id and mode, with stats flattened to "stats.<name>".
  * @param {Case} c
  * @returns {Record<string, any>}
  */
@@ -176,7 +161,7 @@ function fields(c) {
   /** @type {Record<string, any>} */
   const out = {};
   for (const [name, value] of Object.entries(c)) {
-    if (name === 'id' || name === 'mode' || !known(value)) continue;
+    if (name === 'id' || name === 'mode') continue;
     if (name === 'stats' && value) for (const [stat, count] of Object.entries(value)) out[`stats.${stat}`] = count;
     else out[name] = value;
   }
@@ -192,18 +177,18 @@ function fields(c) {
  *   R4 an Optimal lower bound never falls, unless the run is now proven unsolvable.
  * Soft rules:
  *   S1 expanded/generated stay within max(+32, 1.2x), judged only when both runs
- *      finished (against a v1 case, which has no status, when the new run finished);
+ *      finished;
  *   S2 reserved_bytes never grows at the same config;
  *   S3 Fast/Quality never drop status rank.
- * A move the other way on a ruled field is improved. Every other difference is
- * changed, and unknown-to-known is recorded. Keys only in prev are missing, and
- * keys only in cur are extra.
+ * A move the other way on a ruled field is improved, and every other difference
+ * is changed. Keys only in prev are missing, and keys only in cur are extra.
  *
- * bench:check fails on any hard or soft finding and, through formatReport,
- * counts missing and extra cases as hard. bench:update records soft findings
- * and missing or extra cases, and refuses hard findings unless run with
- * --accept-regressions. Improved, changed and recorded findings never fail
- * either. Invariant failures (see invariants) fail every caller, with no override.
+ * bench:check fails on any hard or soft finding and on the improvements
+ * mustRecord selects, and through formatReport counts missing and extra cases
+ * as hard. bench:update records soft findings, improvements and missing or
+ * extra cases, and refuses hard findings unless run with --accept-regressions.
+ * Changed findings and S1 and S2 improvements never fail either. Invariant
+ * failures (see invariants) fail every caller, with no override.
  * @param {readonly Case[]} prev
  * @param {readonly Case[]} cur
  * @param {{ sameConfig: boolean }} options sameConfig: both runs used the same state and memory limits.
@@ -211,7 +196,7 @@ function fields(c) {
  */
 export function compare(prev, cur, { sameConfig }) {
   /** @type {Diff} */
-  const out = { hard: [], soft: [], improved: [], changed: [], recorded: [], missing: [], extra: [] };
+  const out = { hard: [], soft: [], improved: [], changed: [], missing: [], extra: [] };
   const before = new Map(prev.map(c => [key(c), c])), now = new Map(cur.map(c => [key(c), c]));
   for (const k of before.keys()) if (!now.has(k)) out.missing.push(k);
   for (const k of now.keys()) if (!before.has(k)) out.extra.push(k);
@@ -219,10 +204,8 @@ export function compare(prev, cur, { sameConfig }) {
     const c = now.get(k);
     if (!c) continue;
     const P = fields(p), C = fields(c), flagged = new Set();
-    /** @param {string} field */
-    const both = field => known(P[field]) && known(C[field]);
     /**
-     * @param {'hard' | 'soft' | 'improved' | 'changed' | 'recorded'} bucket
+     * @param {'hard' | 'soft' | 'improved' | 'changed'} bucket
      * @param {string | null} rule
      * @param {string} field
      */
@@ -231,39 +214,56 @@ export function compare(prev, cur, { sameConfig }) {
       out[bucket].push({ key: k, rule, field, from: P[field], to: C[field] });
     };
     const optimal = c.mode === 'optimal';
-    if (both('moves')) {
-      if (P.moves !== null && (C.moves === null || C.moves > P.moves)) note('hard', 'R1', 'moves');
-      else if (C.moves !== null && (P.moves === null || C.moves < P.moves)) note('improved', 'R1', 'moves');
-    }
-    if (both('proof') && P.proof !== C.proof) {
+    if (P.moves !== null && (C.moves === null || C.moves > P.moves)) note('hard', 'R1', 'moves');
+    else if (C.moves !== null && (P.moves === null || C.moves < P.moves)) note('improved', 'R1', 'moves');
+    if (P.proof !== C.proof) {
       if (PROOFS.has(P.proof)) note('hard', 'R2', 'proof');
       else if (PROOFS.has(C.proof)) note('improved', 'R2', 'proof');
     }
-    if (both('status') && rank(C.status) !== rank(P.status)) {
+    if (rank(C.status) !== rank(P.status)) {
       const rule = optimal ? 'R3' : 'S3';
       note(rank(C.status) > rank(P.status) ? 'improved' : optimal ? 'hard' : 'soft', rule, 'status');
     }
-    if (optimal && both('lower_bound') && C.proof !== 'unsolvable') {
+    if (optimal && C.proof !== 'unsolvable') {
       if (P.lower_bound !== null && (C.lower_bound === null || C.lower_bound < P.lower_bound)) note('hard', 'R4', 'lower_bound');
       else if (C.lower_bound !== null && (P.lower_bound === null || C.lower_bound > P.lower_bound)) note('improved', 'R4', 'lower_bound');
     }
-    const finished = FINISHED.has(C.status) && FINISHED.has(known(P.status) ? P.status : C.status);
-    for (const field of ['expanded', 'generated']) {
-      if (!finished || !both(field)) continue;
-      if (C[field] > tolerance(P[field])) note('soft', 'S1', field);
-      else if (C[field] < P[field]) note('improved', 'S1', field);
+    if (FINISHED.has(P.status) && FINISHED.has(C.status)) {
+      for (const field of ['expanded', 'generated']) {
+        if (C[field] > tolerance(P[field])) note('soft', 'S1', field);
+        else if (C[field] < P[field]) note('improved', 'S1', field);
+      }
     }
-    if (sameConfig && both('reserved_bytes')) {
+    if (sameConfig) {
       if (C.reserved_bytes > P.reserved_bytes) note('soft', 'S2', 'reserved_bytes');
       else if (C.reserved_bytes < P.reserved_bytes) note('improved', 'S2', 'reserved_bytes');
     }
+    // A stat only one run reports (SearchStats gained or lost a field) is changed, shown as ? on the other side.
     for (const field of new Set([...Object.keys(P), ...Object.keys(C)])) {
-      if (flagged.has(field) || !known(C[field])) continue;
-      if (!known(P[field])) note('recorded', null, field);
-      else if (P[field] !== C[field]) note('changed', null, field);
+      if (!flagged.has(field) && P[field] !== C[field]) note('changed', null, field);
     }
   }
   return out;
+}
+
+/**
+ * The rules that judge a run's results (route, proof, status and bound) rather
+ * than its cost.
+ * @type {ReadonlySet<string | null>}
+ */
+const RESULT_RULES = new Set(['R1', 'R2', 'R3', 'R4', 'S3']);
+
+/**
+ * The improvements bench:check fails on until bench:update records them: those
+ * under a result rule (R1-R4, S3). The baseline value is the floor those rules
+ * hold later runs to, so a gain left out of it would let a later loss back to
+ * the old value pass. S1 and S2 judge cost, not results, so their improvements
+ * stay informational.
+ * @param {Diff} diff
+ * @returns {Finding[]}
+ */
+export function mustRecord(diff) {
+  return diff.improved.filter(f => RESULT_RULES.has(f.rule));
 }
 
 /**
@@ -272,9 +272,9 @@ export function compare(prev, cur, { sameConfig }) {
  *   I2 the proof agrees with moves, lower_bound and status;
  *   I3 no Optimal bound or "optimal" proof lies above, and no "unsolvable"
  *      sits alongside, a replay-verified route from any mode or evidence case
- *      of the same id. Evidence with a fingerprint must match the current
- *      board; evidence without one (v1) must be pre-filtered by the caller.
- * @param {readonly RunCase[]} cases
+ *      of the same id. Evidence counts only when its fingerprint matches the
+ *      current board's.
+ * @param {readonly Case[]} cases
  * @param {readonly Case[]} [evidence]
  * @returns {Failure[]}
  */
@@ -285,15 +285,13 @@ export function invariants(cases, evidence = []) {
   const fingerprints = new Map(cases.map(c => [c.id, c.fingerprint]));
   /**
    * @param {string} id
-   * @param {number | null | undefined} moves
+   * @param {number | null} moves
    */
   const offer = (id, moves) => {
-    if (moves !== null && known(moves) && (!best.has(id) || moves < best.get(id))) best.set(id, moves);
+    if (moves !== null && (!best.has(id) || moves < best.get(id))) best.set(id, moves);
   };
   for (const c of cases) offer(c.id, c.moves);
-  for (const e of evidence) {
-    if (fingerprints.has(e.id) && (!known(e.fingerprint) || e.fingerprint === fingerprints.get(e.id))) offer(e.id, e.moves);
-  }
+  for (const e of evidence) if (e.fingerprint === fingerprints.get(e.id)) offer(e.id, e.moves);
   for (const c of cases) {
     /**
      * @param {string} rule
@@ -334,7 +332,8 @@ export function scoreboard(cases) {
   return MODES.map(mode => {
     const all = cases.filter(c => c.mode === mode);
     const finished = all.filter(c => FINISHED.has(c.status)), capped = all.filter(c => CAPPED.has(c.status));
-    const proven = all.filter(c => PROOFS.has(c.proof)), routes = all.filter(c => c.moves !== null && known(c.moves));
+    const proven = all.filter(c => PROOFS.has(c.proof));
+    const routes = all.filter(c => c.moves !== null);
     return {
       mode, runs: all.length, routes: routes.length, finished: finished.length, capped: capped.length,
       proofs: proven.length, movesSum: sum(routes, c => c.moves),
@@ -387,7 +386,7 @@ function section(title, findings, limit) {
  * @property {string} [baseline] The baseline's source revision.
  * @property {string} source
  * @property {boolean} [catalogChangesAreHard]
- * @property {number} [limit] Improved, changed and recorded findings listed per section.
+ * @property {number} [limit] Improved and changed findings listed per section.
  */
 
 /**
@@ -405,9 +404,8 @@ export function formatReport({ action, cases, config, diff, failures, baseline, 
     ...(diff.extra.length ? [`Extra cases (${diff.extra.length}): ${diff.extra.join(', ')}`] : []),
     ...section('Hard', diff.hard, Infinity), ...section('Soft', diff.soft, Infinity),
     ...section('Improved', diff.improved, limit), ...section('Changed', diff.changed, limit),
-    ...section('Recorded', diff.recorded, limit),
     `BENCH ${action} v${SCHEMA_VERSION}: cases=${cases.length} config=${config.maxStates}/${config.memoryMiB} hard=${hard}`
-      + ` soft=${diff.soft.length} improved=${diff.improved.length} changed=${diff.changed.length} recorded=${diff.recorded.length}`
+      + ` soft=${diff.soft.length} improved=${diff.improved.length} changed=${diff.changed.length}`
       + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} baseline=${baseline ?? 'none'} source=${source}`,
   ];
   return { text: lines.join('\n'), hard };

@@ -9,10 +9,21 @@
 //                                                   --update rewrites benchmarks/observe-reference.json
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
-  MODES, SCHEMA_VERSION, compare, formatReport, invariants, key, scoreboard, scoreboardDelta, serialize, toCase, upgrade,
+  MODES,
+  SCHEMA_VERSION,
+  compare,
+  formatReport,
+  invariants,
+  key,
+  load,
+  mustRecord,
+  scoreboard,
+  scoreboardDelta,
+  serialize,
+  toCase,
 } from './bench-gate.mjs';
 import { catalog, catalogHash, nativeCorpus, sourceRevision } from './corpus.mjs';
 import { root } from './toolchain.mjs';
@@ -26,14 +37,19 @@ import { root } from './toolchain.mjs';
 
 const BASELINE = resolve(root, 'benchmarks/catalog-baseline.json');
 const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
+// The command that rewrites each committed file, for load()'s errors.
+const REGENERATE = { [BASELINE]: 'npm run bench:update', [REFERENCE]: 'npm run bench:observe -- --update' };
 const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
 const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
 const order = catalog.map(puzzle => puzzle.id);
 
 const [action, ...rest] = process.argv.slice(2);
-/** @param {string} path */
-const read = path => JSON.parse(readFileSync(path, 'utf8'));
+/**
+ * A committed gate file, parsed and checked by load().
+ * @param {string} path BASELINE or REFERENCE.
+ */
+const committed = path => load(JSON.parse(readFileSync(path, 'utf8')), relative(root, path), REGENERATE[path]);
 /**
  * @param {string} text
  * @param {string} name
@@ -76,14 +92,6 @@ function raw(records) {
   });
   console.log(`Median search time (observational): ${medians.join(', ') || 'no runs'}.`);
 }
-/**
- * The cases of a parsed baseline file (or null) whose routes count as evidence.
- * v1 files carry no fingerprints, so theirs count only for the same catalog.
- * @param {any} baseline
- * @returns {Case[]}
- */
-const evidence = baseline => baseline && (baseline.version >= SCHEMA_VERSION || baseline.catalogHash === catalogHash)
-  ? upgrade(baseline).cases : [];
 /** @param {import('./bench-gate.mjs').ReportFields} fields */
 function report(fields) {
   save('report.txt', formatReport(fields).text + '\n');
@@ -96,40 +104,48 @@ function report(fields) {
 // lets Windows terminals flush the report first.
 function check() {
   assert.equal(rest.length, 0, 'Baseline checks always use the reviewed configuration');
-  const stored = read(BASELINE), baseline = upgrade(stored), config = { maxStates: baseline.maxStates, memoryMiB: baseline.memoryMiB };
+  const baseline = committed(BASELINE);
+  const config = { maxStates: baseline.maxStates, memoryMiB: baseline.memoryMiB };
   // Before the build and the corpus run, so a changed catalog fails in seconds.
   assert.equal(catalogHash, baseline.catalogHash, 'Catalog changed: review, then run npm run bench:update');
   const records = corpus(config);
   raw(records);
-  const cases = records.map(toCase), failures = invariants(cases, evidence(stored));
+  const cases = records.map(toCase);
+  const failures = invariants(cases, baseline.cases);
   const diff = compare(baseline.cases, cases, { sameConfig: true });
+  const stale = mustRecord(diff);
   console.table(scoreboard(cases));
-  if (stored.version === 1) console.log('legacy v1 baseline: status/lower_bound/stats unknown; run npm run bench:update');
   const hard = report({ action: 'check', cases, config, diff, failures, baseline: baseline.sourceRevision,
     source: sourceRevision(), catalogChangesAreHard: true });
   console.log('Raw measurements: target/bench/catalog.json; full report: target/bench/report.txt.');
-  return !failures.length && !hard && !diff.soft.length;
+  if (stale.length) {
+    console.error(
+      `Route, proof, status or bound improvements not in the baseline (${stale.length}): run npm run bench:update and commit it`,
+    );
+  }
+  return !failures.length && !hard && !diff.soft.length && !stale.length;
 }
 
 function update() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, 'accept-regressions': { type: 'boolean' } });
-  const stored = existsSync(BASELINE) ? read(BASELINE) : null, previous = stored && upgrade(stored);
+  const previous = existsSync(BASELINE) ? committed(BASELINE) : null;
   const config = {
     maxStates: values.states ? count(values.states, 'states') : previous?.maxStates ?? DEFAULTS.maxStates,
     memoryMiB: values.memory ? count(values.memory, 'memory') : previous?.memoryMiB ?? DEFAULTS.memoryMiB,
   };
   const records = corpus(config);
   raw(records);
-  const cases = records.map(toCase), failures = invariants(cases, evidence(stored));
+  const cases = records.map(toCase);
+  const failures = invariants(cases, previous?.cases);
   if (previous && previous.catalogHash !== catalogHash) {
     console.log(`Catalog changed since ${previous.sourceRevision}; new and removed cases are listed below.`);
   }
   const sameConfig = previous?.maxStates === config.maxStates && previous?.memoryMiB === config.memoryMiB;
   const diff = previous
     ? compare(previous.cases, cases, { sameConfig })
-    : { hard: [], soft: [], improved: [], changed: [], recorded: [], missing: [], extra: [] };
+    : { hard: [], soft: [], improved: [], changed: [], missing: [], extra: [] };
   console.table(scoreboard(cases));
-  if (stored?.version >= SCHEMA_VERSION) {
+  if (previous) {
     console.log('Scoreboard change vs baseline:');
     console.table(scoreboardDelta(scoreboard(previous.cases), scoreboard(cases)));
   }
@@ -163,6 +179,9 @@ function observe() {
   };
   const repeat = values.repeat ? count(values.repeat, 'repeat') : OBSERVE.repeat;
   for (const id of OBSERVE.puzzles) assert(order.includes(id), `Observe board ${id} is not in the catalog`);
+  // Before the corpus runs, so a file load() rejects fails in seconds.
+  const baseline = committed(BASELINE);
+  const reference = existsSync(REFERENCE) ? committed(REFERENCE) : null;
   /** @param {CorpusRecord} r */
   const strip = r => Object.fromEntries(Object.entries(r).filter(([name]) => !TIMINGS.includes(name)));
   /** @type {CorpusRecord[]} */
@@ -179,16 +198,15 @@ function observe() {
     }
   }
   const cases = records.map(r => ({ ...toCase(r), search_us: r.search_us, first_route_us: r.first_route_us }));
-  const reference = existsSync(REFERENCE) ? read(REFERENCE) : null;
-  const failures = invariants(cases, [...evidence(read(BASELINE)), ...(reference?.cases ?? [])]);
+  const failures = invariants(cases, [...baseline.cases, ...(reference?.cases ?? [])]);
   const comparable = reference?.maxStates === config.maxStates && reference?.memoryMiB === config.memoryMiB;
   /** @type {Map<string, ObserveCase>} */
   const prior = new Map(comparable ? /** @type {ObserveCase[]} */ (reference.cases).map(c => [key(c), c]) : []);
   /**
    * @param {number | null} now
-   * @param {number | null | undefined} then
+   * @param {number | null} then
    */
-  const delta = (now, then) => now === null || then === null || then === undefined ? '' : now - then;
+  const delta = (now, then) => now === null || then === null ? '' : now - then;
   console.table(cases.map(c => {
     const p = prior.get(key(c));
     return {
