@@ -1,5 +1,3 @@
-#[cfg(feature = "o6")]
-use crate::keeper::{CellSet, ChildRegion};
 use crate::{
     SearchError, SearchStats, SolutionError, Status, StopReason,
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node},
@@ -7,9 +5,7 @@ use crate::{
     heuristic::{Heuristic, ParentGroup},
     reach::Reach,
 };
-#[cfg(feature = "o3b")]
-use sokomind_core::Cell;
-use sokomind_core::{ACTIONS, Board, MAX_ROUTE, NONE, OPPOSITE, State};
+use sokomind_core::{ACTIONS, Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State};
 
 /// What separates the modes. Everything else, from child order to pruning
 /// and limit handling, is shared.
@@ -39,22 +35,14 @@ pub(crate) struct Policy {
     /// the search: the arena is emptied in place and the start re-seeded
     /// under that policy, which then runs exactly as a fresh search.
     restart: Option<&'static Policy>,
-    /// Partial expansion (PEA*, 5.3 S2): an expansion popped at f = F
-    /// stores only the children with f <= F + [`PEA_C`], plus any solved
-    /// child, and re-queues its record at the least f it withheld. Sound
-    /// only at weight 1, so only [`Self::EXACT`] sets it.
+    /// Partial expansion (PEA*): an expansion popped at f = F stores only
+    /// the children with f <= F + [`PEA_C`], plus any solved child, and
+    /// re-queues its record at the least f it withheld. Sound only at weight
+    /// 1, so only [`Self::EXACT`] sets it.
     #[cfg(feature = "pea")]
     partial: bool,
-    /// Keep one node per box set and keeper region instead of per exact
-    /// state (5.5 O6): a child whose keeper can walk to a stored keeper of
-    /// the same boxes is that node's duplicate. Such states have the same
-    /// pushes and children, so a search that never proves stays sound; only
-    /// the walk into the first push differs, so moves can get longer and
-    /// Fast's weighted bound no longer holds.
-    #[cfg(feature = "o6")]
-    keeper_regions: bool,
 }
-/// PEA* slack C (5.3 S2 sweep): children with f <= F + C are stored.
+/// PEA* slack C: children with f <= F + C are stored.
 #[cfg(feature = "pea0")]
 const PEA_C: u64 = 0;
 #[cfg(feature = "pea1")]
@@ -78,35 +66,6 @@ const _: () = {
     if let Some(next) = Policy::FAST_THEN_QUALITY_RESTART.restart {
         assert!(next.then.is_none() && next.restart.is_none());
     }
-};
-// Region keys merge states whose routes differ in length (5.5 O6), so a
-// policy that proves or improves never uses them: only one that stops at
-// its first route and never reopens, like Fast alone or as a first phase.
-// Whatever follows it keys by state; `next_phase` re-keys the table, and a
-// restart re-seeds under its own policy.
-#[cfg(feature = "o6")]
-const _: () = {
-    let policies = [
-        Policy::EXACT,
-        Policy::FAST,
-        Policy::QUALITY,
-        Policy::FAST_THEN_QUALITY,
-        Policy::FAST_THEN_QUALITY_RESTART,
-    ];
-    let mut i = 0;
-    while i < policies.len() {
-        let policy = policies[i];
-        assert!(!policy.keeper_regions || (policy.stop_on_goal_push && !policy.reopen_closed));
-        if let Some(next) = policy.then {
-            assert!(!next.keeper_regions);
-        }
-        if let Some(next) = policy.restart {
-            assert!(!next.keeper_regions);
-        }
-        i += 1;
-    }
-    assert!(!Policy::EXACT.keeper_regions && !Policy::QUALITY.keeper_regions);
-    assert!(Policy::FAST.keeper_regions);
 };
 // Queue keys saturate (see `Key`), and a saturated key needs g > MAX_ROUTE
 // at every weight: saturation only reorders nodes no replayable route goes
@@ -144,12 +103,8 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: true,
-        #[cfg(feature = "o6")]
-        keeper_regions: false,
     };
-    /// First route wins, with no bound on its length: weighted A* without
-    /// reopening keeps its suboptimality bound only under a consistent h,
-    /// which the side-aware `o2` table (5.2) is not. Fast never proves.
+    /// First route wins, with no bound on its length. Fast never proves.
     pub(crate) const FAST: Self = Self {
         weight: 5,
         stop_on_goal_pop: true,
@@ -160,8 +115,6 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: false,
-        #[cfg(feature = "o6")]
-        keeper_regions: true,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -174,8 +127,6 @@ impl Policy {
         restart: None,
         #[cfg(feature = "pea")]
         partial: false,
-        #[cfg(feature = "o6")]
-        keeper_regions: false,
     };
     /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
     /// in the same arena. The incumbent only improves, so the result is never
@@ -237,9 +188,6 @@ pub(crate) struct Engine {
     /// expansion. `expanded` keeps counting distinct records.
     #[cfg(feature = "pea")]
     reexpanded: u32,
-    /// Scratch for the region of the child being probed; see [`ChildRegion`].
-    #[cfg(feature = "o6")]
-    child_region: CellSet,
 }
 
 impl Engine {
@@ -274,8 +222,6 @@ impl Engine {
             interrupted_f: None,
             #[cfg(feature = "pea")]
             reexpanded: 0,
-            #[cfg(feature = "o6")]
-            child_region: CellSet::EMPTY,
         };
         search.seed();
         Ok(search)
@@ -283,8 +229,6 @@ impl Engine {
     /// Inserts and queues the start in an empty arena, or ends the search
     /// when the start has no goal assignment.
     fn seed(&mut self) {
-        #[cfg(feature = "o6")]
-        self.arena.key_by_region(self.policy.keeper_regions);
         let h = self.heuristic.estimate(&self.start);
         let (slot, _) = self.arena.find(&self.start);
         let root = self.arena.insert(
@@ -365,38 +309,8 @@ impl Engine {
             return false;
         };
         self.arena.reweight(self.policy.weight, next.weight);
-        #[cfg(feature = "o6")]
-        if self.arena.keeper_regions() && !next.keeper_regions {
-            self.leave_keeper_regions(next.weight);
-        }
         self.policy = next;
         true
-    }
-    /// Hands a region-keyed arena to a phase that improves routes: the table
-    /// is keyed by exact state again, and every expanded node is queued once
-    /// more at the new weight. A node's children that a stored region-mate
-    /// stood for were never inserted under their own keepers, and expanding
-    /// the node again is the only way the next phase generates them. Each
-    /// expanded node's entry has popped, so the queue still holds at most
-    /// one entry per record.
-    #[cfg(feature = "o6")]
-    fn leave_keeper_regions(&mut self, weight: u32) {
-        self.arena.key_by_state();
-        for id in 0..self.arena.len() as u32 {
-            let meta = self.arena.meta(id);
-            // Fast never supersedes an expanded node; the check keeps the
-            // loop right for any policy that does.
-            if !meta.closed || self.arena.is_superseded(id) {
-                continue;
-            }
-            let h = meta.known_h().unwrap_or_else(|| {
-                self.heuristic
-                    .estimate(&self.arena.node(id).state)
-                    .expect("an expanded state has an assignment")
-            });
-            self.arena
-                .enqueue(u64::from(meta.g) + u64::from(weight) * u64::from(h), h, id);
-        }
     }
     /// Starts over under the policy's restart while there is no route: the
     /// arena is emptied in place, so the rest of the run is a fresh search
@@ -470,11 +384,6 @@ impl Engine {
             // child with f below this pass's F.
             #[cfg(feature = "pea")]
             let revisit = self.arena.meta(index).closed;
-            // Under keeper regions (5.5 O6) a Fast arena's expanded records
-            // are queued again when Quality takes over; that pop is a full
-            // expansion, not a partial re-pass.
-            #[cfg(all(feature = "pea", feature = "o6"))]
-            let revisit = revisit && self.policy.partial;
             #[cfg(feature = "pea")]
             {
                 debug_assert!(self.policy.partial || !revisit);
@@ -541,21 +450,7 @@ impl Engine {
                     next.player = from;
                     next.boxes[i] = to;
                     canonicalize(&self.board, &mut next);
-                    #[cfg(not(feature = "o6"))]
                     let (slot, previous) = self.arena.find(&next);
-                    // A stored keeper of the same boxes in the child's region
-                    // makes a duplicate; most answers come from the fill above.
-                    #[cfg(feature = "o6")]
-                    let (slot, previous) = if self.arena.keeper_regions() {
-                        let mut child = ChildRegion::new(from, to, d);
-                        let (board, reach, region) =
-                            (&self.board, &mut self.reach, &mut self.child_region);
-                        self.arena.find_region(&next, |keeper| {
-                            child.contains(board, reach, region, keeper)
-                        })
-                    } else {
-                        self.arena.find(&next)
-                    };
                     let previous = previous.map(|previous| self.arena.meta(previous));
                     if previous.is_some_and(|previous| {
                         previous.g <= g || (!self.policy.reopen_closed && previous.closed)
@@ -606,11 +501,10 @@ impl Engine {
                         self.stats.pruned_bound += 1;
                         continue;
                     }
-                    // 5.6 O3b: before its first push the child's keeper walks
-                    // to the stand of a statically legal push, so g + h + that
-                    // walk still bounds every route through the child. A prune
+                    // Before its first push the child's keeper walks to the
+                    // stand of a statically legal push, so g + h + that walk
+                    // still bounds every route through the child. A prune
                     // only: queue keys and stored estimates stay push-only.
-                    #[cfg(feature = "o3b")]
                     if h > 0
                         && let Some(best) = self.best_moves()
                     {
@@ -683,8 +577,10 @@ impl Engine {
     /// walls and all other boxes can only shorten that walk. These walking
     /// moves are disjoint from the assignment's required pushes, so they add
     /// to its admissible estimate. Keep assignment costs separately cached.
-    /// Only the root needs this: a pushed child's player stands next to the
-    /// box it just pushed, so the walk term is always 0 there.
+    /// Only the root queues this walk. A pushed child's player stands next
+    /// to the box it just pushed, so its box walk is 0, and `advance` uses
+    /// its stand walk only as a prune, which keeps queue keys and stored
+    /// estimates push-only.
     fn root_estimate(&self, state: &State, pushes: u32) -> u32 {
         if pushes == 0 && self.board.solved(state) {
             return 0;
@@ -697,17 +593,16 @@ impl Engine {
             .map(|&cell| x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1)
             .min()
             .unwrap_or(0);
-        // 5.6 O3b: the first push needs the keeper on its stand, not just
-        // next to a box.
-        #[cfg(feature = "o3b")]
+        // The first push needs the keeper on its stand, not just next to a
+        // box.
         let walk = {
             let boxes = &state.boxes[..self.board.labels().len()];
             walk.max(self.stand_walk(state.player, boxes, |cell| boxes.contains(&cell), 1) as usize)
         };
         pushes + walk as u32
     }
-    /// 5.6 O3b: the Manhattan distance from `player` to the nearest stand of
-    /// a statically legal push, or 0 when there is none. Pushing box `j` in
+    /// The Manhattan distance from `player` to the nearest stand of a
+    /// statically legal push, or 0 when there is none. Pushing box `j` in
     /// direction `e` is statically legal when the cell ahead of it and the
     /// stand behind it are floor that `occupied` leaves free, and the cell
     /// ahead is not dead for the box. The first push of every route from an
@@ -718,7 +613,6 @@ impl Engine {
     /// Stops early once the answer is known to be below `enough` (0 asks for
     /// the exact walk): the result is below `enough` exactly when the exact
     /// walk is, and equals the exact walk otherwise. O(boxes * 4).
-    #[cfg(feature = "o3b")]
     fn stand_walk(
         &self,
         player: Cell,
@@ -803,11 +697,15 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::{Engine, Policy, canonicalize};
-    use crate::{Status, testkit::catalog};
-    use sokomind_core::Board;
+    use crate::{
+        Status,
+        testkit::{catalog, explore, remaining},
+    };
+    use sokomind_core::{Board, Cell, NONE, State};
 
     /// Small enough for debug builds. At this limit Fast finds 28 catalog
-    /// routes and the second phase shortens 13 of them.
+    /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
+    /// them.
     const STATES: usize = 1_000;
     const MIN_IMPROVED: usize = 10;
 
@@ -968,239 +866,145 @@ mod tests {
         assert_eq!(state, start);
     }
 
-    /// Region keys belong to Fast and to Quality mode's Fast phase only: a
-    /// policy that proves or improves starts keyed by state, and at every
-    /// limit the table is keyed by region exactly while a Fast phase runs,
-    /// so a handover to Quality and a restart both leave it keyed by state.
-    #[cfg(feature = "o6")]
-    #[test]
-    fn only_fast_phases_key_by_region() {
-        let (id, board) = catalog().into_iter().find(|(id, _)| id == "tiny").unwrap();
-        for (policy, regions) in [
-            (Policy::EXACT, false),
-            (Policy::QUALITY, false),
-            (Policy::FAST, true),
-            (Policy::FAST_THEN_QUALITY, true),
-            (Policy::FAST_THEN_QUALITY_RESTART, true),
-        ] {
-            let engine = Engine::new(board.clone(), board.initial(), policy, STATES, 16).unwrap();
-            assert_eq!(engine.arena.keeper_regions(), regions, "{id}");
-        }
-        let (fast, _) = run(&board, Policy::FAST, STATES);
-        assert!(
-            fast.best_moves().is_some() && fast.arena.keeper_regions(),
-            "{id}"
-        );
-        let (both, _) = run(&board, Policy::FAST_THEN_QUALITY, STATES);
-        assert!(
-            both.best_moves().is_some() && !both.arena.keeper_regions(),
-            "{id}"
-        );
-        // A route found in the spare node ends the Fast phase at its limit,
-        // still keyed by region.
-        let (mut handed, mut restarted) = (0, 0);
-        for max_states in 1..=fast.generated() as usize + 1 {
-            let context = format!("{id} at {max_states} states");
-            let (quality, _) = run(&board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
-            assert_eq!(
-                quality.arena.keeper_regions(),
-                quality.policy.keeper_regions,
-                "{context}"
-            );
-            let fresh = quality.discarded == 0;
-            handed += usize::from(fresh && !quality.policy.keeper_regions);
-            restarted += usize::from(!fresh);
-        }
-        assert!(handed > 0 && restarted > 0, "{handed} {restarted}");
+    /// The exact walk over `boxes`, occupancy read from the boxes.
+    fn walk(engine: &Engine, player: Cell, boxes: &[Cell]) -> u32 {
+        engine.stand_walk(player, boxes, |cell| boxes.contains(&cell), 0)
     }
 
-    /// Fast with region keys against the same policy keyed by state: every
-    /// route replays at its length, neither run exhausts a board the other
-    /// solves, and the boards both solve cost fewer records in total.
-    #[cfg(feature = "o6")]
+    /// (h, h') with h' = h + walk, and 0 when solved; `None` without an
+    /// assignment.
+    fn estimates(engine: &Engine, state: &State) -> Option<(u32, u32)> {
+        let h = engine.heuristic.estimate(state)?;
+        if h == 0 {
+            return Some((0, 0));
+        }
+        let boxes = &state.boxes[..engine.board.labels().len()];
+        Some((h, h + walk(engine, state.player, boxes)))
+    }
+
+    /// Admissible: never above the exact remaining moves. Consistent: a
+    /// move lowers h' by at most 1 wherever it lowers h by at most 1,
+    /// which is every move, since the push-distance estimate is consistent.
+    /// On every catalog board whose primitive state space fits the
+    /// testkit's exploration cap.
     #[test]
-    fn keeper_regions_keep_routes_replayable() {
-        let (mut records, mut control_records) = (0, 0);
+    fn stand_walk_is_admissible_and_consistent() {
+        let mut checked = Vec::new();
         for (id, board) in catalog() {
-            let (mut fast, _) = run(&board, Policy::FAST, STATES);
-            let control = Policy {
-                keeper_regions: false,
-                ..Policy::FAST
+            let Some((states, edges)) = explore(&board) else {
+                continue;
             };
-            let (control, _) = run(&board, control, STATES);
-            for (engine, other) in [(&fast, &control), (&control, &fast)] {
-                assert!(
-                    engine.status() != Status::Exhausted || other.best_moves().is_none(),
-                    "{id}"
-                );
-            }
-            if let Some(moves) = fast.best_moves() {
-                let route = fast.solution().unwrap().unwrap();
-                assert_eq!(route.len(), moves as usize, "{id}");
-                if control.best_moves().is_some() {
-                    records += fast.generated();
-                    control_records += control.generated();
-                }
-            }
-            let (mut quality, _) = run(&board, Policy::FAST_THEN_QUALITY_RESTART, STATES);
-            if let Some(moves) = quality.best_moves() {
-                let route = quality.solution().unwrap().unwrap();
-                assert_eq!(route.len(), moves as usize, "{id}");
-            }
-        }
-        assert!(records < control_records, "{records} {control_records}");
-    }
-
-    /// 5.6 O3b: the stand walk against exact distances on the catalog.
-    #[cfg(feature = "o3b")]
-    mod o3b {
-        use super::{Engine, Policy, STATES};
-        use crate::testkit::{catalog, explore, remaining};
-        use sokomind_core::{Cell, NONE, State};
-
-        /// The exact walk over `boxes`, occupancy read from the boxes.
-        fn walk(engine: &Engine, player: Cell, boxes: &[Cell]) -> u32 {
-            engine.stand_walk(player, boxes, |cell| boxes.contains(&cell), 0)
-        }
-
-        /// (h, h') with h' = h + walk, and 0 when solved; `None` without an
-        /// assignment.
-        fn estimates(engine: &Engine, state: &State) -> Option<(u32, u32)> {
-            let h = engine.heuristic.estimate(state)?;
-            if h == 0 {
-                return Some((0, 0));
-            }
-            let boxes = &state.boxes[..engine.board.labels().len()];
-            Some((h, h + walk(engine, state.player, boxes)))
-        }
-
-        /// Admissible: never above the exact remaining moves. Consistent: a
-        /// move lowers h' by at most 1 wherever it lowers h by at most 1,
-        /// which with the plain table is every move; the o2 table alone may
-        /// break that. On every catalog board whose primitive state space
-        /// fits the testkit's exploration cap.
-        #[test]
-        fn stand_walk_is_admissible_and_consistent() {
-            let mut checked = Vec::new();
-            for (id, board) in catalog() {
-                let Some((states, edges)) = explore(&board) else {
+            let engine =
+                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+            let exact = remaining(&board, &states, &edges);
+            let values: Vec<_> = states
+                .iter()
+                .map(|state| estimates(&engine, state))
+                .collect();
+            for (from, state) in states.iter().enumerate() {
+                let Some((h, value)) = values[from] else {
+                    assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
                     continue;
                 };
-                let engine =
-                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-                let exact = remaining(&board, &states, &edges);
-                let values: Vec<_> = states
-                    .iter()
-                    .map(|state| estimates(&engine, state))
-                    .collect();
-                for (from, state) in states.iter().enumerate() {
-                    let Some((h, value)) = values[from] else {
-                        assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
+                assert!(
+                    value <= exact[from],
+                    "{id}: {value} > {} at {state:?}",
+                    exact[from]
+                );
+                for &(to, _) in &edges[from] {
+                    if let Some((next_h, next)) = values[to]
+                        && h <= next_h + 1
+                    {
+                        assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
+                    }
+                }
+            }
+            checked.push(id);
+        }
+        assert!(checked.len() >= 8, "{checked:?}");
+    }
+
+    /// The child prune's inputs: occupancy from the parent's flood plus
+    /// the pushed box gives the child's own walk, an early stop only
+    /// answers "below enough", and the onward exit only skips a walk
+    /// of 0.
+    #[test]
+    fn stand_walk_after_a_push_matches_a_fresh_scan() {
+        let (mut pushes, mut onward) = (0, 0);
+        for (id, board) in catalog() {
+            let Some((states, edges)) = explore(&board) else {
+                continue;
+            };
+            let mut engine =
+                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+            let n = board.labels().len();
+            for (parent, state) in states.iter().enumerate() {
+                engine.reach.fill(&engine.board, state);
+                for &(child, push) in &edges[parent] {
+                    let Some((i, d)) = push else {
                         continue;
                     };
-                    assert!(
-                        value <= exact[from],
-                        "{id}: {value} > {} at {state:?}",
-                        exact[from]
-                    );
-                    for &(to, _) in &edges[from] {
-                        if let Some((next_h, next)) = values[to]
-                            && h <= next_h + 1
-                        {
-                            assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
-                        }
+                    let (from, to) = (state.boxes[i], states[child].boxes[i]);
+                    let boxes = &states[child].boxes[..n];
+                    let occupied =
+                        |cell: Cell| cell == to || (cell != from && engine.reach.blocked(cell));
+                    let exact = walk(&engine, from, boxes);
+                    for enough in 0..=exact + 1 {
+                        let got = engine.stand_walk(from, boxes, occupied, enough);
+                        assert_eq!(got < enough, exact < enough, "{id}: {got} {exact} {enough}");
+                        assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
                     }
-                }
-                checked.push(id);
-            }
-            assert!(checked.len() >= 8, "{checked:?}");
-        }
-
-        /// The child prune's inputs: occupancy from the parent's flood plus
-        /// the pushed box gives the child's own walk, an early stop only
-        /// answers "below enough", and the onward exit only skips a walk
-        /// of 0.
-        #[test]
-        fn stand_walk_after_a_push_matches_a_fresh_scan() {
-            let (mut pushes, mut onward) = (0, 0);
-            for (id, board) in catalog() {
-                let Some((states, edges)) = explore(&board) else {
-                    continue;
-                };
-                let mut engine =
-                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-                let n = board.labels().len();
-                for (parent, state) in states.iter().enumerate() {
-                    engine.reach.fill(&engine.board, state);
-                    for &(child, push) in &edges[parent] {
-                        let Some((i, d)) = push else {
-                            continue;
-                        };
-                        let (from, to) = (state.boxes[i], states[child].boxes[i]);
-                        let boxes = &states[child].boxes[..n];
-                        let occupied =
-                            |cell: Cell| cell == to || (cell != from && engine.reach.blocked(cell));
-                        let exact = walk(&engine, from, boxes);
-                        for enough in 0..=exact + 1 {
-                            let got = engine.stand_walk(from, boxes, occupied, enough);
-                            assert_eq!(
-                                got < enough,
-                                exact < enough,
-                                "{id}: {got} {exact} {enough}"
-                            );
-                            assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
-                        }
-                        let ahead = board.neighbors()[to as usize][d];
-                        if ahead != NONE && !occupied(ahead) && !engine.heuristic.dead(i, ahead) {
-                            assert_eq!(exact, 0, "{id} at {:?}", states[child]);
-                            onward += 1;
-                        }
-                        pushes += 1;
+                    let ahead = board.neighbors()[to as usize][d];
+                    if ahead != NONE && !occupied(ahead) && !engine.heuristic.dead(i, ahead) {
+                        assert_eq!(exact, 0, "{id} at {:?}", states[child]);
+                        onward += 1;
                     }
+                    pushes += 1;
                 }
             }
-            assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
         }
+        assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
+    }
 
-        /// The root estimate is pushes + max(box walk, stand walk). It rises
-        /// over pushes + box walk by exactly these gains, on exactly these
-        /// catalog boards (o3b_root.txt), under o2 too (o3b_root_o2.txt). The
-        /// gain reads only cells and dead masks, not the push count.
-        #[test]
-        fn o3b_root_estimates_match_prevalidation() {
-            const RAISED: [(&str, u32); 7] = [
-                ("tutorial-push", 2),
-                ("beginner-detour", 2),
-                ("garden-2", 2),
-                ("classic-1", 2),
-                ("adv-gallery", 2),
-                ("theme-parking", 2),
-                ("expert-maze", 2),
-            ];
-            let mut raised = 0;
-            for (id, board) in catalog() {
-                let engine =
-                    Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-                let start = engine.start;
-                let pushes = engine.heuristic.estimate(&start).unwrap();
-                let width = board.width();
-                let (x, y) = (start.player as usize % width, start.player as usize / width);
-                let box_walk = start.boxes[..board.labels().len()]
-                    .iter()
-                    .map(|&cell| {
-                        x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
-                    })
-                    .min()
-                    .unwrap() as u32;
-                let gain = RAISED
-                    .iter()
-                    .find(|&&(raised_id, _)| raised_id == id)
-                    .map_or(0, |&(_, gain)| gain);
-                let root = engine.root_estimate(&start, pushes);
-                assert_eq!(root, pushes + box_walk + gain, "{id}");
-                raised += usize::from(root > pushes + box_walk);
-            }
-            assert_eq!(raised, RAISED.len());
+    /// The root estimate is pushes + max(box walk, stand walk). It rises
+    /// over pushes + box walk by exactly these gains, on exactly these
+    /// catalog boards: values computed independently of this code, so a
+    /// change to either walk or to the catalog shows here. The gain reads
+    /// only cells and dead masks, not the push count.
+    #[test]
+    fn stand_walk_raises_exactly_these_root_estimates() {
+        const RAISED: [(&str, u32); 7] = [
+            ("tutorial-push", 2),
+            ("beginner-detour", 2),
+            ("garden-2", 2),
+            ("classic-1", 2),
+            ("adv-gallery", 2),
+            ("theme-parking", 2),
+            ("expert-maze", 2),
+        ];
+        let mut raised = 0;
+        for (id, board) in catalog() {
+            let engine =
+                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
+            let start = engine.start;
+            let pushes = engine.heuristic.estimate(&start).unwrap();
+            let width = board.width();
+            let (x, y) = (start.player as usize % width, start.player as usize / width);
+            let box_walk = start.boxes[..board.labels().len()]
+                .iter()
+                .map(|&cell| {
+                    x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
+                })
+                .min()
+                .unwrap() as u32;
+            let gain = RAISED
+                .iter()
+                .find(|&&(raised_id, _)| raised_id == id)
+                .map_or(0, |&(_, gain)| gain);
+            let root = engine.root_estimate(&start, pushes);
+            assert_eq!(root, pushes + box_walk + gain, "{id}");
+            raised += usize::from(root > pushes + box_walk);
         }
+        assert_eq!(raised, RAISED.len());
     }
 }

@@ -399,9 +399,10 @@ mod tests {
                 }
             }
         }
-        // Seed 0x5eed gave 10_658 flags, 503 from solvable parents, in an
-        // out-of-repo Python replica of this test; the bounds leave room for
-        // rule changes that remove a few flags.
+        // A Python replica of this test, not kept in the repo, gave 10_658
+        // flags for seed 0x5eed, 503 from solvable parents; the bounds sit a
+        // little below that, leaving room for rule changes that remove a few
+        // flags.
         assert!(
             flagged >= 10_000 && from_solvable >= 450,
             "{flagged} {from_solvable}"

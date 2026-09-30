@@ -9,12 +9,11 @@ use std::mem::size_of;
 
 const INF: i32 = 1_000_000;
 // INF exceeds every finite matching, and a full row of INF costs cannot
-// overflow i32. A push distance stays below 4 * MAX_CELLS: the plain table's
-// is below MAX_CELLS, and the side-aware one (`o2`) counts (cell, side)
-// states. A dual repair's augmenting path can cost one row more than a full
-// matching, so MAX_BOXES + 1 rows of the largest distance stay below INF.
+// overflow i32. A push distance stays below MAX_CELLS, and a dual repair's
+// augmenting path can cost one row more than a full matching, so
+// MAX_BOXES + 1 rows of the largest distance stay below INF.
 const _: () = assert!(
-    (MAX_BOXES + 1) * 4 * MAX_CELLS < INF as usize
+    (MAX_BOXES + 1) * MAX_CELLS < INF as usize
         && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
 );
 // Duals indices fit a byte.
@@ -96,7 +95,6 @@ impl ParentGroup {
 /// drops by at most one per push. It may rise by any amount or become NONE.
 /// A min-cost matching over such entries therefore drops by at most one per
 /// push: consistent in pushes, and so in moves.
-#[cfg(any(test, not(feature = "o2")))]
 pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16> {
     let goals = columns.len();
     let mut distances = vec![NONE; board.tiles().len() * goals];
@@ -126,28 +124,15 @@ pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16>
     distances
 }
 
-/// A push-distance table: maps the board and its goal columns in group order
-/// to cell-major per-box push distances, `NONE` when unreachable.
-pub(crate) type DistanceTable = fn(&Board, &[(Cell, u8)]) -> Vec<u16>;
-
 impl Heuristic {
     /// The dead mask plus one u16 push distance per goal column; there is
     /// one goal per box.
     pub(crate) const fn bytes_per_cell(boxes: usize) -> usize {
         size_of::<u32>() + boxes * size_of::<u16>()
     }
-    /// The estimator over the build's push-distance table: plain, or
-    /// side-aware with the `o2` feature (5.2).
+    /// The estimator over the plain push-distance table, so its estimates
+    /// are admissible and consistent.
     pub(crate) fn new(board: &Board) -> Self {
-        #[cfg(not(feature = "o2"))]
-        let table = plain_distances;
-        #[cfg(feature = "o2")]
-        let table = crate::sides::push_distances;
-        Self::with_table(board, table)
-    }
-    /// The estimator over `table`. Estimates are admissible when every entry
-    /// is.
-    pub(crate) fn with_table(board: &Board, table: DistanceTable) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
@@ -164,7 +149,7 @@ impl Heuristic {
         let mut columns = board.goals().to_vec();
         columns.sort_by_key(|&(_, label)| label);
         let goals = columns.len();
-        let distances = table(board, &columns);
+        let distances = plain_distances(board, &columns);
         let dead = (0..board.tiles().len())
             .map(|cell| {
                 let row = &distances[cell * goals..(cell + 1) * goals];
@@ -368,7 +353,7 @@ fn cost(distance: u16) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER, plain_distances};
+    use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use crate::engine::canonicalize;
     use crate::testkit::{Lcg, catalog, explore, remaining};
     use sokomind_core::{Board, Cell, NONE};
@@ -521,12 +506,9 @@ mod tests {
     }
 
     /// Against exact remaining moves from every primitive state of each
-    /// catalog board small enough to enumerate. The build's estimate is
-    /// admissible and `None` only where no solution exists; that is the
-    /// side-aware table under `o2`, which is admissible too. The plain table
-    /// is also consistent: a move lowers it by at most one. That is checked
-    /// on the plain table in every build, since the side-aware one is not
-    /// consistent.
+    /// catalog board small enough to enumerate: the estimate is admissible,
+    /// `None` only where no solution exists, and consistent: a move lowers
+    /// it by at most one.
     #[test]
     fn heuristic_is_admissible_and_consistent() {
         let mut checked = Vec::new();
@@ -535,21 +517,23 @@ mod tests {
                 continue;
             };
             let exact = remaining(&board, &states, &edges);
-            let build = Heuristic::new(&board);
-            let plain = Heuristic::with_table(&board, plain_distances);
-            let plain_h: Vec<_> = states.iter().map(|state| plain.estimate(state)).collect();
+            let heuristic = Heuristic::new(&board);
+            let estimates: Vec<_> = states
+                .iter()
+                .map(|state| heuristic.estimate(state))
+                .collect();
             for (from, state) in states.iter().enumerate() {
-                match build.estimate(state) {
+                let h = estimates[from];
+                match h {
                     Some(h) => {
                         assert!(h <= exact[from], "{id}: {h} > {} at {state:?}", exact[from])
                     }
                     None => assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}"),
                 }
                 for &(to, _) in &edges[from] {
-                    let Some(next) = plain_h[to] else {
+                    let Some(next) = estimates[to] else {
                         continue;
                     };
-                    let h = plain_h[from];
                     assert!(
                         h.is_some_and(|h| h <= next + 1),
                         "{id}: {h:?} then {next} at {state:?}"

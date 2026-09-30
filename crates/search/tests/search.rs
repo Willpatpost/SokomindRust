@@ -572,11 +572,10 @@ mod fixtures {
     }
 }
 
-/// 5.6 O3b: the root bound counts the walk to the nearest statically legal
-/// push's stand, which can lie past the nearest box. The raised bound stays
-/// at or below the optimum and the run still proves it. TWO is a control
-/// whose keeper already stands behind a legal push. Same values under o2.
-#[cfg(feature = "o3b")]
+/// The root bound counts the walk to the nearest statically legal push's
+/// stand, which can lie past the nearest box. The raised bound stays at or
+/// below the optimum and the run still proves it. TWO is a control whose
+/// keeper already stands behind a legal push.
 #[test]
 fn stand_walk_raises_the_root_bound() {
     const TUTORIAL_PUSH: &str = "OOOOO\nO XSO\nO   O\nO R O\nOOOOO";
@@ -612,9 +611,10 @@ const DETOUR_GOAL: &str = "OOOOOOO\nO     O\nORSX  O\nO     O\nOOOOOOO";
 fn a_solved_child_is_kept_whatever_its_f() {
     let board = Board::parse(DETOUR_GOAL).unwrap();
     assert_eq!(bfs(&board), Some(6));
-    // 5.6 O3b prunes the pushed-away child, whose keeper still has to walk
-    // to the only legal push's stand (g + h + 2 >= 6), so two states prove.
-    let proves = if cfg!(feature = "o3b") { 2 } else { 3 };
+    // The walk bound prunes the pushed-away child, whose keeper still has to
+    // walk to the only legal push's stand (g + h + 2 >= 6), so two states
+    // prove.
+    let proves = 2;
     for max_states in 1..=4 {
         let context = format!("max_states {max_states}");
         let mut search =
@@ -672,17 +672,7 @@ fn partial_expansion_is_exact_only_and_keeps_the_accounting() {
                 search.generated(),
                 "{context}"
             );
-            // 5.5 O6: Quality mode queues each record its Fast phase expanded
-            // once more at the handover, so a record is expanded at most twice.
-            #[cfg(feature = "o6")]
-            let limit = if mode == Mode::Quality {
-                2 * search.generated()
-            } else {
-                search.generated()
-            };
-            #[cfg(not(feature = "o6"))]
-            let limit = search.generated();
-            assert!(search.expanded() <= limit, "{context}");
+            assert!(search.expanded() <= search.generated(), "{context}");
             assert!(stats.peak_queue <= search.generated(), "{context}");
             assert!(
                 stats.stale_pops <= stats.duplicate_improvements,

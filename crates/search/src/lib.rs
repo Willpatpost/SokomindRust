@@ -40,7 +40,7 @@
 //! assert_eq!(game.moves(), 4);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-// The PEA* slack is one const (5.3 S2): exactly one C, never the bare switch.
+// The PEA* slack is one const: exactly one C, never the bare switch.
 #[cfg(any(
     all(feature = "pea0", feature = "pea1"),
     all(feature = "pea0", feature = "pea2"),
@@ -57,12 +57,8 @@ mod deadlock;
 mod engine;
 mod exact;
 mod heuristic;
-#[cfg(feature = "o6")]
-mod keeper;
 mod proof;
 mod reach;
-#[cfg(feature = "o2")]
-mod sides;
 #[cfg(test)]
 mod testkit;
 
@@ -468,8 +464,8 @@ impl Search {
     pub fn expanded(&self) -> u32 {
         self.engine().expanded()
     }
-    /// Pops that re-expanded a partially expanded record (5.3 S2). Always
-    /// 0 for Fast and Quality; `expanded` keeps counting distinct records.
+    /// Pops that re-expanded a partially expanded record. Always 0 for
+    /// Fast and Quality; `expanded` keeps counting distinct records.
     #[cfg(feature = "pea")]
     pub fn reexpansions(&self) -> u32 {
         self.engine().reexpansions()

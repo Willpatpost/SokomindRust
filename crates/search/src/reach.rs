@@ -1,8 +1,6 @@
 //! Keeper reachability by breadth-first flood. Each fill bumps an epoch
 //! instead of clearing its buffers, so it costs only the cells it visits;
 //! the engine reads distances, box cells and walks from the last fill.
-#[cfg(feature = "o6")]
-use crate::keeper::CellSet;
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
 use std::mem::size_of;
 
@@ -72,50 +70,6 @@ impl Reach {
     /// Whether `cell` held a box in the last fill.
     pub(crate) fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
-    }
-    /// Stamped by the last fill: a box, or a cell the player reaches.
-    #[cfg(feature = "o6")]
-    pub(crate) fn settled(&self, cell: Cell) -> bool {
-        self.stamps[cell as usize] == self.epoch
-    }
-    /// Grows the player's region after the last fill's box on `from` is
-    /// pushed onto `to`, in `region` and the queue, until it holds `target`
-    /// or is complete, and says whether it holds `target`. `head` is the
-    /// queue position to resume from: `None` starts a new region. Distances
-    /// and stamps stay those of the last fill, so its answers still hold.
-    #[cfg(feature = "o6")]
-    pub(crate) fn grow_child_region(
-        &mut self,
-        board: &Board,
-        (from, to): (Cell, Cell),
-        region: &mut CellSet,
-        head: &mut Option<usize>,
-        target: Cell,
-    ) -> bool {
-        let mut at = head.unwrap_or_else(|| {
-            region.clear();
-            region.insert(from);
-            self.queue.clear();
-            self.queue.push(from);
-            0
-        });
-        let mut found = region.contains(target);
-        // Each cell is finished before stopping, so a resumed flood never
-        // misses a neighbor.
-        while !found && at < self.queue.len() {
-            let cell = self.queue[at];
-            at += 1;
-            for &next in &board.neighbors()[cell as usize] {
-                if next == NONE || next == to || self.blocked(next) || region.contains(next) {
-                    continue;
-                }
-                region.insert(next);
-                self.queue.push(next);
-                found |= next == target;
-            }
-        }
-        *head = Some(at);
-        found
     }
     /// Appends a shortest walk from the player to `cell`, which the last
     /// `fill` reached, as direction indices from its last step back to its
