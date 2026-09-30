@@ -1,6 +1,6 @@
 use crate::{
     SearchError, SearchStats, SolutionError, Status, StopReason,
-    arena::{Arena, Key, MAX_QUEUED_H, NIL, Node},
+    arena::{Arena, Key, MAX_QUEUED_H, NIL, Node, TableCounters},
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
     reach::Reach,
@@ -36,38 +36,6 @@ pub(crate) struct Policy {
     /// under that policy, which then runs exactly as a fresh search.
     restart: Option<&'static Policy>,
 }
-// Exact soundness assumes one admissible weight for the whole search. A
-// restarted policy runs to the end, so a search restarts at most once.
-const _: () = {
-    assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
-    if let Some(next) = Policy::FAST_THEN_QUALITY_RESTART.restart {
-        assert!(next.then.is_none() && next.restart.is_none());
-    }
-};
-// Queue keys saturate (see `Key`), and a saturated key needs g > MAX_ROUTE
-// at every weight: saturation only reorders nodes no replayable route goes
-// through, and never raises a stored f above the true one. The list must
-// name every policy a search can run, `then` and `restart` targets included.
-const _: () = {
-    let weights = [
-        Policy::EXACT.weight,
-        Policy::FAST.weight,
-        Policy::QUALITY.weight,
-        Policy::FAST_THEN_QUALITY.weight,
-        Policy::FAST_THEN_QUALITY_RESTART.weight,
-    ];
-    let mut i = 0;
-    while i < weights.len() {
-        // Named first: `x as u64 < y` would parse `u64<` as generic arguments.
-        let largest = MAX_ROUTE as u64 + weights[i] as u64 * MAX_QUEUED_H as u64;
-        assert!(largest < Key::F_SAT);
-        i += 1;
-    }
-};
-// Mode's rustdoc (lib.rs) and README.md ("g + 5h", "g + 3h") state these
-// weights; change them together.
-const _: () =
-    assert!(Policy::EXACT.weight == 1 && Policy::FAST.weight == 5 && Policy::QUALITY.weight == 3);
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
     pub(crate) const EXACT: Self = Self {
@@ -114,6 +82,91 @@ impl Policy {
         restart: Some(&Self::QUALITY),
         ..Self::FAST_THEN_QUALITY
     };
+    /// Every policy a search can run. The const asserts below read it, so a
+    /// new policy must be added here: they check that every `then` and
+    /// `restart` target is listed, but cannot see which policies modes start
+    /// with.
+    pub(crate) const ALL: [Self; 5] = [
+        Self::EXACT,
+        Self::FAST,
+        Self::QUALITY,
+        Self::FAST_THEN_QUALITY,
+        Self::FAST_THEN_QUALITY_RESTART,
+    ];
+}
+// Exact soundness assumes one admissible weight for the whole search.
+const _: () = assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
+// Every `then` and `restart` target is itself in `Policy::ALL`, so the
+// checks that loop over it cover every policy a search can switch to. A
+// restarted policy runs to the end, so a search restarts at most once.
+const _: () = {
+    let all = Policy::ALL;
+    let mut i = 0;
+    while i < all.len() {
+        assert!(listed(all[i].then) && listed(all[i].restart));
+        if let Some(next) = all[i].restart {
+            assert!(next.then.is_none() && next.restart.is_none());
+        }
+        i += 1;
+    }
+};
+// Queue keys saturate (see `Key`), and a saturated key needs g > MAX_ROUTE
+// at every weight: saturation only reorders nodes no replayable route goes
+// through, and never raises a stored f above the true one.
+const _: () = {
+    let all = Policy::ALL;
+    let mut i = 0;
+    while i < all.len() {
+        // Named first: `x as u64 < y` would parse `u64<` as generic arguments.
+        let largest = MAX_ROUTE as u64 + all[i].weight as u64 * MAX_QUEUED_H as u64;
+        assert!(largest < Key::F_SAT);
+        i += 1;
+    }
+};
+// Mode's rustdoc (lib.rs) and README.md ("g + 5h", "g + 3h") state these
+// weights; change them together.
+const _: () =
+    assert!(Policy::EXACT.weight == 1 && Policy::FAST.weight == 5 && Policy::QUALITY.weight == 3);
+
+/// Whether `target` is `None` or equals a policy in [`Policy::ALL`].
+const fn listed(target: Option<&Policy>) -> bool {
+    let all = Policy::ALL;
+    let mut i = 0;
+    while i < all.len() {
+        if same(target, Some(&all[i])) {
+            return true;
+        }
+        i += 1;
+    }
+    target.is_none()
+}
+
+/// Field-by-field equality, since const code cannot call `PartialEq`. The
+/// destructure names every field, so a new one fails to compile until it is
+/// compared here.
+const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let Policy {
+                weight,
+                stop_on_goal_pop,
+                stop_on_goal_push,
+                reopen_closed,
+                prune_popped_estimate,
+                then,
+                restart,
+            } = *a;
+            weight == b.weight
+                && stop_on_goal_pop == b.stop_on_goal_pop
+                && stop_on_goal_push == b.stop_on_goal_push
+                && reopen_closed == b.reopen_closed
+                && prune_popped_estimate == b.prune_popped_estimate
+                && same(then, b.then)
+                && same(restart, b.restart)
+        }
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 /// Sorts interchangeable same-label boxes so states compare canonically.
@@ -134,6 +187,21 @@ pub(crate) fn canonicalize(board: &Board, state: &mut State) {
     }
 }
 
+/// What the engine counts as it skips pops and children: pops whose node a
+/// cheaper duplicate superseded, and pops and children a prune rejected.
+/// Named for skips rather than prunes because a stale pop is no prune: its
+/// node was replaced, not rejected. Each field is the [`SearchStats`]
+/// counter of the same name; the arena's [`TableCounters`] holds the rest.
+#[derive(Default)]
+struct SkipCounters {
+    stale_pops: u32,
+    pruned_dead_cells: u64,
+    pruned_deadlocks: u64,
+    pruned_duplicates: u64,
+    pruned_assignment: u64,
+    pruned_bound: u64,
+}
+
 /// Push search over one reserved arena. Only [`crate::ExactSearch`] turns its
 /// state into bounds or a proof; with a weighted policy results are always
 /// optimality unknown.
@@ -147,7 +215,7 @@ pub(crate) struct Engine {
     arena: Arena,
     status: Status,
     expanded: u32,
-    stats: SearchStats,
+    skipped: SkipCounters,
     incumbent: Option<u32>,
     /// Records a restart discarded; they still count as generated.
     discarded: u32,
@@ -183,7 +251,7 @@ impl Engine {
             deadlock,
             status: Status::Running,
             expanded: 0,
-            stats: SearchStats::default(),
+            skipped: SkipCounters::default(),
             incumbent: None,
             discarded: 0,
             interrupted_f: None,
@@ -214,30 +282,51 @@ impl Engine {
             self.status = Status::Exhausted;
         }
     }
-    pub fn status(&self) -> Status {
+    pub(crate) fn status(&self) -> Status {
         self.status
     }
-    pub fn best_moves(&self) -> Option<u32> {
+    pub(crate) fn best_moves(&self) -> Option<u32> {
         self.incumbent.map(|i| self.arena.meta(i).g)
     }
-    pub fn expanded(&self) -> u32 {
+    pub(crate) fn expanded(&self) -> u32 {
         self.expanded
     }
     /// Records inserted, including any a restart discarded.
-    pub fn generated(&self) -> u32 {
+    pub(crate) fn generated(&self) -> u32 {
         self.discarded + self.arena.len() as u32
     }
-    pub fn reserved_bytes(&self) -> usize {
+    pub(crate) fn reserved_bytes(&self) -> usize {
         self.arena.reserved_bytes()
     }
-    pub fn stats(&self) -> SearchStats {
-        let arena = self.arena.stats();
+    /// The arena's counters and the engine's in one value. The destructures
+    /// and the literal name every field, so a counter added to any of the
+    /// three structs fails to compile until it is wired here.
+    pub(crate) fn stats(&self) -> SearchStats {
+        let TableCounters {
+            unique_states,
+            duplicate_improvements,
+            reopened_states,
+            peak_queue,
+        } = *self.arena.counters();
+        let SkipCounters {
+            stale_pops,
+            pruned_dead_cells,
+            pruned_deadlocks,
+            pruned_duplicates,
+            pruned_assignment,
+            pruned_bound,
+        } = self.skipped;
         SearchStats {
-            unique_states: arena.unique_states,
-            duplicate_improvements: arena.duplicate_improvements,
-            reopened_states: arena.reopened_states,
-            peak_queue: arena.peak_queue,
-            ..self.stats
+            unique_states,
+            duplicate_improvements,
+            reopened_states,
+            stale_pops,
+            peak_queue,
+            pruned_dead_cells,
+            pruned_deadlocks,
+            pruned_duplicates,
+            pruned_assignment,
+            pruned_bound,
         }
     }
     /// Minimum f over everything not yet expanded, or `u64::MAX` when the
@@ -254,7 +343,7 @@ impl Engine {
     }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach.
-    pub fn stop(&mut self, reason: StopReason) {
+    pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
             self.status = match reason {
                 StopReason::Cancelled => Status::Cancelled,
@@ -293,7 +382,7 @@ impl Engine {
     /// Work is sliced by queue pops so a worker can yield, report, or cancel.
     /// Stale, solved and dominated pops count toward `pops` without
     /// expanding anything.
-    pub fn advance(&mut self, pops: u32) {
+    pub(crate) fn advance(&mut self, pops: u32) {
         if self.status != Status::Running {
             return;
         }
@@ -317,7 +406,7 @@ impl Engine {
                 self.arena.find(&self.arena.node(index).state).1 != Some(index)
             );
             if superseded {
-                self.stats.stale_pops += 1;
+                self.skipped.stale_pops += 1;
                 continue;
             }
             let node = self.arena.node(index);
@@ -336,7 +425,7 @@ impl Engine {
                     || (self.policy.prune_popped_estimate
                         && node.g as u64 + queued_h as u64 >= best as u64)
             }) {
-                self.stats.pruned_bound += 1;
+                self.skipped.pruned_bound += 1;
                 continue;
             }
             self.expanded += 1;
@@ -367,16 +456,16 @@ impl Engine {
                         continue;
                     }
                     if self.heuristic.dead(i, to) {
-                        self.stats.pruned_dead_cells += 1;
+                        self.skipped.pruned_dead_cells += 1;
                         continue;
                     }
                     let g = node.g + self.reach.distance(stand) as u32 + 1;
                     if self.best_moves().is_some_and(|best| g >= best) {
-                        self.stats.pruned_bound += 1;
+                        self.skipped.pruned_bound += 1;
                         continue;
                     }
                     if self.deadlock.is_dead_after_push(&self.board, from, to) {
-                        self.stats.pruned_deadlocks += 1;
+                        self.skipped.pruned_deadlocks += 1;
                         continue;
                     }
                     let mut next = node.state;
@@ -388,7 +477,7 @@ impl Engine {
                     if previous.is_some_and(|previous| {
                         previous.g <= g || (!self.policy.reopen_closed && previous.closed)
                     }) {
-                        self.stats.pruned_duplicates += 1;
+                        self.skipped.pruned_duplicates += 1;
                         continue;
                     }
                     // A cheaper duplicate reuses the stored estimate; otherwise
@@ -404,14 +493,14 @@ impl Engine {
                             to,
                         )
                     }) else {
-                        self.stats.pruned_assignment += 1;
+                        self.skipped.pruned_assignment += 1;
                         continue;
                     };
                     if self
                         .best_moves()
                         .is_some_and(|best| g as u64 + h as u64 >= best as u64)
                     {
-                        self.stats.pruned_bound += 1;
+                        self.skipped.pruned_bound += 1;
                         continue;
                     }
                     // Before its first push the child's keeper walks to the
@@ -433,7 +522,7 @@ impl Engine {
                         let onward =
                             ahead != NONE && !occupied(ahead) && !self.heuristic.dead(i, ahead);
                         if !onward && self.stand_walk(from, boxes, occupied, need) >= need {
-                            self.stats.pruned_bound += 1;
+                            self.skipped.pruned_bound += 1;
                             continue;
                         }
                     }
@@ -557,7 +646,7 @@ impl Engine {
     /// Rebuilds the incumbent's full route and replays it from the start.
     /// Costs O(route) plus one flood per push, so call it once per improved
     /// incumbent.
-    pub fn solution(&mut self) -> Result<Option<String>, SolutionError> {
+    pub(crate) fn solution(&mut self) -> Result<Option<String>, SolutionError> {
         let Some(id) = self.incumbent else {
             return Ok(None);
         };

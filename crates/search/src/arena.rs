@@ -1,6 +1,6 @@
 use crate::{
-    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, Status,
-    deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
+    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status, deadlock::Deadlock,
+    heuristic::Heuristic, reach::Reach,
 };
 use sokomind_core::{Cell, MAX_BOXES, MAX_CELLS, MAX_ROUTE, NONE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
@@ -176,12 +176,24 @@ fn hash(player: Cell, boxes: &[Cell]) -> usize {
     (h ^ (h >> 32)) as usize
 }
 
+/// What the arena counts as it inserts and queues. Each field is the
+/// [`crate::SearchStats`] counter of the same name; the engine counts the
+/// rest. [`Arena::clear`] keeps them, so a restarted search counts both
+/// arenas.
+#[derive(Default)]
+pub(crate) struct TableCounters {
+    pub unique_states: u32,
+    pub duplicate_improvements: u32,
+    pub reopened_states: u32,
+    pub peak_queue: u32,
+}
+
 /// Node arena, priority queue, and open-addressed index table, reserved once.
 /// The table stores arena indices, never duplicated box arrays.
 pub(crate) struct Arena {
     nodes: Vec<Record>,
     box_cells: Vec<Cell>,
-    stats: SearchStats,
+    counters: TableCounters,
     heap: BinaryHeap<Entry>,
     table: Vec<u32>,
     /// Boxes per state, the prefix of `State::boxes` that is hashed.
@@ -255,7 +267,7 @@ impl Arena {
             node_limit: limit,
             nodes,
             box_cells,
-            stats: SearchStats::default(),
+            counters: TableCounters::default(),
             heap,
             table,
         })
@@ -306,12 +318,12 @@ impl Arena {
         let id = self.nodes.len() as u32;
         let previous = self.table[slot];
         if previous == NIL {
-            self.stats.unique_states += 1;
+            self.counters.unique_states += 1;
         } else {
-            self.stats.duplicate_improvements += 1;
+            self.counters.duplicate_improvements += 1;
             let previous = &mut self.nodes[previous as usize];
             if previous.has(Record::CLOSED) {
-                self.stats.reopened_states += 1;
+                self.counters.reopened_states += 1;
             }
             // Its queued entry, if any, now pops as stale.
             previous.link |= Record::SUPERSEDED;
@@ -352,8 +364,8 @@ impl Arena {
     pub(crate) fn is_superseded(&self, id: u32) -> bool {
         self.nodes[id as usize].has(Record::SUPERSEDED)
     }
-    pub(crate) fn stats(&self) -> SearchStats {
-        self.stats
+    pub(crate) fn counters(&self) -> &TableCounters {
+        &self.counters
     }
     /// Marks the node expanded.
     pub(crate) fn close(&mut self, id: u32) {
@@ -367,7 +379,7 @@ impl Arena {
     pub(crate) fn enqueue(&mut self, f: u64, h: u32, id: u32) {
         debug_assert!(h <= MAX_QUEUED_H);
         self.heap.push(Reverse(Key::new(f, h, id)));
-        self.stats.peak_queue = self.stats.peak_queue.max(self.heap.len() as u32);
+        self.counters.peak_queue = self.counters.peak_queue.max(self.heap.len() as u32);
     }
     /// The lowest queued entry, which may be stale: its node, the h it was
     /// queued with, and its f.
@@ -379,7 +391,7 @@ impl Arena {
         self.heap.peek().map(|Reverse(key)| key.f())
     }
     /// Forgets every node and queued entry in place. The reservation, limit
-    /// and stats are kept.
+    /// and counters are kept.
     pub(crate) fn clear(&mut self) {
         self.nodes.clear();
         self.box_cells.clear();
@@ -469,9 +481,9 @@ mod tests {
             assert_eq!(flags(old), (true, true));
             assert_eq!(flags(improved), (false, false));
             assert_eq!(flags(descendant), (false, false));
-            assert_eq!(arena.stats.unique_states, 2);
-            assert_eq!(arena.stats.duplicate_improvements, 1);
-            assert_eq!(arena.stats.reopened_states, 1);
+            assert_eq!(arena.counters.unique_states, 2);
+            assert_eq!(arena.counters.duplicate_improvements, 1);
+            assert_eq!(arena.counters.reopened_states, 1);
         }
     }
 
@@ -523,7 +535,7 @@ mod tests {
             .collect();
         let wanted: Vec<_> = expected.iter().map(|&(_, h, id)| (id, h)).collect();
         assert_eq!(order, wanted);
-        assert_eq!(arena.stats.peak_queue, queued.len() as u32);
+        assert_eq!(arena.counters.peak_queue, queued.len() as u32);
     }
 
     #[test]
@@ -559,9 +571,9 @@ mod tests {
         assert_eq!((arena.len(), arena.dequeue()), (0, None));
         let (slot, found) = arena.find(&state);
         assert_eq!(found, None);
-        // Ids restart at 0; the stats keep counting.
+        // Ids restart at 0; the counters keep counting.
         assert_eq!(arena.insert(node, slot), 0);
-        assert_eq!(arena.stats.unique_states, 2);
+        assert_eq!(arena.counters.unique_states, 2);
     }
 
     /// Every record field at its extremes, with every flag combination.
