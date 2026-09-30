@@ -180,14 +180,19 @@ jobs:
             rust-toolchain.toml Cargo.toml Cargo.lock 'crates/*/Cargo.toml'
             .node-version package.json package-lock.json
             web/tsconfig.json web/tests/tsconfig.json web/vite.config.ts)
-          # No base (a weekly or manual run), or one that cannot be fetched (such as
-          # the all-zero one of a branch's first push), counts as a change.
-          if [ -n "$BASE" ] && git fetch --quiet --depth=1 origin "$BASE" \
-            && git diff --quiet "$BASE" HEAD -- "${paths[@]}"; then
-            echo 'deploy=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          # Only a clean diff skips the deploy job. Without a usable base it runs:
+          # no base at all (a weekly or manual run), the all-zero before of the
+          # push that creates the branch, and a before that can no longer be
+          # fetched (a force push whose old head is gone). A failing diff also runs it.
+          deploy=true
+          if [[ "$BASE" =~ ^0*$ ]]; then
+            echo "No base to diff against ('$BASE'); counting the deploy inputs as changed."
+          elif ! git fetch --quiet --depth=1 origin "$BASE"; then
+            echo "::notice::The base $BASE cannot be fetched; counting the deploy inputs as changed."
+          elif git diff --quiet "$BASE" HEAD -- "${paths[@]}"; then
+            deploy=false
           fi
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
 
   # compose.yaml parses, nginx accepts deploy/nginx.conf, and both images build.
   # Nothing is pushed or started.

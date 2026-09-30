@@ -1,0 +1,56 @@
+# Weekly version-update pull requests, which the Validate workflow checks.
+# A release waits out a 7-day cooldown first. There is no docker or
+# rust-toolchain entry: the deploy job requires the Dockerfile's rust and node
+# tags to equal rust-toolchain.toml and .node-version, which move together by
+# hand.
+version: 2
+updates:
+  # The actions in .github/workflows, pinned by commit SHA with the version in
+  # a comment; Dependabot updates both. One pull request per action, since a
+  # new major can change its inputs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+
+  # Minor and patch updates in one pull request, majors one each. Prettier
+  # comes alone, since a release can reformat the tree that format:check checks.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-and-patch:
+        patterns: ['*']
+        exclude-patterns: [prettier]
+        update-types: [minor, patch]
+    ignore:
+      # @types/node must not describe a newer Node than the floor, package.json's
+      # engines, or check:scripts accepts APIs the floor lacks. It moves with
+      # engines and .node-version, by hand.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major, version-update:semver-minor]
+    open-pull-requests-limit: 5
+
+  # Likewise for the Rust workspace's manifests and Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # crates/wasm pins it with = to the wasm-bindgen CLI that CI and the
+      # Dockerfile read from Cargo.lock, but README's install line and every
+      # local CLI must move with it, by hand.
+      - dependency-name: wasm-bindgen
+    open-pull-requests-limit: 5
