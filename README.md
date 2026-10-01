@@ -355,11 +355,11 @@ service. Every job names its runner image exactly (`ubuntu-24.04`,
 `windows-2025-vs2026`) rather than a `-latest` label, and those that run Node
 use the version `.node-version` pins, which is also the `engines` floor, so no
 separate floor job exists. It builds the WASM package once and checks parity
-against the native records `bench:check` wrote. Dependabot (`.github/dependabot.yml`) opens weekly
-update pull requests for the pinned actions and the npm and Cargo dependencies,
-each release after a 7-day cooldown, and CI checks them like any other; the Rust
-toolchain, Node version, Docker base tags, `wasm-bindgen`, and `@types/node`
-beyond patches move by hand.
+against the native records `bench:check` wrote. Dependabot
+(`.github/dependabot.yml`) opens weekly update pull requests for the pinned
+actions and the npm and Cargo dependencies, each release after a 7-day
+cooldown, and CI checks them like any other; the Rust toolchain, Node version,
+Docker base tags, `wasm-bindgen`, and `@types/node` beyond patches move by hand.
 
 ```sh
 npm run fmt:check
