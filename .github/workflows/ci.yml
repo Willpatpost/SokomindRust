@@ -105,8 +105,8 @@ jobs:
       # Cheap checks first. bench:check compares the catalog hash before it builds anything.
       - run: npm run test:web
       - run: npm run test:scripts
-      # Not part of check:web, which build:web runs in the Dockerfile's web-build
-      # stage, where there is no scripts/.
+      # Kept out of check:web, which needs the WASM bindings in web/wasm and so
+      # runs later, inside build:web; the scripts type-check without them.
       - run: npm run check:scripts
       - run: npm run bench:check
       # The only WASM build. `npm run build` and `npm run test:parity` would each
@@ -175,7 +175,7 @@ jobs:
           paths=(Dockerfile .dockerignore compose.yaml .env.example deploy .github/workflows/ci.yml
             rust-toolchain.toml Cargo.toml Cargo.lock 'crates/*/Cargo.toml'
             .node-version package.json package-lock.json
-            web/tsconfig.json web/tests/tsconfig.json web/vite.config.ts)
+            web/tsconfig.json web/vite.config.ts)
           # Only a clean diff skips the deploy job. Without a usable base it runs:
           # no base at all (a weekly or manual run), the all-zero before of the
           # push that creates the branch, and a before that can no longer be

@@ -33,6 +33,7 @@
     "bench:observe": "node scripts/benchmark.mjs --observe",
     "build": "npm run wasm && npm run build:web",
     "build:web": "npm run check:web && vite build web",
+    "build:image": "tsc -p web && vite build web",
     "preview": "vite preview web --host 127.0.0.1",
     "validate": "node scripts/validate.mjs"
   },

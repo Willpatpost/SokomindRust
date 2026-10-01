@@ -92,9 +92,12 @@ survives crate edits. Target `server` (compose's `api`) builds in
 `server-build`. Target `web` reads `wasm-bindgen`'s version from `Cargo.lock` in
 `wasm-bindgen-version` and installs that `wasm-bindgen-cli` in `wasm-tools`
 (a `Cargo.lock` edit that keeps that version keeps the installed CLI), builds
-the WASM package in `wasm-build`
-and the app in `web-build`, and copies the app into the NGINX image. The two targets share only `rust-base` and `stubs`, so a
-server-only edit runs no WASM step and a WASM-only edit no server step;
+the WASM package in `wasm-build` and the app in `web-build`, and copies the app
+into the NGINX image. `web-build` runs `npm run build:image`, the same app
+type-check and bundle as `build:web` without the test type-check, which CI runs,
+so `web/tests` stays out of the build context. The two targets share only
+`rust-base` and `stubs`, so a server-only edit runs no WASM step and a WASM-only
+edit no server step;
 `docker compose build api` builds only the server image. `web-build` runs the
 Node image that `ARG NODE_VERSION` names, whose default must equal
 `.node-version`, and the `rust-base` tag must equal the version
@@ -418,8 +421,9 @@ adapter's, and `test:release` the core and search tests under the `release-test`
 profile, which keeps release optimization without debug assertions but drops
 cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries
 use `release`. `check:scripts` type-checks the helpers in `scripts` from their
-JSDoc (`tsc -p scripts`, strict). It stays out of `check:web`, which `build:web`
-runs in the Docker web build, where there is no `scripts` directory.
+JSDoc (`tsc -p scripts`, strict). It stays out of `check:web`, which needs the
+WASM bindings in `web/wasm` and so runs later, inside `build:web`; the scripts
+type-check without them, alongside the other cheap checks.
 `test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
 tests of the web modules, the benchmark gate, the toolchain's command
 environment, the limits copied by hand across languages (nginx's body cap, the

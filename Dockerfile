@@ -82,7 +82,9 @@ RUN npm ci
 COPY web web
 COPY data data
 COPY --from=wasm-build /app/web/wasm web/wasm
-RUN npm run build:web
+# build:web's app type-check and bundle without its test type-check, which CI
+# runs; .dockerignore keeps web/tests out of the context.
+RUN npm run build:image
 
 # deploy/nginx.conf's upstream needs 1.27.3+ ("resolve"). 1.30 is the
 # maintained stable branch; 1.28 has been legacy, without fixes, since 1.30.0.
