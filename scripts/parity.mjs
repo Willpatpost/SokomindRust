@@ -78,7 +78,11 @@ for (const reference of native) {
       context,
     );
     assert(metrics.reservedBytes <= reference.memory_mib * MIB, `${context}: WASM budget exceeded`);
-    assert.deepEqual(Array.from(search.diagnostics()), diagnosticFields.map(field => reference.stats[field]), `${context}: diagnostics`);
+    assert.deepEqual(
+      Array.from(search.diagnostics()),
+      diagnosticFields.map(field => reference.stats[field]),
+      `${context}: diagnostics`,
+    );
     const route = search.solution();
     assert.equal(route ?? null, reference.route, `${context}: route differs`);
     if (route !== undefined) {

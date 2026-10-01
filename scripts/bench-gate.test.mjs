@@ -57,16 +57,16 @@ test('serialize is deterministic: sorted keys, catalog then mode order, one case
   assert.ok(text.endsWith('}\n') && !text.includes('\r'));
   const lines = text.split('\n');
   assert.equal(lines.length, 1 + 5 + 1 + cases.length + 2 + 1);
-  assert.deepEqual(lines.slice(1, 6).map(line => line.trim().split('"')[1]), [
-    'catalogHash',
-    'maxStates',
-    'memoryMiB',
-    'sourceRevision',
-    'version',
-  ]);
+  assert.deepEqual(
+    lines.slice(1, 6).map(line => line.trim().split('"')[1]),
+    ['catalogHash', 'maxStates', 'memoryMiB', 'sourceRevision', 'version'],
+  );
   /** @type {{ cases: Record<string, unknown>[] }} */
   const parsed = JSON.parse(text);
-  assert.deepEqual(parsed.cases.map(c => `${c.id}:${c.mode}`), ['b:fast', 'b:optimal', 'a:fast', 'a:optimal']);
+  assert.deepEqual(
+    parsed.cases.map(c => `${c.id}:${c.mode}`),
+    ['b:fast', 'b:optimal', 'a:fast', 'a:optimal'],
+  );
   assert.deepEqual(Object.keys(parsed.cases[0]), Object.keys(parsed.cases[0]).sort());
 });
 

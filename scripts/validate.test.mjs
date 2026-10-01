@@ -113,7 +113,10 @@ test('by default the steps after a failure are skipped, not run', () => {
 test('--keep-going runs every step that is not skipped', () => {
   const { ran, outcomes } = fake(true, ['npm run a']);
   assert.deepEqual(ran, ['npm run a', 'npm run b', 'npm run d']);
-  assert.deepEqual(outcomes.map(o => o.result), ['FAIL', 'PASS', 'SKIP', 'PASS']);
+  assert.deepEqual(
+    outcomes.map(o => o.result),
+    ['FAIL', 'PASS', 'SKIP', 'PASS'],
+  );
 });
 
 test("execute passes each step's env to run", () => {
