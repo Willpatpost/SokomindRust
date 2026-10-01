@@ -216,6 +216,8 @@ impl Heuristic {
     /// cost swapped: equal to a fresh `estimate` of the child, because the
     /// optimal cost is unique. `cache` holds the parent's solution of the
     /// last group asked for and is re-solved only when the group changes.
+    /// `parent` must be a queued state: this panics when its own group has
+    /// no assignment.
     pub(crate) fn child_estimate(
         &self,
         parent_h: u32,
@@ -229,7 +231,9 @@ impl Heuristic {
         let range = group.range();
         if cache.group != g {
             // Never `None`: every group of a queued state is feasible.
-            let (cost, duals) = self.solve(group, &parent.boxes[range.clone()])?;
+            let (cost, duals) = self
+                .solve(group, &parent.boxes[range.clone()])
+                .expect("queued state has an assignment");
             *cache = ParentGroup {
                 group: g,
                 cost,
