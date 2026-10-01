@@ -14,9 +14,11 @@
 //! input; 404 an unknown endpoint, catalog puzzle or saved route; 405 a wrong
 //! method; 408 a body still arriving after [`api::BODY_TIMEOUT`]; 413 a body
 //! over [`BODY_LIMIT`]; 415 a missing or non-JSON content type; 422 JSON of
-//! the wrong shape; 429 a busy server or a spent rate budget; 503
-//! persistence off, unreachable or interrupted, or a failed search
-//! allocation; 500 a server bug.
+//! the wrong shape; 429 a busy server or a spent rate budget; 503 persistence
+//! off, unreachable or interrupted, or a failed search allocation; 500 a
+//! server bug. Behind the bundled nginx, whose `client_max_body_size` matches
+//! [`BODY_LIMIT`], an oversize body gets nginx's own HTML 413 instead; the
+//! README notes this and nginx's HTML 5xx pages.
 //!
 //! Handlers admit a request in one order, cheapest and most client-caused
 //! first, and skip the steps a route does not have: a solve names no catalog

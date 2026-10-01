@@ -163,8 +163,11 @@ pub async fn migrate(migrator: PgPool) -> Result<(), MigrateError> {
     result
 }
 
-/// Includes pool acquisition, execution and response decoding. There is no
-/// retry here: callers must not create a second write after an uncertain result.
+/// Runs `future` under the request deadline, [`EXECUTION_TIMEOUT`], which
+/// covers pool acquisition, execution and response decoding. On expiry the
+/// future is dropped and the result is [`Error::interrupted`], a 503; any
+/// other failure goes through [`Error::database`]. There is no retry here:
+/// callers must not create a second write after an uncertain result.
 pub async fn run<T>(future: impl Future<Output = Result<T, sqlx::Error>>) -> Result<T, Error> {
     match tokio::time::timeout(EXECUTION_TIMEOUT, future).await {
         Ok(result) => result.map_err(Error::database),
@@ -182,8 +185,9 @@ WITH expired AS (
 DELETE FROM progress AS p USING expired AS e
 WHERE (p.profile, p.puzzle_id, p.fingerprint) = (e.profile, e.puzzle_id, e.fingerprint)";
 
-/// One short transaction. Concurrent saves/replicas can skip locked rows;
-/// they remain eligible for a later batch rather than blocking the sweep.
+/// One statement in its own short transaction. It skips rows that
+/// concurrent saves or another replica's sweep hold locked (SKIP LOCKED);
+/// those stay eligible for a later batch instead of blocking this one.
 pub async fn expire_batch(db: &PgPool, days: i32, batch_size: i64) -> Result<u64, Error> {
     run(sqlx::query(EXPIRE).bind(days).bind(batch_size).execute(db))
         .await
