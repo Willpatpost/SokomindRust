@@ -96,4 +96,5 @@ RUN npm run build:image
 FROM nginx:1.30-alpine AS web
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=web-build /app/web/dist /usr/share/nginx/html
+# deploy/nginx.conf's listen port (checked by scripts/mirrors.test.mjs).
 EXPOSE 80

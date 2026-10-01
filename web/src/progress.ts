@@ -40,7 +40,8 @@ const SAVE_DELAY_MS = 350;
 /** How long a progress read or save waits for the server before it is abandoned. */
 const REQUEST_TIMEOUT_MS = 5000;
 /** Keeps the selected puzzle's session and verified best in browser storage and, while
- * /api/health reports persistence, syncs solving routes with the server. */
+ * /api/health reports persistence, syncs solving routes with the server. Its paths and
+ * x-profile-id header copy crates/server/src/main.rs and progress.rs (checked by scripts/mirrors.test.mjs). */
 export class ProgressClient {
   /** Whether /api/health last reported PostgreSQL; set by probe(). */
   persistence = false;

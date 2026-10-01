@@ -28,6 +28,7 @@ function status(value: unknown): SearchStatus {
 }
 function route(value: unknown, what = 'solver'): string | undefined {
   if (value == null) return undefined;
+  // The letters of sokomind_core::ACTIONS (crates/core/src/lib.rs), checked by scripts/mirrors.test.mjs.
   if (typeof value !== 'string' || value.length > MAX_ROUTE || !/^[UDLR]*$/.test(value)) throw new Error(`Invalid ${what} route`);
   return value;
 }
@@ -102,6 +103,7 @@ export function decodeNativeReply(value: unknown): SearchUpdate {
     lower: number | undefined;
   if (v.proof != null) {
     const native = object(v.proof);
+    // The cases are Proof::kind's names (crates/search/src/proof.rs), checked by scripts/mirrors.test.mjs.
     switch (native.kind) {
       case 'optimal':
         lower = counter(native.lower_bound, 'lower bound');
@@ -212,7 +214,8 @@ export function nativeErrorText(status: number, error: string | undefined): stri
 }
 /** GET /api/health's `persistence`, or undefined when the reply is not an object (as when a host
  * without the API serves an app page or an empty body); an array or an object without
- * `persistence: true` reports false. */
+ * `persistence: true` reports false. The key is the one api::health sends (crates/server/src/api.rs,
+ * checked by scripts/mirrors.test.mjs). */
 export function decodeHealth(value: unknown): boolean | undefined {
   return value && typeof value === 'object' ? (value as { persistence?: unknown }).persistence === true : undefined;
 }
@@ -235,7 +238,8 @@ export function decodeProgress(value: unknown): ProgressRecord {
     pushes: counter(v.pushes, 'pushes', 'progress'),
   };
 }
-/** A failed response's JSON `error` text, or undefined when its body carries none. */
+/** A failed response's JSON `error` text, or undefined when its body carries none. The key is
+ * api::Error's in crates/server/src/api.rs (checked by scripts/mirrors.test.mjs). */
 export async function errorText(response: Response): Promise<string | undefined> {
   const value: unknown = await response.json().catch(() => null);
   if (!value || typeof value !== 'object') return undefined;

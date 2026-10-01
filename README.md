@@ -428,9 +428,9 @@ WASM bindings in `web/wasm` and so runs later, inside `build:web`; the scripts
 type-check without them, alongside the other cheap checks.
 `test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
 tests of the web modules, the benchmark gate, the toolchain's command
-environment, the limits copied by hand across languages (nginx's body cap, the
-puzzle textarea's `maxlength` and the web app's `MAX_ROUTE` must agree with the
-Rust originals), and the validate script, whose step list must match `ci.yml`'s,
+environment, the values copied by hand across languages, configs, CI and this
+README (each copied limit, timeout, path, name or version must agree with its
+original), and the validate script, whose step list must match `ci.yml`'s,
 and need no WASM build. `bench:check` runs `crates/search/examples/catalog.rs` on
 every catalog puzzle in every mode at the baseline's 20,000 states and 64 MiB
 and compares the results with `benchmarks/catalog-baseline.json`. It fails on a

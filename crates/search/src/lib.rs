@@ -97,6 +97,7 @@ pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
 /// search's `mode` argument and the benchmark corpus's `mode` key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    // The weights are Policy::FAST's and Policy::QUALITY's (engine.rs; scripts/mirrors.test.mjs).
     /// Weighted A* (weight 5) that ends at its first route, however long.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening

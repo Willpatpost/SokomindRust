@@ -39,6 +39,7 @@
           <button id="best">Replay best</button>
           <span id="best-score" class="muted"></span>
         </div>
+        <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
         <div class="direction-pad" aria-label="Movement controls">
           <button data-direction="0" aria-label="Move up">↑</button>
           <!-- Breaks sit inside the tags so no whitespace separates the buttons. -->
@@ -54,6 +55,7 @@
           <p class="eyebrow">SHARED RUST ENGINE</p>
           <h2>Find a route</h2>
           <label for="mode">Search mode</label>
+          <!-- Mode::as_str's names (crates/search/src/lib.rs), as MODES in web/src/protocol.ts (checked by scripts/mirrors.test.mjs). -->
           <select id="mode">
             <option value="fast" data-help="Prioritizes a quick first route. It may use extra moves and never proves optimality.">
               Fast · first solution
@@ -75,6 +77,7 @@
           <div class="fields">
             <div>
               <label for="seconds">Time budget</label>
+              <!-- Within TIME_MS in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
               <select id="seconds">
                 <option value="5">5 seconds</option>
                 <option value="15">15 seconds</option>
@@ -83,6 +86,7 @@
             </div>
             <div>
               <label for="memory">Memory budget</label>
+              <!-- Up to MEMORY_MIB's cap in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
               <select id="memory">
                 <option value="16">16 MiB</option>
                 <option value="32">32 MiB</option>
@@ -92,6 +96,7 @@
             </div>
           </div>
           <label for="engine">Run on</label>
+          <!-- The values are ENGINES in web/src/solver-client.ts (checked by scripts/mirrors.test.mjs). -->
           <select id="engine">
             <option value="browser">This browser · WebAssembly</option>
             <option value="native">Server · native Rust</option>

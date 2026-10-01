@@ -193,6 +193,7 @@ export class SolverClient {
         this.fail(active, `Server search exceeded its ${request.timeMs / 1000} s budget.`);
       }, request.timeMs + NATIVE_GRACE_MS);
       this.options.changed();
+      // The solve route in crates/server/src/main.rs (checked by scripts/mirrors.test.mjs).
       const response = await this.request('/api/solve', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

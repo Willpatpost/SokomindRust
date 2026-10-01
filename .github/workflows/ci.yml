@@ -63,6 +63,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
+        # compose.yaml's db image (checked by scripts/mirrors.test.mjs).
         image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: test-only
@@ -338,12 +339,15 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"rows":["OOOOO","O R O","O A O","O a O","OOOOO"],"mode":"optimal","time_ms":1000,"max_states":1000,"memory_mib":4}' \
             "$base/api/solve"
+          # 32 hex digits in the x-profile-id header, as crates/server/src/progress.rs
+          # requires (checked by scripts/mirrors.test.mjs).
           profile=0123456789abcdef0123456789abcdef
           expect 200 '.saved == true and .improved == true' \
             -H 'Content-Type: application/json' -H "x-profile-id: $profile" \
             -d '{"route":"D"}' "$base/api/progress/ultra-tiny"
           expect 200 '.route == "D" and .moves == 1' -H "x-profile-id: $profile" "$base/api/progress/ultra-tiny"
           curl -fsS --max-time 15 -o "$RUNNER_TEMP/index.html" "$base/"
+          # The start of web/index.html's title (checked by scripts/mirrors.test.mjs).
           if ! grep -q '<title>Sokomind' "$RUNNER_TEMP/index.html"; then
             echo "::error::nginx did not serve the app shell at /"
             exit 1
