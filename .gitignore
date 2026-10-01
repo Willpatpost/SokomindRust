@@ -4,6 +4,9 @@
 /web/dist/
 /web/wasm/
 /.env
+# A local Compose override, merged into every docker compose command here; CI's
+# smoke test writes one, and README's recipe for that stack does too.
+/compose.override.yaml
 *.log
 /test-results/
 /playwright-report/

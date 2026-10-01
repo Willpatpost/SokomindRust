@@ -1,7 +1,8 @@
 # `npm run format` / `format:check` run `prettier .`, scoped by this file to
-# web/ (TS, CSS, HTML, tsconfig JSON), scripts/*.mjs and the root config files
-# (package.json, playwright.config.ts, .prettierrc.json). Prettier also reads
-# .gitignore; the build output is repeated here so this file shows the scope.
+# web/ (TS, CSS, HTML, tsconfig JSON), scripts/ (*.mjs and tsconfig.json) and
+# the root config files (package.json, playwright.config.ts, .prettierrc.json).
+# Prettier also reads .gitignore; the build output is repeated here so this file
+# shows the scope.
 
 # Generated or installed output
 node_modules/
