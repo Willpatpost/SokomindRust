@@ -410,15 +410,15 @@ use `release`. `check:scripts` type-checks the helpers in `scripts` from their
 JSDoc (`tsc -p scripts`, strict). It stays out of `check:web`, which `build:web`
 runs in the Docker web build, where there is no `scripts` directory.
 `test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
-tests of the web modules, the benchmark gate, and the validate script, whose
-step list must match `ci.yml`'s, and need no WASM build. `bench:check` runs
-`crates/search/examples/catalog.rs` on every catalog puzzle in every mode at the
-baseline's 20,000 states and 64 MiB and compares the results with
-`benchmarks/catalog-baseline.json`. It fails on a false proof or bound, a
-regression (rules in `scripts/bench-gate.mjs`), a route, proof, status or bound
-improvement the baseline does not record yet (so that a later loss back to the
-old value cannot pass), or a changed catalog, never on timings;
-`npm run bench:update` rewrites the baseline after review.
+tests of the web modules, the benchmark gate, the toolchain's command
+environment, and the validate script, whose step list must match `ci.yml`'s, and
+need no WASM build. `bench:check` runs `crates/search/examples/catalog.rs` on
+every catalog puzzle in every mode at the baseline's 20,000 states and 64 MiB
+and compares the results with `benchmarks/catalog-baseline.json`. It fails on a
+false proof or bound, a regression (rules in `scripts/bench-gate.mjs`), a route,
+proof, status or bound improvement the baseline does not record yet (so that a
+later loss back to the old value cannot pass), or a changed catalog, never on
+timings; `npm run bench:update` rewrites the baseline after review.
 `test:parity` builds the WASM package and runs the native corpus again, at the
 catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each

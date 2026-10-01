@@ -16,6 +16,14 @@ if (existsSync(localCargo)) {
 env[pathKey] = `${resolve(root, '.tools/bin')}${delimiter}${env[pathKey]}`;
 
 /**
+ * The environment for one command: a copy of env with `extra`'s variables set
+ * over it, so env itself never keeps a command's variables.
+ * @param {Readonly<Record<string, string>>} [extra]
+ * @returns {NodeJS.ProcessEnv}
+ */
+export const childEnv = extra => ({ ...env, ...extra });
+
+/**
  * Runs a command in the repo root, with the project-local tools on the path and
  * output shared with this process. Returns its exit code, or 1 when it could not
  * start or was killed by a signal.
@@ -25,7 +33,7 @@ env[pathKey] = `${resolve(root, '.tools/bin')}${delimiter}${env[pathKey]}`;
  * @returns {number}
  */
 export function attempt(command, args, extra) {
-  const result = spawnSync(command, args, { cwd: root, env: { ...env, ...extra }, stdio: 'inherit', shell: false });
+  const result = spawnSync(command, args, { cwd: root, env: childEnv(extra), stdio: 'inherit', shell: false });
   if (result.error) {
     console.error(`${command}: ${result.error.message}. See "Run locally" in README.md.`);
     return 1;
