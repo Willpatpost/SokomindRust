@@ -26,7 +26,7 @@ impl WasmGame {
     #[wasm_bindgen(constructor)]
     pub fn new(rows: &str) -> Result<WasmGame, JsError> {
         Ok(Self {
-            game: Game::new(Board::parse(rows).map_err(|e| JsError::new(&e.to_string()))?),
+            game: Game::new(Board::parse(rows)?),
         })
     }
     /// Columns: the longest row's length in bytes.
@@ -94,9 +94,7 @@ impl WasmGame {
     /// position, as [`Game::replay`] does. Throws that error's message and
     /// leaves the game unchanged when the route is refused.
     pub fn replay(&mut self, route: &str) -> Result<(), JsError> {
-        self.game
-            .replay(route)
-            .map_err(|e| JsError::new(&e.to_string()))
+        Ok(self.game.replay(route)?)
     }
     /// Whether box `index` sits on its matching goal. The renderer styles
     /// solved boxes from this, so no game rule lives in JavaScript. False
@@ -130,11 +128,10 @@ impl WasmSearch {
         max_states: u32,
         memory_mib: u32,
     ) -> Result<WasmSearch, JsError> {
-        let game = Game::at(rows, actions).map_err(|e| JsError::new(&e.to_string()))?;
-        let mode = Mode::parse(mode).map_err(|e| JsError::new(&e.to_string()))?;
+        let game = Game::at(rows, actions)?;
+        let mode = Mode::parse(mode)?;
         let (board, start) = game.into_parts();
-        let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)
-            .map_err(|e| JsError::new(&e.to_string()))?;
+        let search = Search::new(board, start, mode, max_states as usize, memory_mib as usize)?;
         Ok(Self { search })
     }
     /// Runs up to `pops` queue pops; true while the search is still running.
@@ -198,9 +195,7 @@ impl WasmSearch {
     /// [`MAX_ROUTE`](sokomind_core::MAX_ROUTE) moves or the replay check
     /// fails.
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {
-        self.search
-            .solution()
-            .map_err(|e| JsError::new(&e.to_string()))
+        Ok(self.search.solution()?)
     }
 
     /// Diagnostic ABI: the counters in
