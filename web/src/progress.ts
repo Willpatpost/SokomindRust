@@ -67,9 +67,9 @@ export class ProgressClient {
    * of being written off for the session; a host without the API (a 404, or an
    * app page instead of JSON) is not. Concurrent calls share one request. */
   probe(): Promise<void> {
-    return this.probing ??= this.checkHealth().finally(() => {
+    return (this.probing ??= this.checkHealth().finally(() => {
       this.probing = undefined;
-    });
+    }));
   }
   private async checkHealth() {
     if (this.probeTimer !== undefined) this.clock.clearTimeout(this.probeTimer);

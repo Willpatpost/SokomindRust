@@ -3,9 +3,7 @@ import { browserScheduler, type Scheduler } from './scheduler.ts';
 /** The time between two replayed moves. */
 const STEP_INTERVAL_MS = 70;
 export type PlaybackState =
-  | { kind: 'idle' }
-  | { kind: 'playing'; route: string; index: number; timer: number }
-  | { kind: 'paused'; route: string; index: number };
+  { kind: 'idle' } | { kind: 'playing'; route: string; index: number; timer: number } | { kind: 'paused'; route: string; index: number };
 /** Replays a route through `step`, one move per STEP_INTERVAL_MS, with pause and resume. */
 export class Playback {
   state: PlaybackState = { kind: 'idle' };

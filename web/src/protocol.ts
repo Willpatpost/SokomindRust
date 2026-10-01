@@ -24,10 +24,7 @@ export type SearchStatus = (typeof STATUSES)[number];
  * `bounded`, that the optimum lies between `lower`, the certified bound, and `upper`, the best
  * route's length; `unsolvable`, only after an exhausted search, that no route exists. */
 export type Proof =
-  | { kind: 'optimal'; moves: number }
-  | { kind: 'bounded'; lower: number; upper: number }
-  | { kind: 'unsolvable' }
-  | { kind: 'none' };
+  { kind: 'optimal'; moves: number } | { kind: 'bounded'; lower: number; upper: number } | { kind: 'unsolvable' } | { kind: 'none' };
 /** `best` is the best route's move count and `lowerBound` the live certified bound, when known. */
 export interface Metrics {
   expanded: number;

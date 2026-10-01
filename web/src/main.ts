@@ -280,7 +280,13 @@ async function start() {
   };
   button('load-custom').onclick = () => {
     try {
-      load(customPuzzle($<HTMLTextAreaElement>('rows').value.replace(/\r/g, '').replace(/^\n|\n$/g, '')));
+      load(
+        customPuzzle(
+          $<HTMLTextAreaElement>('rows')
+            .value.replace(/\r/g, '')
+            .replace(/^\n|\n$/g, ''),
+        ),
+      );
     } catch (error) {
       message(errorMessage(error));
     }
