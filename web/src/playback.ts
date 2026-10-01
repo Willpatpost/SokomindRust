@@ -13,19 +13,31 @@ export class Playback {
   private step: (direction: number) => boolean;
   private changed: () => void;
   private ended: (blocked: boolean) => void;
-  constructor(step: (direction: number) => boolean, changed: () => void,
-    ended: (blocked: boolean) => void, clock: Scheduler = browserScheduler) {
-    this.step = step; this.changed = changed; this.ended = ended; this.clock = clock;
+  constructor(
+    step: (direction: number) => boolean,
+    changed: () => void,
+    ended: (blocked: boolean) => void,
+    clock: Scheduler = browserScheduler,
+  ) {
+    this.step = step;
+    this.changed = changed;
+    this.ended = ended;
+    this.clock = clock;
   }
   /** Whether a route is playing or paused. */
-  get active() { return this.state.kind !== 'idle'; }
+  get active() {
+    return this.state.kind !== 'idle';
+  }
   /** Stops without reporting to `ended`. */
   stop() {
     if (this.state.kind === 'playing') this.clock.clearInterval(this.state.timer);
     this.state = { kind: 'idle' };
   }
   /** Stops and reports the end to `ended`; `blocked` when `step` refused a move. */
-  end(blocked = false) { this.stop(); this.ended(blocked); }
+  end(blocked = false) {
+    this.stop();
+    this.ended(blocked);
+  }
   /** Plays `route` from `index`, replacing any playback: `changed` follows each move, and `ended`
    * the route's end or a refused move. */
   play(route: string, index = 0) {
@@ -34,8 +46,14 @@ export class Playback {
     this.state = state;
     state.timer = this.clock.interval(() => {
       if (this.state !== state) return;
-      if (state.index >= state.route.length) { this.end(); return; }
-      if (!this.step(ACTIONS.indexOf(state.route[state.index++]))) { this.end(true); return; }
+      if (state.index >= state.route.length) {
+        this.end();
+        return;
+      }
+      if (!this.step(ACTIONS.indexOf(state.route[state.index++]))) {
+        this.end(true);
+        return;
+      }
       this.changed();
     }, STEP_INTERVAL_MS);
   }

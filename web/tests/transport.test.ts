@@ -2,8 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MAX_ROUTE, STATUSES } from '../src/protocol.ts';
 import {
-  decodeHealth, decodeMetricTuple, decodeNativeReply, decodeProgress, decodeSaveReply, decodeSnapshot, decodeWorkerReply,
-  encodeSolveRequest, nativeErrorText,
+  decodeHealth,
+  decodeMetricTuple,
+  decodeNativeReply,
+  decodeProgress,
+  decodeSaveReply,
+  decodeSnapshot,
+  decodeWorkerReply,
+  encodeSolveRequest,
+  nativeErrorText,
 } from '../src/transport.ts';
 import { native, progress } from './fakes.ts';
 
@@ -16,20 +23,37 @@ test('native proofs normalize without guessing unknown kinds', () => {
   assert.throws(() => decodeNativeReply({ ...native(), proof: { kind: 'optimal', lower_bound: 0, upper_bound: 1 } }), /bounds/);
 });
 test('both transport boundaries reject malformed counters, statuses and routes', () => {
-  for (const patch of [ { expanded: -1 }, { generated: 0.5 }, { reserved_bytes: Infinity },
-    { moves: '1' }, { pushes: 2 }, { elapsed_ms: NaN }, { status: 'new_status' }, { status: 'running' },
-    { route: 'XD' }, { route: 'DD' }, { route: null } ])
+  for (const patch of [
+    { expanded: -1 },
+    { generated: 0.5 },
+    { reserved_bytes: Infinity },
+    { moves: '1' },
+    { pushes: 2 },
+    { elapsed_ms: NaN },
+    { status: 'new_status' },
+    { status: 'running' },
+    { route: 'XD' },
+    { route: 'DD' },
+    { route: null },
+  ])
     assert.throws(() => decodeNativeReply({ ...native(), ...patch }));
-  for (const value of [null, [], 'reply', { type: 'mystery' }, { type: 'error', message: 1 },
+  for (const value of [
+    null,
+    [],
+    'reply',
+    { type: 'mystery' },
+    { type: 'error', message: 1 },
     { ...progress(), metrics: { ...progress().metrics, proof: { kind: 'mystery' } } },
-    { ...progress(), type: 'done' }, { ...progress('D'), route: 'D'.repeat(100001) }])
+    { ...progress(), type: 'done' },
+    { ...progress('D'), route: 'D'.repeat(100001) },
+  ])
     assert.throws(() => decodeWorkerReply(value));
 });
 test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   const empty = decodeMetricTuple(new Uint32Array([2, 4, 128, 0xffffffff, 0, 0xffffffff]), 'running');
-  assert.equal(empty.best, undefined); assert.equal(empty.lowerBound, undefined);
-  assert.deepEqual(decodeMetricTuple([2, 4, 128, 5, 1, 3, 99], 'time_limit').proof,
-    { kind: 'bounded', lower: 3, upper: 5 });
+  assert.equal(empty.best, undefined);
+  assert.equal(empty.lowerBound, undefined);
+  assert.deepEqual(decodeMetricTuple([2, 4, 128, 5, 1, 3, 99], 'time_limit').proof, { kind: 'bounded', lower: 3, upper: 5 });
   assert.deepEqual(decodeMetricTuple([2, 4, 128, 1, 2, 1], 'solved').proof, { kind: 'optimal', moves: 1 });
   assert.deepEqual(decodeMetricTuple([2, 4, 128, 0xffffffff, 3, 0xffffffff], 'exhausted').proof, { kind: 'unsolvable' });
   for (const tuple of [[1], [1, 2, 3, 4, 99, 0], [1, 2, 3, 0xffffffff, 2, 0], [1, 2, 3, 2, 1, 3]])
@@ -37,8 +61,7 @@ test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'));
 });
 test('a best past MAX_ROUTE is a legal count, but a route past it is still refused', () => {
-  for (const best of [MAX_ROUTE + 1, 0xfffffffe])
-    assert.equal(decodeMetricTuple([2, 4, 128, best, 0, 0xffffffff], 'running').best, best);
+  for (const best of [MAX_ROUTE + 1, 0xfffffffe]) assert.equal(decodeMetricTuple([2, 4, 128, best, 0, 0xffffffff], 'running').best, best);
   const proven = decodeMetricTuple([2, 4, 128, MAX_ROUTE + 1, 2, MAX_ROUTE + 1], 'solved');
   assert.deepEqual(proven.proof, { kind: 'optimal', moves: MAX_ROUTE + 1 });
   const over = { ...progress(), metrics: { ...progress().metrics, best: MAX_ROUTE + 1 } };
@@ -60,11 +83,19 @@ test('snapshot ABI decodes the header and views the box cells', () => {
   assert.equal(boxes.byteOffset, 4 * Uint32Array.BYTES_PER_ELEMENT);
   assert.equal(decodeSnapshot(new Uint32Array([7, 0, 0, 0]), 0).solved, false);
   assert.equal(decodeSnapshot(new Uint32Array([7, 100000, 0, 0, 9]), 1).moves, 100000);
-  const lengths: [number[], number][] = [[[7, 5, 2, 1, 12], 2], [[7, 5, 2, 1, 12, 13], 1], [[7, 5, 2], 0]];
+  const lengths: [number[], number][] = [
+    [[7, 5, 2, 1, 12], 2],
+    [[7, 5, 2, 1, 12, 13], 1],
+    [[7, 5, 2], 0],
+  ];
   for (const [values, count] of lengths)
     assert.throws(() => decodeSnapshot(new Uint32Array(values), count), /Invalid WASM snapshot length/);
   // A solved flag other than 0/1, more pushes than moves, or a count past MAX_ROUTE.
-  for (const values of [[7, 5, 2, 2, 12], [7, 2, 5, 0, 12], [7, 100001, 0, 0, 12]])
+  for (const values of [
+    [7, 5, 2, 2, 12],
+    [7, 2, 5, 0, 12],
+    [7, 100001, 0, 0, 12],
+  ])
     assert.throws(() => decodeSnapshot(new Uint32Array(values), 1), /Invalid WASM snapshot counters/);
 });
 test('solve requests encode to the server field names in a fixed order', () => {
@@ -72,9 +103,12 @@ test('solve requests encode to the server field names in a fixed order', () => {
   assert.equal(body, '{"rows":["OOO","ORO"],"actions":"D","mode":"quality","time_ms":5000,"max_states":1000,"memory_mib":32}');
 });
 test('native errors show the server text as sent, and only a bare 429 points to the browser solver', () => {
-  for (const [status, error] of [[429, 'Solver busy; try the browser solver or retry later'],
+  for (const [status, error] of [
+    [429, 'Solver busy; try the browser solver or retry later'],
     [429, 'Too many solve requests; try the browser solver or try again shortly'],
-    [429, 'Too many requests; try the browser solver or try again shortly'], [400, 'Unknown search mode']] as const)
+    [429, 'Too many requests; try the browser solver or try again shortly'],
+    [400, 'Unknown search mode'],
+  ] as const)
     assert.equal(nativeErrorText(status, error), error);
   assert.equal(nativeErrorText(429, undefined), 'Server returned HTTP 429. The browser solver still works: set Run on to This browser.');
   assert.equal(nativeErrorText(502, undefined), 'Server returned HTTP 502');
@@ -94,10 +128,15 @@ test('save replies must say whether the route improved the stored best', () => {
 test('stored progress decodes to a full route with the counts the server reported', () => {
   const stored = { puzzle_id: 'p', route: 'DD', moves: 2, pushes: 1 };
   assert.deepEqual(decodeProgress(stored), { puzzleId: 'p', route: 'DD', moves: 2, pushes: 1 });
-  for (const [patch, error] of [[{ puzzle_id: 1 }, /Invalid progress record/], [{ route: null }, /Invalid progress record/],
-    [{ route: 'XD' }, /Invalid progress route/], [{ route: 'D'.repeat(100001) }, /Invalid progress route/],
-    [{ moves: -1 }, /Invalid progress moves/], [{ moves: '2' }, /Invalid progress moves/],
-    [{ pushes: 0.5 }, /Invalid progress pushes/]] as const)
+  for (const [patch, error] of [
+    [{ puzzle_id: 1 }, /Invalid progress record/],
+    [{ route: null }, /Invalid progress record/],
+    [{ route: 'XD' }, /Invalid progress route/],
+    [{ route: 'D'.repeat(100001) }, /Invalid progress route/],
+    [{ moves: -1 }, /Invalid progress moves/],
+    [{ moves: '2' }, /Invalid progress moves/],
+    [{ pushes: 0.5 }, /Invalid progress pushes/],
+  ] as const)
     assert.throws(() => decodeProgress({ ...stored, ...patch }), error);
   for (const value of [null, [], 'DD']) assert.throws(() => decodeProgress(value), /Invalid progress record/);
 });

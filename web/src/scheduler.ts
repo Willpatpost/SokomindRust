@@ -7,7 +7,9 @@ export interface Scheduler {
   clearTimeout(handle: number): void;
 }
 export const browserScheduler: Scheduler = {
-  now: () => performance.now(), interval: (fn, ms) => window.setInterval(fn, ms),
+  now: () => performance.now(),
+  interval: (fn, ms) => window.setInterval(fn, ms),
   timeout: (fn, ms) => window.setTimeout(fn, ms),
-  clearInterval: handle => window.clearInterval(handle), clearTimeout: handle => window.clearTimeout(handle),
+  clearInterval: handle => window.clearInterval(handle),
+  clearTimeout: handle => window.clearTimeout(handle),
 };

@@ -16,10 +16,10 @@ export const MAX_STATES = 60_000_000;
 /** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
  * apply to `mode`; also the values of the #mode select. */
 export const MODES = ['fast', 'quality', 'optimal'] as const;
-export type Mode = typeof MODES[number];
+export type Mode = (typeof MODES)[number];
 /** Matches sokomind_search::Status::as_str, which the worker and POST /api/solve report as `status`. */
 export const STATUSES = ['running', 'solved', 'exhausted', 'state_limit', 'memory_limit', 'time_limit', 'cancelled'] as const;
-export type SearchStatus = typeof STATUSES[number];
+export type SearchStatus = (typeof STATUSES)[number];
 /** What a search has proven: `optimal`, that no route is shorter than the best one's `moves`;
  * `bounded`, that the optimum lies between `lower`, the certified bound, and `upper`, the best
  * route's length; `unsolvable`, only after an exhausted search, that no route exists. */
@@ -40,7 +40,13 @@ export interface Metrics {
 }
 /** WasmGame.snapshot as decoded by transport's decodeSnapshot: the robot cell,
  * the move counters, and a view of the box cells in label order. */
-export interface Snapshot { player: number; moves: number; pushes: number; solved: boolean; boxes: Uint32Array }
+export interface Snapshot {
+  player: number;
+  moves: number;
+  pushes: number;
+  solved: boolean;
+  boxes: Uint32Array;
+}
 /** One search, on either engine: it starts where `actions`, the moves played so far, leave the
  * puzzle `rows` (newline-joined), within the time, memory and state budgets the page sends. */
 export interface SolveRequest {
@@ -57,11 +63,21 @@ export type WorkerRequest = { type: 'solve'; request: SolveRequest } | { type: '
 /** A running search's progress or its final result, from the worker or POST /api/solve. `route`
  * carries a better verified route: throttled while running, and the final best on 'done'
  * whenever it improved since the last one sent. */
-export interface SearchUpdate { type: 'progress' | 'done'; metrics: Metrics; elapsedMs: number; route?: string }
+export interface SearchUpdate {
+  type: 'progress' | 'done';
+  metrics: Metrics;
+  elapsedMs: number;
+  route?: string;
+}
 /** What the worker posts: search updates, or the error that ended the search. */
 export type WorkerReply = SearchUpdate | { type: 'error'; message: string };
 /** GET /api/progress/{id} as decoded by transport's decodeProgress: the profile's
  * stored best (Record in crates/server/src/progress.rs), with the server's counts. */
-export interface ProgressRecord { puzzleId: string; route: string; moves: number; pushes: number }
+export interface ProgressRecord {
+  puzzleId: string;
+  route: string;
+  moves: number;
+  pushes: number;
+}
 /** The text shown for a caught value: an Error's message, or anything else as a string. */
-export const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

@@ -2,8 +2,14 @@ import * as storage from './storage.ts';
 import { decodeHealth, decodeProgress, decodeSaveReply, errorText, unboundFetch } from './transport.ts';
 import { browserScheduler, type Scheduler } from './scheduler.ts';
 
-interface Context { id: string; rows: string }
-interface Score { moves: number; pushes: number }
+interface Context {
+  id: string;
+  rows: string;
+}
+interface Score {
+  moves: number;
+  pushes: number;
+}
 interface Options {
   verify(rows: string, route: string): Score;
   show(best: storage.Best | null): void;
@@ -19,7 +25,8 @@ interface Options {
 export const CUSTOM_PUZZLE_ID = 'custom';
 /** Health re-probe backoff: the first retry waits 2 s, and each further miss
  * doubles the wait up to 5 minutes. */
-const PROBE_FIRST_MS = 2000, PROBE_MAX_MS = 300_000;
+const PROBE_FIRST_MS = 2000,
+  PROBE_MAX_MS = 300_000;
 /** How long a health probe waits for /api/health. Part of the solve timeout chain; see TIME_MS in
  * crates/server/src/solve.rs. 1.5 s outlasts the server's 900 ms HEALTH_TIMEOUT, which answers
  * even when the database hangs. */
@@ -49,8 +56,10 @@ export class ProgressClient {
   private probeDelay = PROBE_FIRST_MS;
   private probing: Promise<void> | undefined;
   constructor(options: Options) {
-    this.options = options; this.profile = options.profile === undefined ? storage.profile() : options.profile;
-    this.request = unboundFetch(options.fetch); this.clock = options.scheduler ?? browserScheduler;
+    this.options = options;
+    this.profile = options.profile === undefined ? storage.profile() : options.profile;
+    this.request = unboundFetch(options.fetch);
+    this.clock = options.scheduler ?? browserScheduler;
   }
   /** Asks /api/health whether saves reach PostgreSQL and pulls the selected
    * puzzle's server best when persistence turns on. Until an answer says yes, a
@@ -58,7 +67,9 @@ export class ProgressClient {
    * of being written off for the session; a host without the API (a 404, or an
    * app page instead of JSON) is not. Concurrent calls share one request. */
   probe(): Promise<void> {
-    return this.probing ??= this.checkHealth().finally(() => { this.probing = undefined; });
+    return this.probing ??= this.checkHealth().finally(() => {
+      this.probing = undefined;
+    });
   }
   private async checkHealth() {
     if (this.probeTimer !== undefined) this.clock.clearTimeout(this.probeTimer);
@@ -72,7 +83,9 @@ export class ProgressClient {
         this.persistence = persistence;
         this.options.connected?.(persistence);
       } else if (response.ok || response.status === 404) retry = false;
-    } catch { /* Offline or timed out: ask again later. */ }
+    } catch {
+      /* Offline or timed out: ask again later. */
+    }
     if (this.persistence) {
       this.probeDelay = PROBE_FIRST_MS;
       if (!was) void this.pull();
@@ -81,7 +94,10 @@ export class ProgressClient {
     if (!retry) return;
     const delay = this.probeDelay;
     this.probeDelay = Math.min(2 * delay, PROBE_MAX_MS);
-    this.probeTimer = this.clock.timeout(() => { this.probeTimer = undefined; void this.probe(); }, delay);
+    this.probeTimer = this.clock.timeout(() => {
+      this.probeTimer = undefined;
+      void this.probe();
+    }, delay);
   }
   /** Switches to puzzle `id` on `rows`: cancels a pending session save, shows the stored best
    * and pulls the server's. */
@@ -116,7 +132,9 @@ export class ProgressClient {
     try {
       const score = this.options.verify(this.context.rows, best.route);
       return score.moves === best.moves && score.pushes === best.pushes ? best : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
   /** Stores a solving route only when it is strictly better (fewer moves, then fewer pushes)
    * than the verified stored best, and shows whichever best remains. */
@@ -150,24 +168,35 @@ export class ProgressClient {
     const failed = 'Server save failed. Local progress is still available if browser storage is enabled.';
     try {
       const response = await this.request(`/api/progress/${encodeURIComponent(context.id)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-profile-id': this.profile! },
-        body: JSON.stringify({ route: fullRoute }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-profile-id': this.profile! },
+        body: JSON.stringify({ route: fullRoute }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (this.context !== context) return;
       if (!response.ok) {
         const error = await errorText(response);
         if (this.context !== context) return;
-        this.options.status(response.status === 429 ? 'Server save rate-limited; try again shortly. Local progress is kept.'
-          : response.status < 500 ? `Server save rejected: ${error ?? `HTTP ${response.status}`}` : failed);
+        this.options.status(
+          response.status === 429
+            ? 'Server save rate-limited; try again shortly. Local progress is kept.'
+            : response.status < 500
+              ? `Server save rejected: ${error ?? `HTTP ${response.status}`}`
+              : failed,
+        );
         return;
       }
       const improved = decodeSaveReply(await response.json());
       if (this.context !== context) return;
       this.acknowledged.set(context.id, fullRoute);
-      this.options.status(improved
-        ? 'Verified best route saved in PostgreSQL for this browser profile.'
-        : 'Server already stored an equal or better route for this puzzle.');
-    } catch { if (this.context === context) this.options.status(failed); }
+      this.options.status(
+        improved
+          ? 'Verified best route saved in PostgreSQL for this browser profile.'
+          : 'Server already stored an equal or better route for this puzzle.',
+      );
+    } catch {
+      if (this.context === context) this.options.status(failed);
+    }
   }
   /** Fetches the server's stored best and keeps it if it replays to the counts the server sent. */
   async pull() {
@@ -175,7 +204,8 @@ export class ProgressClient {
     if (!this.remote(context)) return;
     try {
       const response = await this.request(`/api/progress/${encodeURIComponent(context.id)}`, {
-        headers: { 'x-profile-id': this.profile! }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: { 'x-profile-id': this.profile! },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) return;
       const stored = decodeProgress(await response.json());
@@ -184,6 +214,8 @@ export class ProgressClient {
       if (stored.moves !== checked.moves || stored.pushes !== checked.pushes) return;
       this.acknowledged.set(context.id, stored.route);
       this.keep(stored.route, checked.moves, checked.pushes);
-    } catch { /* Optional persistence must not interrupt play. */ }
+    } catch {
+      /* Optional persistence must not interrupt play. */
+    }
   }
 }

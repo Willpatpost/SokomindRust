@@ -1,5 +1,5 @@
 :root {
-  font-family: Inter,ui-sans-serif,system-ui,sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #dee8e9;
   background: #111c22;
   font-synthesis: none;
@@ -44,7 +44,8 @@ header {
   letter-spacing: 1px;
 }
 
-.tagline, #connection {
+.tagline,
+#connection {
   font-size: 13px;
   color: var(--muted);
 }
@@ -57,7 +58,7 @@ main {
   max-width: 1240px;
   margin: auto;
   display: grid;
-  grid-template-columns: minmax(0,1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 46px;
   padding: 36px 30px;
 }
@@ -65,7 +66,7 @@ main {
 h1 {
   font-size: 30px;
   margin: 3px 0 15px;
-  letter-spacing: -.8px;
+  letter-spacing: -0.8px;
 }
 
 h2 {
@@ -183,7 +184,8 @@ label {
   margin-bottom: 8px;
 }
 
-select, textarea {
+select,
+textarea {
   width: 100%;
   background: #101d24;
   color: #e1edef;
@@ -196,7 +198,7 @@ select, textarea {
 }
 
 textarea {
-  font-family: ui-monospace,monospace;
+  font-family: ui-monospace, monospace;
   white-space: pre;
   resize: vertical;
   line-height: 1.4;
@@ -220,7 +222,7 @@ button:hover:enabled {
 }
 
 button:disabled {
-  opacity: .45;
+  opacity: 0.45;
   cursor: default;
 }
 
@@ -236,7 +238,10 @@ button.primary:hover:enabled {
   background: #b0efcb;
 }
 
-button:focus-visible, select:focus-visible, textarea:focus-visible, canvas:focus-visible {
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+canvas:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -247,7 +252,8 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, canvas:focus
   gap: 12px;
 }
 
-.actions, .game-controls {
+.actions,
+.game-controls {
   display: flex;
   gap: 9px;
   align-items: center;
@@ -286,7 +292,7 @@ dt {
 
 dd {
   margin: 0;
-  font-family: ui-monospace,monospace;
+  font-family: ui-monospace, monospace;
   font-size: 15px;
 }
 
@@ -334,7 +340,7 @@ details[open] summary {
   }
 
   main {
-    grid-template-columns: minmax(0,1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
     max-width: 700px;
     padding: 25px 18px;

@@ -24,9 +24,15 @@ export interface WorkerPort {
 /** Where a search runs: the WASM worker in this tab or the server's native
  * solver. The values of the #engine select. */
 export const ENGINES = ['browser', 'native'] as const;
-export type Engine = typeof ENGINES[number];
-interface Result { prefix: string; route?: string }
-interface Running extends Result { timer: number; watchdog: number }
+export type Engine = (typeof ENGINES)[number];
+interface Result {
+  prefix: string;
+  route?: string;
+}
+interface Running extends Result {
+  timer: number;
+  watchdog: number;
+}
 export type SolverState =
   | { kind: 'idle' }
   | (Running & { kind: 'browser-running'; worker: WorkerPort })
@@ -56,11 +62,17 @@ export class SolverClient {
     this.request = unboundFetch(options.fetch);
   }
   /** Whether a search is running. */
-  get busy() { return this.state.kind === 'browser-running' || this.state.kind === 'native-running'; }
+  get busy() {
+    return this.state.kind === 'browser-running' || this.state.kind === 'native-running';
+  }
   /** The last verified route, which starts where `prefix` leaves the puzzle. */
-  get route() { return this.state.kind === 'idle' ? undefined : this.state.route; }
+  get route() {
+    return this.state.kind === 'idle' ? undefined : this.state.route;
+  }
   /** The moves played before the search started; '' when idle. */
-  get prefix() { return this.state.kind === 'idle' ? '' : this.state.prefix; }
+  get prefix() {
+    return this.state.kind === 'idle' ? '' : this.state.prefix;
+  }
   private release(active: Active) {
     this.clock.clearInterval(active.timer);
     this.clock.clearTimeout(active.watchdog);
@@ -108,7 +120,8 @@ export class SolverClient {
       active.route = update.route;
     }
     if (update.metrics.status === 'solved' && active.route === undefined) throw new Error('Solved reply has no verified route');
-    if (update.metrics.proof.kind === 'unsolvable' && active.route !== undefined) throw new Error('Unsolvable reply conflicts with verified route');
+    if (update.metrics.proof.kind === 'unsolvable' && active.route !== undefined)
+      throw new Error('Unsolvable reply conflicts with verified route');
     if (active.route !== undefined && update.metrics.lowerBound !== undefined && update.metrics.lowerBound > active.route.length)
       throw new Error('Solver bound exceeds verified route');
     // Progress routes are throttled, but the final reply resends any better route,
@@ -117,8 +130,10 @@ export class SolverClient {
     if (update.type === 'done' && (proof === 'optimal' || proof === 'bounded') && update.metrics.best !== active.route?.length)
       throw new Error('Final proof does not match the verified route length');
     this.options.update(update, active.route);
-    if (update.type === 'done') { this.finish(active); this.options.elapsed(update.elapsedMs); }
-    else this.options.changed();
+    if (update.type === 'done') {
+      this.finish(active);
+      this.options.elapsed(update.elapsedMs);
+    } else this.options.changed();
   }
   /** Starts a search unless one is running. A browser search reports through the callbacks; the
    * promise resolves once a native reply has been handled. */
@@ -130,10 +145,13 @@ export class SolverClient {
     // failure in a completed state and release every subsequently created timer.
     if (engine === 'browser') {
       let worker: WorkerPort;
-      try { worker = this.options.worker(); }
-      catch (error) {
+      try {
+        worker = this.options.worker();
+      } catch (error) {
         this.state = { kind: 'completed', prefix: request.actions };
-        this.options.status(errorMessage(error)); this.options.changed(); return;
+        this.options.status(errorMessage(error));
+        this.options.changed();
+        return;
       }
       const active: Active = { kind: 'browser-running', prefix: request.actions, worker, timer: 0, watchdog: 0 };
       this.state = active;
@@ -150,12 +168,16 @@ export class SolverClient {
             const reply = decodeWorkerReply(data);
             if (reply.type === 'error') this.fail(active, reply.message);
             else this.accept(active, reply);
-          } catch (error) { this.fail(active, error); }
+          } catch (error) {
+            this.fail(active, error);
+          }
         };
         worker.onerror = event => this.fail(active, event.message || 'Worker failed to start');
         this.options.changed();
         worker.postMessage({ type: 'solve', request });
-      } catch (error) { this.fail(active, error); }
+      } catch (error) {
+        this.fail(active, error);
+      }
       return;
     }
     const abort = new AbortController();
@@ -168,13 +190,18 @@ export class SolverClient {
       }, request.timeMs + NATIVE_GRACE_MS);
       this.options.changed();
       const response = await this.request('/api/solve', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, signal: abort.signal, body: encodeSolveRequest(request),
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: abort.signal,
+        body: encodeSolveRequest(request),
       });
       if (this.state !== active) return;
       if (!response.ok) throw new Error(nativeErrorText(response.status, await errorText(response)));
       const value: unknown = await response.json();
       if (this.state === active) this.accept(active, decodeNativeReply(value));
-    } catch (error) { this.fail(active, error); }
+    } catch (error) {
+      this.fail(active, error);
+    }
   }
   /** Asks a browser search to stop and report its best, writing it off after CANCEL_GRACE_MS;
    * stops waiting for a native search at once. */
@@ -190,7 +217,9 @@ export class SolverClient {
           this.options.status(active.route !== undefined ? 'Stopped. Verified route retained.' : 'Stopped.');
           this.finish(active);
         }, CANCEL_GRACE_MS);
-      } catch (error) { this.fail(active, error); }
+      } catch (error) {
+        this.fail(active, error);
+      }
     } else if (active.kind === 'native-running') {
       this.reset();
       this.options.status('Stopped waiting for the native search.');

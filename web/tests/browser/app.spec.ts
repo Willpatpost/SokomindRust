@@ -10,7 +10,7 @@ async function loaded(page: import('@playwright/test').Page) {
   // vite preview proxies /api to 127.0.0.1:3000, where the suite runs no API, so
   // the health probe would retry every proxy 500 with backoff. A 404 is a host
   // without the API, which the probe accepts once and never asks again.
-  await page.route('**/api/health', (health) => health.fulfill({ status: 404 }));
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
   await page.goto('/');
   await expect(page.locator('#title')).toHaveText('First Steps');
 }
@@ -134,8 +134,7 @@ test('Optimal mode proves the route move-optimal in the browser', async ({ page 
   await expect(page.locator('#title')).toHaveText('The Detour');
   await page.selectOption('#mode', 'optimal');
   await page.click('#solve');
-  await expect(page.locator('#search-status'))
-    .toHaveText('24 remaining moves · proven move-optimal from this position. Search complete.');
+  await expect(page.locator('#search-status')).toHaveText('24 remaining moves · proven move-optimal from this position. Search complete.');
   await expect(page.locator('#play')).toBeEnabled();
 });
 
@@ -143,9 +142,7 @@ test('restores the solved session after a reload', async ({ page }) => {
   await loaded(page);
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#message')).toHaveText(SOLVED);
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem('sokomind-rust.v1.session')))
-    .toContain('"actions":"D"');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('sokomind-rust.v1.session'))).toContain('"actions":"D"');
   await page.reload();
   await expect(page.locator('#message')).toHaveText('Session restored by replaying your moves.');
   await expect(page.locator('#moves')).toHaveText('1');

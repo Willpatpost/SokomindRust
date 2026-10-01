@@ -19,12 +19,16 @@ const post = (message: WorkerReply) => self.postMessage(message);
 // Browsers clamp nested setTimeout(0) to >= 4ms, which would idle a third
 // of every time budget; a MessageChannel yield is a macrotask without clamp.
 const yieldChannel = new MessageChannel();
-const yieldToEventLoop = () => new Promise<void>((resolve) => {
-  yieldChannel.port1.onmessage = () => resolve();
-  yieldChannel.port2.postMessage(0);
-});
+const yieldToEventLoop = () =>
+  new Promise<void>(resolve => {
+    yieldChannel.port1.onmessage = () => resolve();
+    yieldChannel.port2.postMessage(0);
+  });
 self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
-  if (data.type === 'cancel') { cancelled = true; return; }
+  if (data.type === 'cancel') {
+    cancelled = true;
+    return;
+  }
   let search: WasmSearch | undefined;
   const started = performance.now();
   try {
@@ -57,7 +61,8 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
       if (!running && best !== undefined && best > routeLimit) throw new Error(PAST_LIMIT_MESSAGE);
       // Rebuilding a route walks every push, so a stream of Quality improvements is
       // sampled every ROUTE_SAMPLE_MS; the first route and the final best always go out.
-      const improved = best !== undefined
+      const improved =
+        best !== undefined
         && best <= routeLimit
         && (reportedBest === undefined || (best < reportedBest && (!running || elapsedMs - lastRoute >= ROUTE_SAMPLE_MS)));
       if (improved || !running || elapsedMs - lastReport >= REPORT_MS) {
@@ -71,6 +76,9 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
       if (!running) break;
       await yieldToEventLoop();
     }
-  } catch (error) { post({ type: 'error', message: errorMessage(error) }); }
-  finally { search?.free(); }
+  } catch (error) {
+    post({ type: 'error', message: errorMessage(error) });
+  } finally {
+    search?.free();
+  }
 };

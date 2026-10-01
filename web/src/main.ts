@@ -12,7 +12,13 @@ import { Playback } from './playback.ts';
 import { CUSTOM_PUZZLE_ID, ProgressClient } from './progress.ts';
 import { statusText } from './verdict.ts';
 
-interface Puzzle { id: string; title: string; difficulty: string; rows: string[]; hint?: string }
+interface Puzzle {
+  id: string;
+  title: string;
+  difficulty: string;
+  rows: string[];
+  hint?: string;
+}
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
  * from the game after every change. */
 interface Session {
@@ -62,10 +68,13 @@ const solver = new SolverClient({
   elapsed: ms => setText('elapsed', seconds(ms)),
   update: applyUpdate,
   status: setStatus,
-  verify: (prefix, route) => { verify(loaded().puzzle.text, prefix + route); },
+  verify: (prefix, route) => {
+    verify(loaded().puzzle.text, prefix + route);
+  },
 });
 const playback = new Playback(
-  direction => loaded().game.step(direction), changed,
+  direction => loaded().game.step(direction),
+  changed,
   blocked => {
     solver.dropRoute();
     updateButtons();
@@ -73,7 +82,9 @@ const playback = new Playback(
   },
 );
 const progress = new ProgressClient({
-  verify, show: showBest, status: value => setText('storage', value),
+  verify,
+  show: showBest,
+  status: value => setText('storage', value),
   connected: persistence => setText('connection', persistence ? 'PostgreSQL connected' : 'Native solver connected'),
 });
 
@@ -87,7 +98,10 @@ function updateButtons() {
   button('copy').disabled = solver.route === undefined;
   button('undo').disabled = !state || state.moves === 0;
 }
-function animate(route: string) { playback.play(route); updateButtons(); }
+function animate(route: string) {
+  playback.play(route);
+  updateButtons();
+}
 function invalidate() {
   solver.reset();
   playback.stop();
@@ -101,7 +115,14 @@ function render() {
   paint(current);
 }
 function paint({ game, tiles, labels, state }: Session) {
-  board.draw(game.width(), game.height(), tiles, labels, state, Array.from(labels, (_, i) => game.on_goal(i)));
+  board.draw(
+    game.width(),
+    game.height(),
+    tiles,
+    labels,
+    state,
+    Array.from(labels, (_, i) => game.on_goal(i)),
+  );
   setText('moves', String(state.moves));
   setText('pushes', String(state.pushes));
   updateButtons();
@@ -145,7 +166,8 @@ function load(puzzle: Puzzle, actions = '') {
   let next: Session;
   try {
     if (actions) game.replay(actions);
-    const tiles = game.tiles(), labels = game.labels();
+    const tiles = game.tiles(),
+      labels = game.labels();
     next = { game, puzzle: { ...puzzle, text }, tiles, labels, state: decodeSnapshot(game.snapshot(), labels.length) };
   } catch (error) {
     game.free();
@@ -171,8 +193,7 @@ function move(direction: number) {
   const { game } = session;
   if (solver.busy || solver.route !== undefined || playback.active) invalidate();
   if (game.step(direction)) changed();
-  else if (game.moves() >= MAX_ROUTE)
-    message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
+  else if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
 }
 // Every transport route is replayed on a scratch Rust game before display.
 function applyUpdate(update: SearchUpdate, route: string | undefined) {

@@ -7,10 +7,22 @@ const SAVED = 'Verified best route saved in PostgreSQL for this browser profile.
 // ResultBody in crates/server/src/solve.rs.
 async function connected(page: import('@playwright/test').Page, stored: object | null = null) {
   await page.route('**/api/health', route => route.fulfill({ json: { status: 'ok', persistence: true } }));
-  await page.route('**/api/solve', route => route.fulfill({ json: {
-    status: 'solved', route: 'D', moves: 1, pushes: 1, expanded: 1, generated: 2, reserved_bytes: 1208114,
-    elapsed_ms: 3, proof: { kind: 'optimal', lower_bound: 1, upper_bound: 1 }, stats: {},
-  } }));
+  await page.route('**/api/solve', route =>
+    route.fulfill({
+      json: {
+        status: 'solved',
+        route: 'D',
+        moves: 1,
+        pushes: 1,
+        expanded: 1,
+        generated: 2,
+        reserved_bytes: 1208114,
+        elapsed_ms: 3,
+        proof: { kind: 'optimal', lower_bound: 1, upper_bound: 1 },
+        stats: {},
+      },
+    }),
+  );
   await page.route('**/api/progress/**', route => {
     if (route.request().method() === 'POST') return route.fulfill({ json: { saved: true, improved: true } });
     return stored ? route.fulfill({ json: stored }) : route.fulfill({ status: 404, json: { error: 'No saved route' } });
@@ -82,9 +94,16 @@ test('a server that first reports no persistence is asked again', async ({ page 
     persistence = true;
     return reply;
   });
-  await page.route('**/api/progress/**', route => route.fulfill({ json: {
-    puzzle_id: 'ultra-tiny', route: 'D', moves: 1, pushes: 1,
-  } }));
+  await page.route('**/api/progress/**', route =>
+    route.fulfill({
+      json: {
+        puzzle_id: 'ultra-tiny',
+        route: 'D',
+        moves: 1,
+        pushes: 1,
+      },
+    }),
+  );
   await page.goto('/');
   await expect(page.locator('#connection')).toHaveText('Native solver connected');
   // The first re-probe runs 2 s later, inside the default 5 s expect timeout.

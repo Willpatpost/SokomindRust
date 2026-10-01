@@ -29,20 +29,10 @@ export class BoardView {
   }
   /** Paints a `width` by `height` board: `tiles` and each box's label in `labels` as WasmGame
    * returns them, the boxes and robot from `state`, and `onGoal` per box in label order. */
-  draw(
-    width: number,
-    height: number,
-    tiles: Uint8Array,
-    labels: Uint8Array,
-    state: Snapshot,
-    onGoal: boolean[],
-  ) {
+  draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Snapshot, onGoal: boolean[]) {
     // clientWidth includes the padding but not the border, and is rounded to
     // whole pixels: one pixel of slack keeps a fitted board from overflowing.
-    const available = this.canvas.parentElement!.clientWidth
-      - parseFloat(this.wrap.paddingLeft)
-      - parseFloat(this.wrap.paddingRight)
-      - 1;
+    const available = this.canvas.parentElement!.clientWidth - parseFloat(this.wrap.paddingLeft) - parseFloat(this.wrap.paddingRight) - 1;
     const fit = Math.min(MAX_TILE_PX, available / width, MAX_BOARD_HEIGHT_PX / height);
     const tile = Math.max(MIN_TILE_PX, fit);
     this.fits = fit >= MIN_TILE_PX;
@@ -72,42 +62,39 @@ export class BoardView {
         c.strokeStyle = '#8dcdaa';
         c.lineWidth = Math.max(1, tile / 25);
         c.beginPath();
-        c.arc(x + tile / 2, y + tile / 2, tile * .27, 0, Math.PI * 2);
+        c.arc(x + tile / 2, y + tile / 2, tile * 0.27, 0, Math.PI * 2);
         c.stroke();
         c.fillStyle = '#a7dbbc';
         c.textAlign = 'center';
         c.textBaseline = 'middle';
-        c.font = `600 ${tile * .36}px system-ui`;
-        c.fillText(
-          tiles[cell] === PLAIN ? '·' : String.fromCharCode(tiles[cell]).toLowerCase(),
-          x + tile / 2,
-          y + tile / 2,
-        );
+        c.font = `600 ${tile * 0.36}px system-ui`;
+        c.fillText(tiles[cell] === PLAIN ? '·' : String.fromCharCode(tiles[cell]).toLowerCase(), x + tile / 2, y + tile / 2);
       }
     }
     for (let i = 0; i < labels.length; i++) {
       const [x, y] = xy(state.boxes[i]);
       c.fillStyle = onGoal[i] ? '#86cfa4' : '#ddb87c';
-      c.fillRect(x + tile * .13, y + tile * .13, tile * .74, tile * .74);
+      c.fillRect(x + tile * 0.13, y + tile * 0.13, tile * 0.74, tile * 0.74);
       c.strokeStyle = '#15282b';
       c.lineWidth = 1;
-      c.strokeRect(x + tile * .21, y + tile * .21, tile * .58, tile * .58);
+      c.strokeRect(x + tile * 0.21, y + tile * 0.21, tile * 0.58, tile * 0.58);
       c.fillStyle = '#273335';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
-      c.font = `750 ${tile * .39}px system-ui`;
+      c.font = `750 ${tile * 0.39}px system-ui`;
       c.fillText(labels[i] === PLAIN ? '•' : String.fromCharCode(labels[i]), x + tile / 2, y + tile / 2);
     }
     const [x, y] = xy(state.player);
     c.fillStyle = '#b9daf2';
     c.beginPath();
-    c.arc(x + tile / 2, y + tile / 2, tile * .29, 0, Math.PI * 2);
+    c.arc(x + tile / 2, y + tile / 2, tile * 0.29, 0, Math.PI * 2);
     c.fill();
     c.fillStyle = '#274252';
     c.beginPath();
-    c.arc(x + tile * .6, y + tile * .44, tile * .06, 0, Math.PI * 2);
+    c.arc(x + tile * 0.6, y + tile * 0.44, tile * 0.06, 0, Math.PI * 2);
     c.fill();
-    const label = `${width} by ${height} puzzle, ${labels.length} boxes. `
+    const label =
+      `${width} by ${height} puzzle, ${labels.length} boxes. `
       + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD.`;
     if (this.canvas.getAttribute('aria-label') !== label) this.canvas.setAttribute('aria-label', label);
   }
