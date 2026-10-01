@@ -18,9 +18,21 @@ import {
 /** @typedef {import('./bench-gate.mjs').Finding} Finding */
 
 const full = (overrides = {}) => ({
-  id: 'a', mode: 'optimal', fingerprint: 'fa', status: 'solved', moves: 10, pushes: 4, proof: 'optimal', lower_bound: 10,
-  expanded: 100, generated: 200, reserved_bytes: 4096, first_route_expanded: 90, first_route_generated: 180,
-  stats: { unique_states: 150, duplicate_improvements: 3 }, ...overrides,
+  id: 'a',
+  mode: 'optimal',
+  fingerprint: 'fa',
+  status: 'solved',
+  moves: 10,
+  pushes: 4,
+  proof: 'optimal',
+  lower_bound: 10,
+  expanded: 100,
+  generated: 200,
+  reserved_bytes: 4096,
+  first_route_expanded: 90,
+  first_route_generated: 180,
+  stats: { unique_states: 150, duplicate_improvements: 3 },
+  ...overrides,
 });
 const fast = (overrides = {}) => full({ mode: 'fast', proof: 'none', lower_bound: null, ...overrides });
 /**
@@ -38,12 +50,20 @@ test('serialize is deterministic: sorted keys, catalog then mode order, one case
   const cases = [full({ id: 'b', mode: 'fast' }), full({ id: 'a' }), full({ id: 'b' }), fast({ id: 'a' })];
   const text = serialize({ version: 2, sourceRevision: 'abc', catalogHash: 'h', maxStates: 20000, memoryMiB: 64, cases }, ['b', 'a']);
   const shuffled = cases.map(c => Object.fromEntries(Object.entries(c).reverse())).reverse();
-  assert.equal(serialize({ cases: shuffled, memoryMiB: 64, maxStates: 20000, catalogHash: 'h', sourceRevision: 'abc', version: 2 }, ['b', 'a']), text);
+  assert.equal(
+    serialize({ cases: shuffled, memoryMiB: 64, maxStates: 20000, catalogHash: 'h', sourceRevision: 'abc', version: 2 }, ['b', 'a']),
+    text,
+  );
   assert.ok(text.endsWith('}\n') && !text.includes('\r'));
   const lines = text.split('\n');
   assert.equal(lines.length, 1 + 5 + 1 + cases.length + 2 + 1);
-  assert.deepEqual(lines.slice(1, 6).map(line => line.trim().split('"')[1]),
-    ['catalogHash', 'maxStates', 'memoryMiB', 'sourceRevision', 'version']);
+  assert.deepEqual(lines.slice(1, 6).map(line => line.trim().split('"')[1]), [
+    'catalogHash',
+    'maxStates',
+    'memoryMiB',
+    'sourceRevision',
+    'version',
+  ]);
   /** @type {{ cases: Record<string, unknown>[] }} */
   const parsed = JSON.parse(text);
   assert.deepEqual(parsed.cases.map(c => `${c.id}:${c.mode}`), ['b:fast', 'b:optimal', 'a:fast', 'a:optimal']);
@@ -55,11 +75,16 @@ test('R1 and R2: a worse or lost route and a lost proof are hard', () => {
   const lost = diff(fast(), fast({ moves: null, pushes: null, status: 'state_limit' }));
   assert.deepEqual(rules(lost.hard), ['R1:moves']);
   assert.deepEqual(rules(lost.soft), ['S3:status']);
-  assert.deepEqual(rules(diff(full(), full({ status: 'state_limit', proof: 'bounded', lower_bound: 9 })).hard),
-    ['R2:proof', 'R3:status', 'R4:lower_bound']);
+  assert.deepEqual(rules(diff(full(), full({ status: 'state_limit', proof: 'bounded', lower_bound: 9 })).hard), [
+    'R2:proof',
+    'R3:status',
+    'R4:lower_bound',
+  ]);
   const unsolvable = full({ status: 'exhausted', moves: null, pushes: null, proof: 'unsolvable', lower_bound: null });
-  assert.deepEqual(rules(diff(unsolvable, { ...unsolvable, status: 'state_limit', proof: 'none', lower_bound: 30 }).hard),
-    ['R2:proof', 'R3:status']);
+  assert.deepEqual(rules(diff(unsolvable, { ...unsolvable, status: 'state_limit', proof: 'none', lower_bound: 30 }).hard), [
+    'R2:proof',
+    'R3:status',
+  ]);
 });
 
 test('R4: a capped Optimal lower bound never falls unless the run is now proven unsolvable', () => {
@@ -108,8 +133,16 @@ test('S2 flags accounted-memory growth only at the same config', () => {
 
 test('toCase keeps every field present', () => {
   // Deliberately partial: toCase must still set every field, to null when the record lacks it.
-  const partial = { id: 'a', mode: 'fast', sample: 0, route: 'DD', search_us: 5, proof: { kind: 'none' }, moves: 2,
-    stats: { unique_states: 1 } };
+  const partial = {
+    id: 'a',
+    mode: 'fast',
+    sample: 0,
+    route: 'DD',
+    search_us: 5,
+    proof: { kind: 'none' },
+    moves: 2,
+    stats: { unique_states: 1 },
+  };
   const record = toCase(/** @type {any} */ (partial));
   assert.equal(record.proof, 'none');
   assert.equal(record.first_route_expanded, null);
@@ -152,7 +185,9 @@ test('invariants I1-I3 catch false proofs and bounds, using only matching eviden
   assert.deepEqual(found([full({ lower_bound: 9 })]), ['a:optimal I2']);
   assert.deepEqual(found([full({ proof: 'bounded' })]), ['a:optimal I2']);
   assert.deepEqual(found([full({ proof: 'none' })]), ['a:optimal I2']);
-  assert.deepEqual(found([full({ status: 'state_limit', moves: null, pushes: null, proof: 'unsolvable', lower_bound: null })]), ['a:optimal I2']);
+  assert.deepEqual(found([full({ status: 'state_limit', moves: null, pushes: null, proof: 'unsolvable', lower_bound: null })]), [
+    'a:optimal I2',
+  ]);
   // A shorter Fast route refutes both the bound and the optimality claim.
   assert.deepEqual(found([full(), fast({ moves: 9 })]), ['a:optimal I3', 'a:optimal I3']);
   const capped = full({ status: 'state_limit', moves: null, pushes: null, proof: 'none', lower_bound: 13 });
@@ -178,8 +213,17 @@ test('R1-R4 and S3 improvements must be recorded, S1 and S2 ones are information
   assert.deepEqual(rules(gains.improved), ['S3:status', 'S1:expanded']);
   assert.deepEqual(rules(mustRecord(gains)), ['S3:status']);
   /** @param {import('./bench-gate.mjs').Diff} diff */
-  const report = diff => formatReport({ action: 'check', cases: [after], config: CONFIG, diff, failures: [],
-    baseline: 'abc', source: 'def', catalogChangesAreHard: true });
+  const report = diff =>
+    formatReport({
+      action: 'check',
+      cases: [after],
+      config: CONFIG,
+      diff,
+      failures: [],
+      baseline: 'abc',
+      source: 'def',
+      catalogChangesAreHard: true,
+    });
   const { text, hard } = report(result);
   assert.equal(hard, 0);
   assert.match(
@@ -197,10 +241,12 @@ test('scoreboard counts routes, proofs, capped lower bounds and records per proo
    * @param {string} id
    * @param {string} mode
    */
-  const at = (id, mode, overrides = {}) => full({ id, mode, proof: 'none', lower_bound: null,
-    stats: { unique_states: 10, duplicate_improvements: 1 }, ...overrides });
+  const at = (id, mode, overrides = {}) =>
+    full({ id, mode, proof: 'none', lower_bound: null, stats: { unique_states: 10, duplicate_improvements: 1 }, ...overrides });
   const cases = [
-    at('a', 'fast'), at('a', 'quality'), at('a', 'optimal', { proof: 'optimal', lower_bound: 10 }),
+    at('a', 'fast'),
+    at('a', 'quality'),
+    at('a', 'optimal', { proof: 'optimal', lower_bound: 10 }),
     at('b', 'fast', { moves: 20, expanded: 50, generated: 80 }),
     at('b', 'quality', { status: 'state_limit', moves: 22, expanded: 20000, generated: 30000 }),
     at('b', 'optimal', { status: 'state_limit', moves: null, lower_bound: 15, expanded: 20000, generated: 30000 }),
@@ -211,12 +257,45 @@ test('scoreboard counts routes, proofs, capped lower bounds and records per proo
   const board = scoreboard(cases);
   const common = { runs: 3, uniqueStates: 30, duplicateImprovements: 3 };
   assert.deepEqual(board, [
-    { mode: 'fast', ...common, routes: 2, finished: 3, capped: 0, proofs: 0, movesSum: 30, cappedLowerBoundSum: 0,
-      uncappedExpanded: 155, uncappedGenerated: 286, recordsPerProof: null },
-    { mode: 'quality', ...common, routes: 2, finished: 2, capped: 1, proofs: 0, movesSum: 32, cappedLowerBoundSum: 0,
-      uncappedExpanded: 105, uncappedGenerated: 206, recordsPerProof: null },
-    { mode: 'optimal', ...common, routes: 1, finished: 2, capped: 1, proofs: 2, movesSum: 10, cappedLowerBoundSum: 15,
-      uncappedExpanded: 105, uncappedGenerated: 206, recordsPerProof: 103 },
+    {
+      mode: 'fast',
+      ...common,
+      routes: 2,
+      finished: 3,
+      capped: 0,
+      proofs: 0,
+      movesSum: 30,
+      cappedLowerBoundSum: 0,
+      uncappedExpanded: 155,
+      uncappedGenerated: 286,
+      recordsPerProof: null,
+    },
+    {
+      mode: 'quality',
+      ...common,
+      routes: 2,
+      finished: 2,
+      capped: 1,
+      proofs: 0,
+      movesSum: 32,
+      cappedLowerBoundSum: 0,
+      uncappedExpanded: 105,
+      uncappedGenerated: 206,
+      recordsPerProof: null,
+    },
+    {
+      mode: 'optimal',
+      ...common,
+      routes: 1,
+      finished: 2,
+      capped: 1,
+      proofs: 2,
+      movesSum: 10,
+      cappedLowerBoundSum: 15,
+      uncappedExpanded: 105,
+      uncappedGenerated: 206,
+      recordsPerProof: 103,
+    },
   ]);
   const delta = scoreboardDelta(board, board);
   assert.equal(delta[2].mode, 'optimal');

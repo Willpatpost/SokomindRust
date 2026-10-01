@@ -23,4 +23,12 @@ if (!version.stdout.trim().endsWith(PINNED)) {
 }
 // The Dockerfile runs the same two commands; change both together.
 run('cargo', ['build', '--locked', '-p', 'sokomind-wasm', '--target', 'wasm32-unknown-unknown', '--profile', 'wasm-release']);
-run('wasm-bindgen', ['--target', 'web', '--out-dir', 'web/wasm', '--out-name', 'sokomind', 'target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm']);
+run('wasm-bindgen', [
+  '--target',
+  'web',
+  '--out-dir',
+  'web/wasm',
+  '--out-name',
+  'sokomind',
+  'target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm',
+]);

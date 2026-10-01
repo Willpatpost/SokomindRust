@@ -81,7 +81,7 @@ const CASE_KEYS = [
 /** @param {{ id: string, mode: string }} c */
 export const key = c => `${c.id}:${c.mode}`;
 /** @param {string} status */
-const rank = status => FINISHED.has(status) ? 2 : CAPPED.has(status) ? 1 : 0;
+const rank = status => (FINISHED.has(status) ? 2 : CAPPED.has(status) ? 1 : 0);
 /** @param {number} previous */
 const tolerance = previous => Math.max(previous + 32, Math.ceil(previous * 1.2));
 
@@ -92,10 +92,19 @@ const tolerance = previous => Math.max(previous + 32, Math.ceil(previous * 1.2))
  */
 export function toCase(r) {
   return {
-    id: r.id, mode: r.mode, fingerprint: r.fingerprint ?? null, status: r.status ?? null,
-    moves: r.moves ?? null, pushes: r.pushes ?? null, proof: r.proof?.kind ?? null, lower_bound: r.lower_bound ?? null,
-    expanded: r.expanded ?? null, generated: r.generated ?? null, reserved_bytes: r.reserved_bytes ?? null,
-    first_route_expanded: r.first_route_expanded ?? null, first_route_generated: r.first_route_generated ?? null,
+    id: r.id,
+    mode: r.mode,
+    fingerprint: r.fingerprint ?? null,
+    status: r.status ?? null,
+    moves: r.moves ?? null,
+    pushes: r.pushes ?? null,
+    proof: r.proof?.kind ?? null,
+    lower_bound: r.lower_bound ?? null,
+    expanded: r.expanded ?? null,
+    generated: r.generated ?? null,
+    reserved_bytes: r.reserved_bytes ?? null,
+    first_route_expanded: r.first_route_expanded ?? null,
+    first_route_generated: r.first_route_generated ?? null,
     stats: r.stats ? { ...r.stats } : null,
   };
 }
@@ -130,7 +139,11 @@ export function load(file, name, update) {
 export function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value).sort().map(name => [name, sortKeys(value[name])]));
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map(name => [name, sortKeys(value[name])]),
+  );
 }
 
 /**
@@ -144,13 +157,18 @@ export function serialize({ cases, ...header }, order) {
   const index = new Map(order.map((id, i) => [id, i]));
   /** @param {string} id */
   const at = id => index.get(id) ?? order.length;
-  const sorted = [...cases].sort((a, b) => at(a.id) - at(b.id)
-    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || MODES.indexOf(a.mode) - MODES.indexOf(b.mode));
-  return ['{',
+  const sorted = [...cases].sort(
+    (a, b) => at(a.id) - at(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || MODES.indexOf(a.mode) - MODES.indexOf(b.mode),
+  );
+  return [
+    '{',
     ...Object.entries(sortKeys(header)).map(([name, value]) => `  ${JSON.stringify(name)}: ${JSON.stringify(value)},`),
     '  "cases": [',
     ...sorted.map((c, i) => `    ${JSON.stringify(sortKeys(c))}${i + 1 < sorted.length ? ',' : ''}`),
-    '  ]', '}', ''].join('\n');
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
 }
 
 /**
@@ -198,13 +216,16 @@ function fields(c) {
 export function compare(prev, cur, { sameConfig }) {
   /** @type {Diff} */
   const out = { hard: [], soft: [], improved: [], changed: [], missing: [], extra: [] };
-  const before = new Map(prev.map(c => [key(c), c])), now = new Map(cur.map(c => [key(c), c]));
+  const before = new Map(prev.map(c => [key(c), c])),
+    now = new Map(cur.map(c => [key(c), c]));
   for (const k of before.keys()) if (!now.has(k)) out.missing.push(k);
   for (const k of now.keys()) if (!before.has(k)) out.extra.push(k);
   for (const [k, p] of before) {
     const c = now.get(k);
     if (!c) continue;
-    const P = fields(p), C = fields(c), flagged = new Set();
+    const P = fields(p),
+      C = fields(c),
+      flagged = new Set();
     /**
      * @param {'hard' | 'soft' | 'improved' | 'changed'} bucket
      * @param {string | null} rule
@@ -332,15 +353,23 @@ export function scoreboard(cases) {
   const sum = (list, value) => list.reduce((total, c) => total + (value(c) ?? 0), 0);
   return MODES.map(mode => {
     const all = cases.filter(c => c.mode === mode);
-    const finished = all.filter(c => FINISHED.has(c.status)), capped = all.filter(c => CAPPED.has(c.status));
+    const finished = all.filter(c => FINISHED.has(c.status)),
+      capped = all.filter(c => CAPPED.has(c.status));
     const proven = all.filter(c => PROOFS.has(c.proof));
     const routes = all.filter(c => c.moves !== null);
     return {
-      mode, runs: all.length, routes: routes.length, finished: finished.length, capped: capped.length,
-      proofs: proven.length, movesSum: sum(routes, c => c.moves),
+      mode,
+      runs: all.length,
+      routes: routes.length,
+      finished: finished.length,
+      capped: capped.length,
+      proofs: proven.length,
+      movesSum: sum(routes, c => c.moves),
       cappedLowerBoundSum: mode === 'optimal' ? sum(capped, c => c.lower_bound) : 0,
-      uncappedExpanded: sum(finished, c => c.expanded), uncappedGenerated: sum(finished, c => c.generated),
-      uniqueStates: sum(all, c => c.stats?.unique_states), duplicateImprovements: sum(all, c => c.stats?.duplicate_improvements),
+      uncappedExpanded: sum(finished, c => c.expanded),
+      uncappedGenerated: sum(finished, c => c.generated),
+      uniqueStates: sum(all, c => c.stats?.unique_states),
+      duplicateImprovements: sum(all, c => c.stats?.duplicate_improvements),
       recordsPerProof: proven.length ? Math.round(sum(proven, c => c.generated) / proven.length) : null,
     };
   });
@@ -352,8 +381,14 @@ export function scoreboard(cases) {
  * @param {readonly Record<string, any>[]} after
  */
 export function scoreboardDelta(before, after) {
-  return after.map((row, i) => Object.fromEntries(Object.entries(row).map(([name, value]) =>
-    [name, typeof value === 'number' && typeof before[i]?.[name] === 'number' ? value - before[i][name] : value])));
+  return after.map((row, i) =>
+    Object.fromEntries(
+      Object.entries(row).map(([name, value]) => [
+        name,
+        typeof value === 'number' && typeof before[i]?.[name] === 'number' ? value - before[i][name] : value,
+      ]),
+    ),
+  );
 }
 
 /**
@@ -394,7 +429,7 @@ export function pairReference(cases, reference) {
 }
 
 /** @param {unknown} value */
-const show = value => value === undefined ? '?' : JSON.stringify(value);
+const show = value => (value === undefined ? '?' : JSON.stringify(value));
 /**
  * @param {string} title
  * @param {readonly Finding[]} findings
@@ -437,11 +472,15 @@ export function formatReport({ action, cases, config, diff, failures, baseline, 
   const catalog = diff.missing.length + diff.extra.length;
   const hard = diff.hard.length + (catalogChangesAreHard ? catalog : 0);
   const lines = [
-    ...(failures.length ? [`INVARIANT FAILURES (${failures.length}):`, ...failures.map(f => `  ${f.key}  ${f.rule}  ${f.message}`)] : ['Invariants: ok']),
+    ...(failures.length
+      ? [`INVARIANT FAILURES (${failures.length}):`, ...failures.map(f => `  ${f.key}  ${f.rule}  ${f.message}`)]
+      : ['Invariants: ok']),
     ...(diff.missing.length ? [`Missing cases (${diff.missing.length}): ${diff.missing.join(', ')}`] : []),
     ...(diff.extra.length ? [`Extra cases (${diff.extra.length}): ${diff.extra.join(', ')}`] : []),
-    ...section('Hard', diff.hard, Infinity), ...section('Soft', diff.soft, Infinity),
-    ...section('Improved', diff.improved, limit), ...section('Changed', diff.changed, limit),
+    ...section('Hard', diff.hard, Infinity),
+    ...section('Soft', diff.soft, Infinity),
+    ...section('Improved', diff.improved, limit),
+    ...section('Changed', diff.changed, limit),
     `BENCH ${action} v${SCHEMA_VERSION}: cases=${cases.length} config=${config.maxStates}/${config.memoryMiB} hard=${hard}`
       + ` soft=${diff.soft.length} improved=${diff.improved.length} changed=${diff.changed.length}`
       + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} baseline=${baseline ?? 'none'} source=${source}`,

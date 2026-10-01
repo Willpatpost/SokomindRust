@@ -22,8 +22,11 @@ function recorded(path) {
   assert.equal(file.catalogHash, catalogHash, `${path} was recorded for another catalog; rerun npm run bench:check`);
   const records = /** @type {unknown} */ (file.records);
   const cases = Array.isArray(records) ? records.map(record => `${record.id}/${record.mode}`) : [];
-  assert.deepEqual(cases, catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
-    `${path} must hold one record per catalog puzzle and mode, as bench:check writes it`);
+  assert.deepEqual(
+    cases,
+    catalog.flatMap(puzzle => MODES.map(mode => `${puzzle.id}/${mode}`)),
+    `${path} must hold one record per catalog puzzle and mode, as bench:check writes it`,
+  );
   return /** @type {import('./corpus.mjs').CorpusRecord[]} */ (records);
 }
 
@@ -35,7 +38,11 @@ function recorded(path) {
  * @returns {T}
  */
 function decode(context, run) {
-  try { return run(); } catch (error) { throw new Error(`${context}: ${/** @type {Error} */ (error).message}`, { cause: error }); }
+  try {
+    return run();
+  } catch (error) {
+    throw new Error(`${context}: ${/** @type {Error} */ (error).message}`, { cause: error });
+  }
 }
 
 const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resolve(root, 'web/wasm/sokomind.js')).href);
@@ -51,10 +58,25 @@ for (const reference of native) {
     while (search.advance(8)) {}
     // The worker's own decoder: parity checks what the UI reads, not a copy of it.
     const metrics = decode(context, () => decodeMetricTuple(search.metrics(), search.status()));
-    assert.deepEqual({ status: metrics.status, expanded: metrics.expanded, generated: metrics.generated,
-      best: metrics.best ?? null, lower: metrics.lowerBound ?? null, proof: metrics.proof },
-    { status: reference.status, expanded: reference.expanded, generated: reference.generated,
-      best: reference.moves, lower: reference.lower_bound, proof: reference.proof }, context);
+    assert.deepEqual(
+      {
+        status: metrics.status,
+        expanded: metrics.expanded,
+        generated: metrics.generated,
+        best: metrics.best ?? null,
+        lower: metrics.lowerBound ?? null,
+        proof: metrics.proof,
+      },
+      {
+        status: reference.status,
+        expanded: reference.expanded,
+        generated: reference.generated,
+        best: reference.moves,
+        lower: reference.lower_bound,
+        proof: reference.proof,
+      },
+      context,
+    );
     assert(metrics.reservedBytes <= reference.memory_mib * MIB, `${context}: WASM budget exceeded`);
     assert.deepEqual(Array.from(search.diagnostics()), diagnosticFields.map(field => reference.stats[field]), `${context}: diagnostics`);
     const route = search.solution();
@@ -71,9 +93,15 @@ for (const reference of native) {
         assert.equal(snapshot.pushes, reference.pushes, context);
         for (let i = 0; i < boxes; i++) assert(game.on_goal(i), context);
         verified++;
-      } finally { game.free(); }
+      } finally {
+        game.free();
+      }
     }
-  } finally { search.free(); }
+  } finally {
+    search.free();
+  }
 }
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
-console.log(`WASM retained linear memory: ${(wasm.memory.buffer.byteLength / MIB).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`);
+console.log(
+  `WASM retained linear memory: ${(wasm.memory.buffer.byteLength / MIB).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`,
+);

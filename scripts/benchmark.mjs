@@ -72,8 +72,7 @@ const options = spec => parseArgs({ args: rest, options: spec, strict: true, all
  * @param {{ maxStates: number, memoryMiB: number }} config
  * @param {string[]} [extra]
  */
-const corpus = (config, extra = []) =>
-  nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra]);
+const corpus = (config, extra = []) => nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra]);
 /**
  * @param {string} name
  * @param {string} text
@@ -117,8 +116,16 @@ function check() {
   const diff = compare(baseline.cases, cases, { sameConfig: true });
   const stale = mustRecord(diff);
   console.table(scoreboard(cases));
-  const hard = report({ action: 'check', cases, config, diff, failures, baseline: baseline.sourceRevision,
-    source: sourceRevision(), catalogChangesAreHard: true });
+  const hard = report({
+    action: 'check',
+    cases,
+    config,
+    diff,
+    failures,
+    baseline: baseline.sourceRevision,
+    source: sourceRevision(),
+    catalogChangesAreHard: true,
+  });
   console.log('Raw measurements: target/bench/catalog.json; full report: target/bench/report.txt.');
   if (stale.length) {
     console.error(
@@ -132,8 +139,8 @@ function update() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, 'accept-regressions': { type: 'boolean' } });
   const previous = existsSync(BASELINE) ? committed(BASELINE) : null;
   const config = {
-    maxStates: values.states ? count(values.states, 'states') : previous?.maxStates ?? DEFAULTS.maxStates,
-    memoryMiB: values.memory ? count(values.memory, 'memory') : previous?.memoryMiB ?? DEFAULTS.memoryMiB,
+    maxStates: values.states ? count(values.states, 'states') : (previous?.maxStates ?? DEFAULTS.maxStates),
+    memoryMiB: values.memory ? count(values.memory, 'memory') : (previous?.memoryMiB ?? DEFAULTS.memoryMiB),
   };
   const records = corpus(config);
   raw(records);
@@ -176,7 +183,12 @@ function update() {
 // summary line names it. --update records a new reference only when the
 // invariants hold.
 function observe() {
-  const values = options({ states: { type: 'string' }, memory: { type: 'string' }, repeat: { type: 'string' }, update: { type: 'boolean' } });
+  const values = options({
+    states: { type: 'string' },
+    memory: { type: 'string' },
+    repeat: { type: 'string' },
+    update: { type: 'boolean' },
+  });
   const config = {
     maxStates: values.states ? count(values.states, 'states') : OBSERVE.maxStates,
     memoryMiB: values.memory ? count(values.memory, 'memory') : OBSERVE.memoryMiB,
@@ -197,8 +209,11 @@ function observe() {
       assert.equal(runs.length, repeat, `${id}:${mode}: expected ${repeat} samples`);
       for (const r of runs.slice(1)) assert.deepEqual(strip(r), strip(runs[0]), `${id}:${mode}: nondeterministic search`);
       const firstRoutes = runs.map(r => r.first_route_us).filter(us => us !== null);
-      records.push({ ...runs[0], search_us: median(runs.map(r => r.search_us)),
-        first_route_us: firstRoutes.length ? median(firstRoutes) : null });
+      records.push({
+        ...runs[0],
+        search_us: median(runs.map(r => r.search_us)),
+        first_route_us: firstRoutes.length ? median(firstRoutes) : null,
+      });
     }
   }
   const cases = records.map(r => ({ ...toCase(r), search_us: r.search_us, first_route_us: r.first_route_us }));
@@ -209,29 +224,52 @@ function observe() {
    * @param {number | null} now
    * @param {number | null} then
    */
-  const delta = (now, then) => now === null || then === null ? '' : now - then;
-  console.table(cases.map(c => {
-    const p = pairs.get(key(c));
-    return {
-      id: c.id, mode: c.mode, status: c.status, moves: c.moves, lb: c.lower_bound, proof: c.proof,
-      expanded: c.expanded, generated: c.generated, firstRouteExpanded: c.first_route_expanded,
-      reservedMiB: +(c.reserved_bytes / MIB).toFixed(1), searchMs: +(c.search_us / 1000).toFixed(1),
-      ...(p ? { dMoves: delta(c.moves, p.moves), dLb: delta(c.lower_bound, p.lower_bound),
-        dExpanded: delta(c.expanded, p.expanded), dSearchMs: +((c.search_us - p.search_us) / 1000).toFixed(1) } : {}),
-    };
-  }));
+  const delta = (now, then) => (now === null || then === null ? '' : now - then);
+  console.table(
+    cases.map(c => {
+      const p = pairs.get(key(c));
+      return {
+        id: c.id,
+        mode: c.mode,
+        status: c.status,
+        moves: c.moves,
+        lb: c.lower_bound,
+        proof: c.proof,
+        expanded: c.expanded,
+        generated: c.generated,
+        firstRouteExpanded: c.first_route_expanded,
+        reservedMiB: +(c.reserved_bytes / MIB).toFixed(1),
+        searchMs: +(c.search_us / 1000).toFixed(1),
+        ...(p
+          ? {
+              dMoves: delta(c.moves, p.moves),
+              dLb: delta(c.lower_bound, p.lower_bound),
+              dExpanded: delta(c.expanded, p.expanded),
+              dSearchMs: +((c.search_us - p.search_us) / 1000).toFixed(1),
+            }
+          : {}),
+      };
+    }),
+  );
   console.table(scoreboard(cases));
   for (const f of failures) console.log(`INVARIANT FAILURE  ${f.key}  ${f.rule}  ${f.message}`);
   const state = !reference ? 'none' : comparable ? reference.sourceRevision : 'config-differs';
-  console.log(`OBSERVE v${SCHEMA_VERSION}: boards=${OBSERVE.puzzles.length} config=${config.maxStates}/${config.memoryMiB}`
-    + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} reference=${state}`
-    + (changed.length ? ` changed-boards=${changed.join(',')}` : ''));
+  console.log(
+    `OBSERVE v${SCHEMA_VERSION}: boards=${OBSERVE.puzzles.length} config=${config.maxStates}/${config.memoryMiB}`
+      + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} reference=${state}`
+      + (changed.length ? ` changed-boards=${changed.join(',')}` : ''),
+  );
   save('observe.json', JSON.stringify({ catalogHash, ...config, repeat, records }, null, 2) + '\n');
   if (failures.length) return false;
   if (values.update) {
     const source = sourceRevision();
-    writeFileSync(REFERENCE, serialize({ version: SCHEMA_VERSION, sourceRevision: source, catalogHash, ...config,
-      repeat, puzzles: OBSERVE.puzzles, cases }, order));
+    writeFileSync(
+      REFERENCE,
+      serialize(
+        { version: SCHEMA_VERSION, sourceRevision: source, catalogHash, ...config, repeat, puzzles: OBSERVE.puzzles, cases },
+        order,
+      ),
+    );
     console.log(`Wrote benchmarks/observe-reference.json (${cases.length} rows, source ${source}).`);
   }
   return true;

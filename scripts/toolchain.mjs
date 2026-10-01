@@ -6,7 +6,7 @@ export const root = fileURLToPath(new URL('../', import.meta.url));
 export const env = { ...process.env };
 // Windows names the variable "Path"; writing env.PATH there would add a
 // second, case-sensitive key and drop the system path from child processes.
-const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
 const localCargo = resolve(root, '.tools/cargo');
 if (existsSync(localCargo)) {
   env.CARGO_HOME = localCargo;

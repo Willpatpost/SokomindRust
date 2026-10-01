@@ -48,8 +48,16 @@ export const catalogHash = createHash('sha256').update(catalogText.replace(/\r\n
 // sokomind_search::SearchStats::FIELDS, in order. parity.mjs catches drift: it
 // compares the WASM diagnostics with the native stats read in this order.
 export const diagnosticFields = [
-  'unique_states', 'duplicate_improvements', 'reopened_states', 'stale_pops', 'peak_queue',
-  'pruned_dead_cells', 'pruned_deadlocks', 'pruned_duplicates', 'pruned_assignment', 'pruned_bound',
+  'unique_states',
+  'duplicate_improvements',
+  'reopened_states',
+  'stale_pops',
+  'peak_queue',
+  'pruned_dead_cells',
+  'pruned_deadlocks',
+  'pruned_duplicates',
+  'pruned_assignment',
+  'pruned_bound',
 ];
 
 let built = false;
@@ -65,7 +73,10 @@ export function nativeCorpus(args = []) {
   const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * MIB });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `Corpus exited ${result.status}`);
-  return result.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+  return result.stdout
+    .trim()
+    .split(/\r?\n/)
+    .map(line => JSON.parse(line));
 }
 
 /** Short HEAD sha, marked +dirty when tracked files outside benchmarks/ differ from it. */
