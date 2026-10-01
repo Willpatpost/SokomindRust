@@ -98,7 +98,7 @@ export class BoardView {
     c.fill();
     const label =
       `${width} by ${height} puzzle, ${labels.length} boxes. `
-      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD.`;
+      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD to move, Z to undo.`;
     if (this.canvas.getAttribute('aria-label') !== label) this.canvas.setAttribute('aria-label', label);
   }
 }

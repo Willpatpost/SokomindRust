@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
-const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys or WASD.';
+const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys or WASD to move, Z to undo.';
 // "First Steps": the robot stands directly above the box, whose goal is one
 // cell below it, so a single Down push solves the puzzle.
 const SOLVED = 'Solved in 1 moves and 1 pushes.';
@@ -32,7 +32,7 @@ test('solves the tutorial with one keyboard push', async ({ page }) => {
   await expect(page.locator('#pushes')).toHaveText('1');
   await expect(page.locator('#board')).toHaveAttribute(
     'aria-label',
-    '5 by 5 puzzle, 1 boxes. 1 moves, 1 pushes. Solved. Use arrow keys or WASD.',
+    '5 by 5 puzzle, 1 boxes. 1 moves, 1 pushes. Solved. Use arrow keys or WASD to move, Z to undo.',
   );
   await expect(page.locator('#solve')).toBeDisabled();
   await expect(page.locator('#undo')).toBeEnabled();
