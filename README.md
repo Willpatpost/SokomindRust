@@ -7,11 +7,11 @@ PostgreSQL persistence. No frontend framework and no JavaScript game-rule duplic
 
 ## Run locally
 
-Requires Node 22.18+ (24 recommended), Rust 1.98.1, and a native linker (Visual
-Studio C++ Build Tools on Windows). PostgreSQL is optional for local play/search.
+Requires Node 24.14+, Rust 1.98.1, and a native linker (Visual Studio C++ Build
+Tools on Windows). PostgreSQL is optional for local play/search.
 `rust-toolchain.toml` pins the Rust version, and `.node-version` the exact Node
-that CI and the Docker image use (24.14.0). Of the checks, only the Node unit
-tests also run on 22.18.0 (CI's `node-floor` job).
+that CI and the Docker image use (24.14.0), which is also the floor
+`package.json`'s `engines` gives.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -137,8 +137,10 @@ arena. HTTP is sufficient here; there is no multiplayer or continuous server
 stream requiring WebSockets.
 
 The search uses dense u16 cells, precomputed neighbors, fixed inline box arrays,
-equal-label canonicalization, an arena-index transposition table, reusable flood
-buffers, reverse-push distances, and a minimum-cost assignment per box label
+equal-label canonicalization (the start's label groups are sorted once; after
+each push only the pushed box shifts within its group until the group is sorted
+again), an arena-index transposition table, reusable flood buffers, reverse-push
+distances, and a minimum-cost assignment per box label
 (only the pushed box's label group is re-scored per child: a lookup for one box,
 a re-solve for two, and a one-row dual repair of the parent's duals for groups
 of 3 or more; pushes onto a cell with no reachable goal of the box's label are
@@ -146,7 +148,19 @@ dropped before the estimate).
 Each edge is one push plus a shortest walk to its support cell. Keeper position
 remains part of state identity. Walks are reconstructed only for reported routes.
 Each arena record is 12 bytes plus its box cells, each queue entry one 8-byte
-packed `(f, h, id)` key, and each table slot a 4-byte arena index.
+key packing `f`, `h`, and a 26-bit arena id, and each table slot a 4-byte arena
+index.
+
+The estimate is the assignment's push count. The start state also adds the
+keeper's walk to its first push: the larger of the Manhattan distances to a cell
+beside the nearest box and to the stand of the nearest statically legal push,
+one whose target cell and stand are free floor and whose target is not a dead
+cell for that box. Every route from an unsolved state opens with such a push,
+walls and other boxes only lengthen the walk to it, and those walking moves are
+disjoint from the pushes the assignment counts, so the start's estimate stays
+admissible. On a pushed child the same stand walk only prunes: once a route is
+known, a child whose moves so far, estimate, and walk reach its length is
+dropped, so queue keys and stored estimates stay push-only.
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
@@ -179,15 +193,24 @@ are that letter in lowercase. `o`, `r`, `s` and `x` are reserved, because no box
 carries `O`, `R` or `S` and `X`'s goal is spelled `S`; the parser rejects them
 with their row and column, like any other unsupported symbol.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
-are limited to 100,000 moves. Native requests cap at 30 seconds, 1,000,000 states
-per arena, 64 MiB accounted search storage, and one concurrent CPU job by default
-(see `SOLVE_CONCURRENCY` under Configuration). At 64 MiB the memory budget, not
-the state cap, binds on boards with 20 or more boxes (the catalog's 20-22 box
-boards fill their arenas at about 0.91-0.97M records), and such a run reports a
-memory limit. The search memory metric is computed from reserved buffer sizes
-(arena, queue, table, and per-cell flood, deadlock, dead-cell, and distance
-buffers) plus a fixed allowance for the longest route and scratch buffers, not
-process RSS, allocator overhead, WASM runtime, or frontend memory.
+are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
+per arena (`sokomind_search::MAX_STATES`), 128 MiB accounted search storage, and
+one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration);
+the search crate, and so the browser worker, accepts budgets up to 256 MiB. The
+web app sends the full state cap and the budget its memory select names (16 to
+128 MiB, 64 by default) to either engine. A state costs a 12-byte record, 2
+bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
+memory budget always binds before the state cap: on the catalog's boards 64 MiB
+holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 256 MiB 3.67-8.39M, and a
+run that fills its arena reports a memory limit. The arena reserves the smaller
+of the state cap and what the budget holds when the search starts, so a request
+at the default cap reserves nearly its whole budget up front, even on a small
+board: the memory budget is the bound a caller declares, and one that wants a
+smaller footprint asks for less memory or fewer states. The search memory metric
+is computed from reserved buffer sizes (arena, queue, table, and per-cell flood,
+deadlock, dead-cell, and distance buffers) plus a fixed allowance for the
+longest route and scratch buffers, not process RSS, allocator overhead, WASM
+runtime, or frontend memory.
 Deadline checks occur between bounded expansion batches; setup/reconstruction can
 add latency.
 
@@ -200,7 +223,7 @@ add latency.
   answer from the previous probe instead of waiting, so those that race the
   server's first probe report `false` even with the database up; the web app
   asks again (below) and picks persistence up then.
-* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 1000000, memory_mib: 64}`.
+* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 60000000, memory_mib: 128}`.
   Only `rows` and `mode` are required; the values shown are the defaults. The
   limits start at 10 ms, 1 state, and 4 MiB and cap as under Layout and
   boundaries. The reply is `{status, route, moves, pushes, expanded, generated,
@@ -291,7 +314,7 @@ number, stops startup before the database wait.
 | `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
-| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 64 MiB accounted search storage |
+| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 128 MiB accounted search storage, so up to 1 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
 | `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
 | `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
@@ -326,17 +349,25 @@ and `TRUSTED_PROXIES` ever differ, every client shares one rate-limit bucket.
 
 CI (`.github/workflows/ci.yml`) runs these on pushes to `main`, on pull
 requests, and on demand (`workflow_dispatch`); a push or pull request that
-changes only Markdown files or `LICENSE` starts no run. The first four run on
-Ubuntu and Windows and the rest on Ubuntu with a PostgreSQL 18 service. It
-builds the WASM package once and checks parity against the native records
-`bench:check` wrote. A `node-floor` job runs the `test:web` and `test:scripts`
-files on Node 22.18.0 as well, the floor `package.json`'s `engines` gives.
+changes only Markdown files or `LICENSE` starts no run. The first five run on
+Ubuntu and Windows and the rest, after `npm ci`, on Ubuntu with a PostgreSQL 18
+service. Every job names its runner image exactly (`ubuntu-24.04`,
+`windows-2025-vs2026`) rather than a `-latest` label, and those that run Node
+use the version `.node-version` pins, which is also the `engines` floor, so no
+separate floor job exists. It builds the WASM package once and checks parity
+against the native records `bench:check` wrote. Dependabot (`.github/dependabot.yml`) opens weekly
+update pull requests for the pinned actions and the npm and Cargo dependencies,
+each release after a 7-day cooldown, and CI checks them like any other; the Rust
+toolchain, Node version, Docker base tags, `wasm-bindgen`, and `@types/node`
+beyond patches move by hand.
 
 ```sh
 npm run fmt:check
 npm run lint:rust
+npm run doc:rust
 npm run test:rust
 npm run test:release
+npm run format:check
 npm run test:web
 npm run test:scripts
 npm run check:scripts
@@ -356,12 +387,19 @@ is a SKIP, never a PASS, while `SOKOMIND_TEST_DATABASE_URL` is unset. It exits 1
 when a step failed and 2 on an unknown option or argument, and must be started
 through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
 `--`, so quote it there: `npm run validate '--' --quick`. It runs neither
-`npm ci` nor CI's `node-floor` and deploy jobs.
+`npm ci` nor CI's deploy job.
 
 `lint:rust` runs Clippy on every target with warnings as errors, under the
 workspace lints in `Cargo.toml`: unsafe code is denied, and an exported item or
 crate root (tests and examples included) without a doc fails. `--keep-going`
-lets one run report every failing target, not just the first. `test:rust` runs the core, search, and server
+lets one run report every failing target, not just the first. `doc:rust` builds
+the workspace's own docs (`cargo doc --workspace --no-deps`); CI and `validate`
+set `RUSTDOCFLAGS=-D warnings`, so a broken intra-doc link, a link from a public
+item to a private one, or any other rustdoc warning fails the step, where a
+plain `npm run doc:rust` only prints it. `format:check` runs Prettier
+(`prettier --check .`) over what `.prettierignore` leaves: the web app,
+`scripts/*.mjs`, and the root config files, in the style `.prettierrc.json`
+sets; `npm run format` rewrites them. `test:rust` runs the core, search, and server
 tests and `test:release` the core and search tests under the `release-test`
 profile, which keeps release optimization without debug assertions but drops
 cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries
@@ -383,28 +421,41 @@ catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each
 native run (status, counters, bounds, proof, diagnostics, and route) and replays
 each route.
-`bench:observe` runs four hard catalog boards in every mode at 1,000,000 states
-and 64 MiB, three times each, and fails only on a false proof or bound, a
-nondeterministic run, or a crash. `test:db` runs the ignored `live_postgres_*`
-server tests against `SOKOMIND_TEST_DATABASE_URL`, a dedicated, disposable
+`bench:observe` runs four hard catalog boards in every mode at a fixed 1,000,000
+states and 64 MiB, three times each: an observation size, recorded in
+`benchmarks/observe-reference.json` and far below the state cap so a run stays
+short (`--states` and `--memory` override it). It fails only on a false proof
+or bound, a nondeterministic run, or a crash. `test:db` runs the ignored
+`live_postgres_*` server tests against `SOKOMIND_TEST_DATABASE_URL`, a dedicated, disposable
 database that allows `CREATE SCHEMA`. `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
 `npx playwright install chromium`. With `CI` set, as in CI, a leftover
 `test.only` fails the run.
 
-CI's `deploy` job checks the deployment files and pushes and starts nothing. The
-Dockerfile's `NODE_VERSION` must equal `.node-version`, and its `rust-base` tag
-and `Cargo.toml`'s `rust-version` the version `rust-toolchain.toml` pins;
+CI's `deploy` job checks the deployment files, builds both images, and
+smoke-tests the stack they make; it pushes nothing. The Dockerfile's
+`NODE_VERSION` must equal `.node-version`, and its `rust-base` tag and
+`Cargo.toml`'s `rust-version` the version `rust-toolchain.toml` pins;
 `docker compose config` must accept `compose.yaml`, the web stage's NGINX image
 must accept `deploy/nginx.conf` (`nginx -t`), and both image targets, `server`
-and `web`, must build. It runs when a push or pull request changes a file the
-images or their configuration come from (the Dockerfile, `compose.yaml`,
-`deploy`, the workflow, and the Rust and npm manifests, locks, and version pins;
-the workflow lists them all), on every manual run, and weekly (Mondays at 06:17
-UTC), when it is the only job, because base images change upstream while the
-repository does not. A change to other sources alone waits for the weekly or a
-manual run.
+and `web`, must build. It then starts the stack as Full stack with Docker
+describes, with `.env` copied from `.env.example` and a `compose.override.yaml`
+that runs the two images just built, and checks it through NGINX at
+`127.0.0.1:8080`: `/api/health` reports persistence (the API reached PostgreSQL
+and ran its migrations), an optimal solve of the ultra-tiny board returns its
+one-push route, a progress save reads back, `/` serves the app shell, and the
+WASM file is served as `application/wasm`. `docker compose down --volumes`
+removes the stack afterwards, also after a failure, whose container states and
+logs are printed first. The job runs when a push or pull request changes a file
+the images, their configuration, or the smoke test come from (the Dockerfile,
+`.dockerignore`, `compose.yaml`, `.env.example`, `deploy`, the workflow, and
+the Rust and npm manifests, locks, and version pins; the workflow lists them
+all), when the base to compare against is missing or can no longer be fetched
+(the push that creates a branch, or a force push), on every manual run, and
+weekly (Mondays at 06:17 UTC), when it is the only job, because base images
+change upstream while the repository does not. A change to other sources alone
+waits for the weekly or a manual run.
 
 Rust tests live in `crates/core/tests` (`parse.rs`, `game.rs`) and
 `crates/search/tests`, besides unit tests in the search and server sources; the
