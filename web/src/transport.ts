@@ -59,6 +59,7 @@ function metrics(value: unknown): Metrics {
     throw new Error('Inconsistent bounded proof');
   return result;
 }
+/** A worker message as a WorkerReply; throws on anything malformed or inconsistent. */
 export function decodeWorkerReply(value: unknown): WorkerReply {
   const v = object(value);
   if (v.type === 'error') {
@@ -79,6 +80,8 @@ function elapsed(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('Invalid solver elapsed time');
   return value;
 }
+/** POST /api/solve's ResultBody (crates/server/src/solve.rs) as a done SearchUpdate, held to the
+ * checks a worker's final update gets. */
 export function decodeNativeReply(value: unknown): SearchUpdate {
   const v = object(value);
   let p: Proof = { kind: 'none' }, lower: number | undefined;
@@ -167,6 +170,7 @@ export function decodeProgress(value: unknown): ProgressRecord {
     puzzleId: v.puzzle_id, route: stored, moves: counter(v.moves, 'moves', 'progress'), pushes: counter(v.pushes, 'pushes', 'progress'),
   };
 }
+/** A failed response's JSON `error` text, or undefined when its body carries none. */
 export async function errorText(response: Response): Promise<string | undefined> {
   const value: unknown = await response.json().catch(() => null);
   if (!value || typeof value !== 'object') return undefined;

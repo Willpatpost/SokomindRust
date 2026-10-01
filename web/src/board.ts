@@ -12,6 +12,7 @@ const MAX_BOARD_HEIGHT_PX = 540;
 /** The smallest tile, in CSS pixels. A board that would need smaller tiles to fit keeps this size
  * and scrolls instead. */
 const MIN_TILE_PX = 4;
+/** Draws the board on a canvas sized to its container, and keeps the canvas's aria-label current. */
 export class BoardView {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -26,6 +27,8 @@ export class BoardView {
     this.ctx = ctx;
     this.wrap = getComputedStyle(canvas.parentElement!);
   }
+  /** Paints a `width` by `height` board: `tiles` and each box's label in `labels` as WasmGame
+   * returns them, the boxes and robot from `state`, and `onGoal` per box in label order. */
   draw(
     width: number,
     height: number,

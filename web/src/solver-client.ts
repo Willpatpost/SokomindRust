@@ -14,6 +14,7 @@ const CANCEL_GRACE_MS = 1000;
  * The 5 s margin leaves the server time to answer after its own deadline. */
 const NATIVE_GRACE_MS = 5000;
 
+/** The part of a Worker that SolverClient uses, so tests can pass a fake. */
 export interface WorkerPort {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
@@ -42,6 +43,8 @@ interface Options {
   status(text: string): void;
   verify(prefix: string, route: string): void;
 }
+/** Runs one search at a time on either engine, replay-checks every route it reports through
+ * `verify` before showing it, and keeps the last verified route after the search ends. */
 export class SolverClient {
   state: SolverState = { kind: 'idle' };
   private options: Options;
@@ -52,8 +55,11 @@ export class SolverClient {
     this.clock = options.scheduler ?? browserScheduler;
     this.request = unboundFetch(options.fetch);
   }
+  /** Whether a search is running. */
   get busy() { return this.state.kind === 'browser-running' || this.state.kind === 'native-running'; }
+  /** The last verified route, which starts where `prefix` leaves the puzzle. */
   get route() { return this.state.kind === 'idle' ? undefined : this.state.route; }
+  /** The moves played before the search started; '' when idle. */
   get prefix() { return this.state.kind === 'idle' ? '' : this.state.prefix; }
   private release(active: Active) {
     this.clock.clearInterval(active.timer);
@@ -64,11 +70,14 @@ export class SolverClient {
       active.worker.terminate();
     } else active.abort.abort();
   }
+  /** Ends any running search without a status and forgets its route. */
   reset() {
     if (this.state.kind === 'browser-running' || this.state.kind === 'native-running') this.release(this.state);
     this.state = { kind: 'idle' };
     this.options.changed();
   }
+  /** Forgets a completed search's route but keeps its prefix, once the position has moved on from
+   * where the route starts (its playback ended or was blocked). A running search is unaffected. */
   dropRoute() {
     if (this.state.kind === 'completed') this.state = { kind: 'completed', prefix: this.state.prefix };
     this.options.changed();
@@ -111,6 +120,8 @@ export class SolverClient {
     if (update.type === 'done') { this.finish(active); this.options.elapsed(update.elapsedMs); }
     else this.options.changed();
   }
+  /** Starts a search unless one is running. A browser search reports through the callbacks; the
+   * promise resolves once a native reply has been handled. */
   async solve(engine: Engine, request: SolveRequest): Promise<void> {
     if (this.busy) return;
     this.reset();
@@ -165,6 +176,8 @@ export class SolverClient {
       if (this.state === active) this.accept(active, decodeNativeReply(value));
     } catch (error) { this.fail(active, error); }
   }
+  /** Asks a browser search to stop and report its best, writing it off after CANCEL_GRACE_MS;
+   * stops waiting for a native search at once. */
   cancel() {
     const active = this.state;
     if (active.kind === 'browser-running') {

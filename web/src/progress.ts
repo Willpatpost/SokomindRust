@@ -29,6 +29,8 @@ const HEALTH_TIMEOUT_MS = 1500;
 const SAVE_DELAY_MS = 350;
 /** How long a progress read or save waits for the server before it is abandoned. */
 const REQUEST_TIMEOUT_MS = 5000;
+/** Keeps the selected puzzle's session and verified best in browser storage and, while
+ * /api/health reports persistence, syncs solving routes with the server. */
 export class ProgressClient {
   /** Whether /api/health last reported PostgreSQL; set by probe(). */
   persistence = false;
@@ -81,6 +83,8 @@ export class ProgressClient {
     this.probeDelay = Math.min(2 * delay, PROBE_MAX_MS);
     this.probeTimer = this.clock.timeout(() => { this.probeTimer = undefined; void this.probe(); }, delay);
   }
+  /** Switches to puzzle `id` on `rows`: cancels a pending session save, shows the stored best
+   * and pulls the server's. */
   select(id: string, rows: string) {
     if (this.saveTimer !== undefined) this.clock.clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
@@ -88,6 +92,8 @@ export class ProgressClient {
     this.display(this.best());
     void this.pull();
   }
+  /** Saves `actions` as the session's moves; `delayed` waits SAVE_DELAY_MS for another move,
+   * whose save replaces this one. */
   session(actions: string, delayed = false) {
     if (!this.context) return;
     if (this.saveTimer !== undefined) this.clock.clearTimeout(this.saveTimer);
@@ -102,6 +108,7 @@ export class ProgressClient {
     if (delayed) this.saveTimer = this.clock.timeout(save, SAVE_DELAY_MS);
     else save();
   }
+  /** The selected puzzle's stored best, or null unless it replays to its recorded counts. */
   best(): storage.Best | null {
     if (!this.context) return null;
     const best = storage.best(this.context.id, this.context.rows);
@@ -111,6 +118,8 @@ export class ProgressClient {
       return score.moves === best.moves && score.pushes === best.pushes ? best : null;
     } catch { return null; }
   }
+  /** Stores a solving route only when it is strictly better (fewer moves, then fewer pushes)
+   * than the verified stored best, and shows whichever best remains. */
   keep(fullRoute: string, moves: number, pushes: number) {
     if (!this.context) return;
     // Only a strictly better route replaces the best, so a tie with the best on show
@@ -160,6 +169,7 @@ export class ProgressClient {
         : 'Server already stored an equal or better route for this puzzle.');
     } catch { if (this.context === context) this.options.status(failed); }
   }
+  /** Fetches the server's stored best and keeps it if it replays to the counts the server sent. */
   async pull() {
     const context = this.context;
     if (!this.remote(context)) return;
