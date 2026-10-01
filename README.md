@@ -402,13 +402,13 @@ plain `npm run doc:rust` only prints it. `format:check` runs Prettier
 style `.prettierrc.json` sets; `npm run format` rewrites them. Commits that only
 reformat are listed in `.git-blame-ignore-revs`, which GitHub's blame view
 skips; `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes a local
-`git blame` skip them too. `test:rust` runs the core, search, and server tests
-and `test:release` the core and search tests under the `release-test` profile,
-which keeps release optimization without debug assertions but drops cross-crate
-LTO and uses 16 codegen units, so it builds faster; shipped binaries use
-`release`. `check:scripts` type-checks the helpers in `scripts` from their JSDoc
-(`tsc -p scripts`, strict). It stays out of `check:web`, which `build:web` runs
-in the Docker web build, where there is no `scripts` directory.
+`git blame` skip them too. `test:rust` runs every crate's tests except the WASM
+adapter's, and `test:release` the core and search tests under the `release-test`
+profile, which keeps release optimization without debug assertions but drops
+cross-crate LTO and uses 16 codegen units, so it builds faster; shipped binaries
+use `release`. `check:scripts` type-checks the helpers in `scripts` from their
+JSDoc (`tsc -p scripts`, strict). It stays out of `check:web`, which `build:web`
+runs in the Docker web build, where there is no `scripts` directory.
 `test:web` (`web/tests`) and `test:scripts` (`scripts/*.test.mjs`) are Node unit
 tests of the web modules, the benchmark gate, and the validate script, whose
 step list must match `ci.yml`'s, and need no WASM build. `bench:check` runs

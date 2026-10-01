@@ -20,7 +20,7 @@
     "format:check": "prettier --check .",
     "lint:rust": "node scripts/rust.mjs clippy --workspace --all-targets --keep-going -- -D warnings",
     "doc:rust": "node scripts/rust.mjs doc --workspace --no-deps",
-    "test:rust": "node scripts/rust.mjs test -p sokomind-core -p sokomind-search -p sokomind-server",
+    "test:rust": "node scripts/rust.mjs test --workspace --exclude sokomind-wasm",
     "test:release": "node scripts/rust.mjs test --profile release-test -p sokomind-core -p sokomind-search",
     "test:web": "node --test web/tests/*.test.ts",
     "test:scripts": "node --test scripts/*.test.mjs",
