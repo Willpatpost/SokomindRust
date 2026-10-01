@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { STATUSES } from '../src/protocol.ts';
+import { MAX_ROUTE, STATUSES } from '../src/protocol.ts';
 import {
   decodeHealth, decodeMetricTuple, decodeNativeReply, decodeProgress, decodeSaveReply, decodeSnapshot, decodeWorkerReply,
   encodeSolveRequest, nativeErrorText,
@@ -35,6 +35,16 @@ test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   for (const tuple of [[1], [1, 2, 3, 4, 99, 0], [1, 2, 3, 0xffffffff, 2, 0], [1, 2, 3, 2, 1, 3]])
     assert.throws(() => decodeMetricTuple(tuple, 'solved'));
   assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'));
+});
+test('a best past MAX_ROUTE is a legal count, but a route past it is still refused', () => {
+  for (const best of [MAX_ROUTE + 1, 0xfffffffe])
+    assert.equal(decodeMetricTuple([2, 4, 128, best, 0, 0xffffffff], 'running').best, best);
+  const proven = decodeMetricTuple([2, 4, 128, MAX_ROUTE + 1, 2, MAX_ROUTE + 1], 'solved');
+  assert.deepEqual(proven.proof, { kind: 'optimal', moves: MAX_ROUTE + 1 });
+  const over = { ...progress(), metrics: { ...progress().metrics, best: MAX_ROUTE + 1 } };
+  const reply = decodeWorkerReply(over);
+  assert.ok(reply.type === 'progress' && reply.metrics.best === MAX_ROUTE + 1 && reply.route === undefined);
+  assert.throws(() => decodeWorkerReply({ ...over, route: 'D'.repeat(MAX_ROUTE + 1) }), /Invalid solver route/);
 });
 test('every search status decodes as itself and no other string does', () => {
   const none = [1, 2, 3, 0xffffffff, 0, 0xffffffff];

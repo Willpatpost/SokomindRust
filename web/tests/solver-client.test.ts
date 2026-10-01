@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SolverClient } from '../src/solver-client.ts';
-import { MAX_ROUTE, MAX_STATES, type SolveRequest } from '../src/protocol.ts';
+import { MAX_ROUTE, MAX_STATES, PAST_LIMIT_MESSAGE, type SolveRequest } from '../src/protocol.ts';
 import { Clock, Worker, brandCheckedFetch, deferred, native, progress, withGlobalFetch } from './fakes.ts';
 const request: SolveRequest = { rows: 'rows', actions: '', mode: 'optimal', maxStates: MAX_STATES, memoryMiB: 64, timeMs: 10 };
 function setup(overrides: Partial<ConstructorParameters<typeof SolverClient>[0]> = {}) {
@@ -47,6 +47,17 @@ test('unverified and overflowing routes are rejected before becoming playable', 
   assert.equal(rejected.client.route, undefined); assert.match(rejected.statuses[0], /blocked replay/);
   const overflow = setup(); await overflow.client.solve('browser', { ...request, actions: 'U'.repeat(MAX_ROUTE) });
   overflow.worker.reply(progress('D')); assert.equal(overflow.client.route, undefined); assert.equal(overflow.verified.length, 0);
+  // ReplayError::PastLimit's text in crates/core/src/game.rs, which POST /api/solve sends too.
+  assert.deepEqual(overflow.statuses, ['Position and route together exceed the 100000-move replay limit']);
+});
+test('a best past the replay limit leaves no route, and the replay-limit error ends the search', async () => {
+  const { client, worker, statuses, updates } = setup();
+  await client.solve('browser', request);
+  worker.reply({ ...progress(), metrics: { ...progress().metrics, best: MAX_ROUTE + 1 } });
+  assert.equal(client.busy, true); assert.equal(client.route, undefined); assert.equal(updates.length, 1);
+  worker.reply({ type: 'error', message: PAST_LIMIT_MESSAGE });
+  assert.equal(client.state.kind, 'completed'); assert.equal(client.route, undefined); assert.deepEqual(statuses, [PAST_LIMIT_MESSAGE]);
+  assert.equal(worker.terminated, true);
 });
 test('unknown proofs fail safely and do not render as unsolvable', async () => {
   const { client, worker, statuses, updates } = setup(); await client.solve('browser', request);

@@ -1,4 +1,4 @@
-import { MAX_ROUTE, errorMessage, type SearchUpdate, type SolveRequest, type WorkerRequest } from './protocol.ts';
+import { MAX_ROUTE, PAST_LIMIT_MESSAGE, errorMessage, type SearchUpdate, type SolveRequest, type WorkerRequest } from './protocol.ts';
 import { browserScheduler, type Scheduler } from './scheduler.ts';
 import { decodeNativeReply, decodeWorkerReply, encodeSolveRequest, errorText, nativeErrorText, unboundFetch } from './transport.ts';
 
@@ -93,8 +93,8 @@ export class SolverClient {
   private accept(active: Active, update: SearchUpdate) {
     if (this.state !== active) return;
     if (update.route !== undefined) {
-      if (active.prefix.length + update.route.length > MAX_ROUTE)
-        throw new Error(`Position and route together exceed the ${MAX_ROUTE}-move replay limit`);
+      // The worker and the server both withhold such a route; a faulty one still never reaches verify.
+      if (active.prefix.length + update.route.length > MAX_ROUTE) throw new Error(PAST_LIMIT_MESSAGE);
       this.options.verify(active.prefix, update.route);
       active.route = update.route;
     }

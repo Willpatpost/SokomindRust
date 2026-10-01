@@ -1,5 +1,8 @@
 /** sokomind_core::MAX_ROUTE: the longest route Rust replays. */
 export const MAX_ROUTE = 100_000;
+/** sokomind_core::ReplayError::PastLimit's text, which POST /api/solve sends when the position's
+ * moves plus the best route pass MAX_ROUTE. The worker and SolverClient show the same text. */
+export const PAST_LIMIT_MESSAGE = `Position and route together exceed the ${MAX_ROUTE}-move replay limit`;
 /** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
  * A state costs about 28 B plus 2 B per box (record, queue entry, box cells and index
  * table), so the memory budget always binds first: on the catalog's boards 64 MiB holds

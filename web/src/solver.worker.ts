@@ -1,6 +1,6 @@
 import init, { WasmSearch } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
-import { errorMessage, type WorkerReply, type WorkerRequest } from './protocol.ts';
+import { MAX_ROUTE, PAST_LIMIT_MESSAGE, errorMessage, type WorkerReply, type WorkerRequest } from './protocol.ts';
 import { decodeMetricTuple } from './transport.ts';
 /** Search time between yields: a 'cancel' message is only read while the loop is yielded. */
 const SLICE_MS = 8;
@@ -31,6 +31,10 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
     await init({ module_or_path: wasmUrl });
     const r = data.request;
     search = new WasmSearch(r.rows, r.actions, r.mode, r.maxStates, r.memoryMiB);
+    // The longest route the position leaves room for. A longer best is never rebuilt, since no
+    // game could replay it after the position's moves; a search that ends with one fails with the
+    // text POST /api/solve sends for it, and a Quality run may still improve below the limit.
+    const routeLimit = MAX_ROUTE - r.actions.length;
     let reportedBest: number | undefined;
     let lastReport = 0;
     let lastRoute = 0;
@@ -49,10 +53,12 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
       const elapsedMs = performance.now() - started;
       // Only a finished search needs its status string from Rust.
       const metrics = decodeMetricTuple(search.metrics(), running ? 'running' : search.status());
+      const best = metrics.best;
+      if (!running && best !== undefined && best > routeLimit) throw new Error(PAST_LIMIT_MESSAGE);
       // Rebuilding a route walks every push, so a stream of Quality improvements is
       // sampled every ROUTE_SAMPLE_MS; the first route and the final best always go out.
-      const best = metrics.best;
       const improved = best !== undefined
+        && best <= routeLimit
         && (reportedBest === undefined || (best < reportedBest && (!running || elapsedMs - lastRoute >= ROUTE_SAMPLE_MS)));
       if (improved || !running || elapsedMs - lastReport >= REPORT_MS) {
         // Serialize only tiny telemetry and a newly improved, Rust-verified route.

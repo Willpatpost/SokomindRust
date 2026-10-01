@@ -47,7 +47,8 @@ function metrics(value: unknown): Metrics {
     best: optionalCounter(m.best, 'best moves'), lowerBound: optionalCounter(m.lowerBound, 'lower bound'),
     proof: proof(m.proof), status: status(m.status),
   };
-  if (result.best !== undefined && result.best > MAX_ROUTE) throw new Error('Invalid solver best moves');
+  // `best` is only a count, which saturates in Rust instead of stopping at MAX_ROUTE, so a legal
+  // search may report one past it; route() caps every route actually sent.
   if (result.best !== undefined && result.lowerBound !== undefined && result.lowerBound > result.best)
     throw new Error('Invalid solver bounds');
   if (result.proof.kind === 'unsolvable' && (result.best !== undefined || result.status !== 'exhausted'))
