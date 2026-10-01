@@ -486,6 +486,8 @@ pasted routes are uppercased and stripped of whitespace, which the reference's
 route decoder rejects; undo is Z (the reference uses U or Ctrl+Z and binds Z to
 Zen mode); touch input is one-finger swipes plus on-screen buttons, and a board
 too big to fit pans instead of taking swipes (the reference also has tap-to-move);
-`Cargo.lock` contains sqlx's optional MySQL and SQLite drivers because
-Cargo locks all-target resolution even when they are never compiled, so
-`cargo audit` may false-positive on their crates.
+`Cargo.lock` contains sqlx's optional MySQL and SQLite drivers, though they
+are never compiled, because the sqlx `migrate` and `macros` features the
+server enables name them only through weak `dep?/feature` references, which
+Cargo locks anyway (rust-lang/cargo#10801), so `cargo audit` may
+false-positive on their crates.
