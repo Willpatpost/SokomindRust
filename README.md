@@ -361,6 +361,11 @@ against the native records `bench:check` wrote. Dependabot
 actions and the npm and Cargo dependencies, each release after a 7-day
 cooldown, and CI checks them like any other; the Rust toolchain, Node version,
 Docker base tags, `wasm-bindgen`, and `@types/node` beyond patches move by hand.
+`Cargo.lock` contains sqlx's optional MySQL and SQLite drivers, though they
+are never compiled, because the sqlx `migrate` and `macros` features the
+server enables name them only through weak `dep?/feature` references, which
+Cargo locks anyway (rust-lang/cargo#10801), so `cargo audit` may
+false-positive on their crates.
 
 ```sh
 npm run fmt:check
@@ -486,9 +491,4 @@ stop at the 100,000-move replay limit (the reference has no in-game cap);
 pasted routes are uppercased and stripped of whitespace, which the reference's
 route decoder rejects; undo is Z (the reference uses U or Ctrl+Z and binds Z to
 Zen mode); touch input is one-finger swipes plus on-screen buttons, and a board
-too big to fit pans instead of taking swipes (the reference also has tap-to-move);
-`Cargo.lock` contains sqlx's optional MySQL and SQLite drivers, though they
-are never compiled, because the sqlx `migrate` and `macros` features the
-server enables name them only through weak `dep?/feature` references, which
-Cargo locks anyway (rust-lang/cargo#10801), so `cargo audit` may
-false-positive on their crates.
+too big to fit pans instead of taking swipes (the reference also has tap-to-move).

@@ -37,7 +37,9 @@ updates:
         update-types: [version-update:semver-major, version-update:semver-minor]
     open-pull-requests-limit: 5
 
-  # Likewise for the Rust workspace's manifests and Cargo.lock.
+  # Likewise for the Rust workspace's manifests and Cargo.lock. Dependabot
+  # counts a 0.x minor bump (sqlx 0.8 to 0.9) as major, as Cargo's semver rule
+  # does, so it arrives alone even though its commit metadata says semver-minor.
   - package-ecosystem: cargo
     directory: /
     schedule:
