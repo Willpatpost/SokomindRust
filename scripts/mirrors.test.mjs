@@ -17,14 +17,16 @@ function source(path) {
 }
 
 /**
- * The text a repo file's only match of `pattern` captures.
+ * The text a repo file's only match of `pattern` captures. A Markdown file's whitespace runs
+ * match as single spaces, so re-wrapping a README paragraph keeps its pins.
  * @param {string} path Relative to the repo root.
  * @param {RegExp} pattern One capture group.
  * @returns {string}
  */
 function text(path, pattern) {
   const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-  const matches = [...source(path).matchAll(new RegExp(pattern.source, flags))];
+  const body = path.endsWith('.md') ? source(path).replaceAll(/\s+/g, ' ') : source(path);
+  const matches = [...body.matchAll(new RegExp(pattern.source, flags))];
   assert.equal(matches.length, 1, `${path} matches ${pattern} ${matches.length} times, not once`);
   const value = matches[0][1];
   assert.ok(value, `${path}'s match of ${pattern} captures nothing`);
@@ -665,6 +667,13 @@ test("the README and Mode's docs quote the weights of Policy::FAST and Policy::Q
   assert.equal(read('README.md', /starts over at\s+`g \+ (\d+)h`/), quality);
   assert.equal(read('crates/search/src/lib.rs', /then weight (\d+) in the same arena/), quality);
   assert.equal(read('crates/search/src/lib.rs', /starts over at weight (\d+)\./), quality);
+});
+
+test("the README quotes heuristic.rs's REPAIR_CROSSOVER", () => {
+  assert.equal(
+    read('README.md', /for groups\s+of (\d+) or more/),
+    read('crates/search/src/heuristic.rs', /const REPAIR_CROSSOVER: usize = (\d+);/),
+  );
 });
 
 test("the README quotes arena.rs's ID_BITS and its record and queue entry sizes", () => {

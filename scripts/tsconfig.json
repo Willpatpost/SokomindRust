@@ -11,7 +11,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    // parity.mjs imports the web app's decoders from web/src/transport.ts.
+    // parity.mjs and bench-gate.mjs import web/src/transport.ts and web/src/protocol.ts.
     "allowImportingTsExtensions": true
   },
   "include": ["*.mjs"]
