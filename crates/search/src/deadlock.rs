@@ -141,7 +141,11 @@ impl Deadlock {
 #[cfg(test)]
 mod tests {
     use super::{Deadlock, EMPTY};
-    use crate::{engine::canonicalize, heuristic::Heuristic, testkit::Lcg};
+    use crate::{
+        engine::canonicalize,
+        heuristic::Heuristic,
+        testkit::{Lcg, random_room},
+    };
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
     use std::collections::HashMap;
 
@@ -306,25 +310,6 @@ mod tests {
         assert!(board.solved(&state(from, &[a, b, c, to])));
         deadlock.refresh(&[b, a, c, from]);
         assert!(deadlock.is_dead_after_push(&board, from, to));
-    }
-
-    /// A walled room with a 4x4 floor holding one box set with its goals,
-    /// the robot and up to two inner walls, all on distinct cells.
-    fn random_room(rng: &mut Lcg) -> String {
-        const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
-        let set = SETS[rng.below(SETS.len())];
-        let walls = &b"OO"[..rng.below(3)];
-        let mut floor = [b' '; 16];
-        let mut free: Vec<usize> = (0..floor.len()).collect();
-        for &symbol in set.iter().chain(b"R").chain(walls) {
-            floor[free.swap_remove(rng.below(free.len()))] = symbol;
-        }
-        let mut rows = vec!["OOOOOO".to_string()];
-        for row in floor.chunks(4) {
-            rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
-        }
-        rows.push("OOOOOO".to_string());
-        rows.join("\n")
     }
 
     /// Every state reachable by primitive moves, keyed canonically, mapped to

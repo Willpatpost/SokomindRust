@@ -1,6 +1,6 @@
 //! Test-only helpers shared by the unit tests: the catalog, a seeded random
-//! source for generated rooms, and an exhaustive oracle that gives the exact
-//! remaining moves from every primitive state of a small board.
+//! source and the rooms it generates, and an exhaustive oracle that gives
+//! the exact remaining moves from every primitive state of a small board.
 use sokomind_core::{Board, State, Step};
 use std::{
     collections::{HashMap, VecDeque},
@@ -75,6 +75,29 @@ impl Lcg {
             .wrapping_add(1_442_695_040_888_963_407);
         (self.0 >> 33) as usize % n
     }
+}
+
+/// A walled room with a 4x4 floor holding one box set with its goals,
+/// the robot and up to two inner walls, all on distinct cells. Its draws
+/// pin the rooms of `flagged_pushes_leave_no_solution` in the deadlock
+/// tests, from `Lcg(0x5eed)`, and of `pruning_never_changes_a_live_run`
+/// in the engine tests, from `Lcg(0xd1ff)`; changing them swaps those
+/// boards and invalidates the Python counts both cite.
+pub(crate) fn random_room(rng: &mut Lcg) -> String {
+    const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
+    let set = SETS[rng.below(SETS.len())];
+    let walls = &b"OO"[..rng.below(3)];
+    let mut floor = [b' '; 16];
+    let mut free: Vec<usize> = (0..floor.len()).collect();
+    for &symbol in set.iter().chain(b"R").chain(walls) {
+        floor[free.swap_remove(rng.below(free.len()))] = symbol;
+    }
+    let mut rows = vec!["OOOOOO".to_string()];
+    for row in floor.chunks(4) {
+        rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
+    }
+    rows.push("OOOOOO".to_string());
+    rows.join("\n")
 }
 
 /// Every primitive state reachable from the start, without expanding solved
