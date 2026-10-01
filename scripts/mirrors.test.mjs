@@ -17,19 +17,22 @@ function source(path) {
 }
 
 /**
- * The text a repo file's first match of `pattern` captures.
+ * The text a repo file's only match of `pattern` captures.
  * @param {string} path Relative to the repo root.
  * @param {RegExp} pattern One capture group.
  * @returns {string}
  */
 function text(path, pattern) {
-  const value = pattern.exec(source(path))?.[1];
-  assert.ok(value, `${path} no longer matches ${pattern}`);
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const matches = [...source(path).matchAll(new RegExp(pattern.source, flags))];
+  assert.equal(matches.length, 1, `${path} matches ${pattern} ${matches.length} times, not once`);
+  const value = matches[0][1];
+  assert.ok(value, `${path}'s match of ${pattern} captures nothing`);
   return value;
 }
 
 /**
- * The number a repo file's first match of `pattern` captures, digit separators removed.
+ * The number a repo file's only match of `pattern` captures, digit separators removed.
  * @param {string} path Relative to the repo root.
  * @param {RegExp} pattern One capture group around the number.
  * @returns {number}
@@ -373,6 +376,7 @@ test('the README and .env.example quote RETENTION_MAX_BATCHES and its products w
   assert.equal(read('README.md', /deletes at most (\d+) times this many records per sweep/), batches);
   assert.equal(read('README.md', /\(([\d,]+) at the default/), batches * size);
   assert.equal(read('README.md', /at the default, ([\d,]+) at \d+\)/), batches * top);
+  assert.equal(read('README.md', /at the default, [\d,]+ at (\d+)\)/), top);
   assert.equal(read('README.md', /runs all (\d+) full/), batches);
   assert.equal(read('.env.example', /runs at most (\d+) batches per hourly sweep/), batches);
   assert.equal(read('.env.example', /deletes at most\s+#\s+(\d+) times this many/), batches);
@@ -468,6 +472,10 @@ test("CI's smoke rows are the catalog's rows for the puzzle CI saves progress fo
   assert.deepEqual(smoke.rows, puzzles.find(puzzle => puzzle.id === id)?.rows);
 });
 
+test("the README's catalog size is data/puzzles.json's length", () => {
+  assert.equal(read('README.md', /its (\d+) catalog puzzles/), JSON.parse(source('data/puzzles.json')).length);
+});
+
 test("CI's app shell check greps for the start of index.html's title", () => {
   const title = text('web/index.html', /<title>([^<]*)<\/title>/);
   const grep = text('.github/workflows/ci.yml', /grep -q '<title>([^']*)'/);
@@ -511,6 +519,22 @@ test("the README quotes Cargo.lock's wasm-bindgen version", () => {
   const version = text('Cargo.lock', /name = "wasm-bindgen"\s+version = "([\d.]+)"/);
   assert.equal(text('README.md', /wasm-bindgen-cli --version ([\d.]+)/), version);
   assert.equal(text('README.md', /`Cargo\.lock` resolves \(([\d.]+) above\)/), version);
+});
+
+test("the README quotes the release-test profile's codegen-units", () => {
+  assert.equal(read('README.md', /uses (\d+) codegen units/), read('Cargo.toml', /\[profile\.release-test\][^\[]*codegen-units = (\d+)/));
+});
+
+test("the README quotes dependabot.yml's cooldown", () => {
+  const days = read('README.md', /after a (\d+)-day\s+cooldown/);
+  const cooldowns = [...source('.github/dependabot.yml').matchAll(/default-days: (\d+)/g)].map(match => Number(match[1]));
+  assert.ok(cooldowns.length > 0, '.github/dependabot.yml no longer sets default-days');
+  for (const cooldown of cooldowns) assert.equal(cooldown, days);
+});
+
+test("the README quotes ci.yml's weekly cron", () => {
+  const [minute, hour] = text('.github/workflows/ci.yml', /cron: '(\d+ \d+) \* \* 1'/).split(' ');
+  assert.equal(text('README.md', /Mondays at (\d\d:\d\d) UTC/), `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`);
 });
 
 test("the puzzle textarea's maxlength is Board::parse's text cap, MAX_CELLS * 2 bytes", () => {
@@ -643,8 +667,14 @@ test("the README and Mode's docs quote the weights of Policy::FAST and Policy::Q
   assert.equal(read('crates/search/src/lib.rs', /starts over at weight (\d+)\./), quality);
 });
 
-test("the README quotes arena.rs's ID_BITS", () => {
+test("the README quotes arena.rs's ID_BITS and its record and queue entry sizes", () => {
+  const record = read('crates/search/src/arena.rs', /size_of::<Record>\(\) == (\d+)/);
+  const entry = read('crates/search/src/arena.rs', /size_of::<Entry>\(\) == (\d+)/);
   assert.equal(read('README.md', /and a (\d+)-bit arena id/), read('crates/search/src/arena.rs', /const ID_BITS: u32 = (\d+);/));
+  assert.equal(read('README.md', /arena record is (\d+) bytes/), record);
+  assert.equal(read('README.md', /costs a (\d+)-byte record/), record);
+  assert.equal(read('README.md', /queue entry one (\d+)-byte/), entry);
+  assert.equal(read('README.md', /an (\d+)-byte queue entry/), entry);
 });
 
 test("the README quotes the benchmark baseline's, catalog example's and observe run's limits", () => {
@@ -660,6 +690,11 @@ test("the README quotes the benchmark baseline's, catalog example's and observe 
     read('README.md', /fixed [\d,]+\s+states and (\d+) MiB/),
     read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: [\d_]+, memoryMiB: (\d+),/),
   );
+});
+
+test("the README's fixture count is search.rs's fixtures", () => {
+  const fixtures = items('crates/search/tests/search.rs', /fixtures! \{([\s\S]*?)\r?\n    \}/, /^ {8}(\w+): "/gm);
+  assert.equal(read('README.md', /(\d+) boards whose independent/), fixtures.length);
 });
 
 test("the README quotes ProgressClient's probe backoff", () => {
