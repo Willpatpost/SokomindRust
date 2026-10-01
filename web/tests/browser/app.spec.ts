@@ -49,6 +49,24 @@ test('undo restores the previous position', async ({ page }) => {
   await expect(page.locator('#undo')).toBeDisabled();
 });
 
+// Restart takes back every move, where Undo takes back one: Left and Right walk
+// the robot off and back, and Down solves the puzzle, so three moves go to none.
+test('Restart returns a solved puzzle to its start', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#message')).toHaveText('Solved in 3 moves and 1 pushes.');
+  await expect(page.locator('#moves')).toHaveText('3');
+  await page.click('#reset');
+  await expect(page.locator('#moves')).toHaveText('0');
+  await expect(page.locator('#pushes')).toHaveText('0');
+  await expect(page.locator('#message')).toHaveText(MOVE_HINT);
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', FIRST_BOARD);
+  await expect(page.locator('#solve')).toBeEnabled();
+  await expect(page.locator('#undo')).toBeDisabled();
+});
+
 // The keyboard shortcuts skip keys typed into a form field, so S types an s
 // there instead of pushing the robot down.
 test('keys typed into a text field stay in it', async ({ page }) => {
