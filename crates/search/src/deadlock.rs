@@ -10,6 +10,28 @@ use std::mem::size_of;
 /// Occupancy marker for a cell without a box.
 const EMPTY: u8 = u8::MAX;
 
+/// Whether a box with the four `neighbors` of [`Board::neighbors`] is held
+/// on both axes, up-down and left-right: each has a wall or a `blocked`
+/// cell on one side or, with `dead_pair`, a cell dead for box `i`'s label
+/// on both. Pushing the box along a held axis is illegal while its
+/// blockers stay, or strands it on a dead cell. `blocked` and the dead-cell
+/// test only ever see board cells, never `NONE`.
+fn held(
+    neighbors: [Cell; 4],
+    i: usize,
+    dead_pair: Option<&Heuristic>,
+    blocked: impl Fn(Cell) -> bool,
+) -> bool {
+    let axis = |a: Cell, b: Cell| {
+        a == NONE
+            || b == NONE
+            || blocked(a)
+            || blocked(b)
+            || dead_pair.is_some_and(|heuristic| heuristic.dead(i, a) && heuristic.dead(i, b))
+    };
+    axis(neighbors[0], neighbors[1]) && axis(neighbors[2], neighbors[3])
+}
+
 /// Sound post-push deadlock detection: one greatest freeze fixpoint over the
 /// pushed box's component. Besides frozen groups of any shape, on every state
 /// the engine expands it flags each push that completes a 2x2 square of boxes
@@ -73,7 +95,9 @@ impl Deadlock {
     /// state last given to `refresh`. A newly created deadlock always
     /// involves the moved box, so only the moved box's component is analyzed.
     /// With `dead_pair`, an axis whose two neighbors are both dead cells for
-    /// the box's label also holds it.
+    /// the box's label also holds it. Many pushes, most of them on the
+    /// catalog boards, land the box with no box beside it; `lone_answer`
+    /// answers those without the fixpoint.
     pub(crate) fn is_dead_after_push(
         &self,
         board: &Board,
@@ -82,7 +106,36 @@ impl Deadlock {
         to: Cell,
     ) -> bool {
         let index = self.at(from).expect("refresh saw a box at from");
-        self.frozen_component(board, dead_pair, index, from, to)
+        self.lone_answer(board, dead_pair, index, from, to)
+            .unwrap_or_else(|| self.frozen_component(board, dead_pair, index, from, to))
+    }
+    /// The fixpoint's answer for the push of `index` from `from` to `to`
+    /// when no box borders `to` after it, else `None`. The component is
+    /// then the box alone, which no partner can hold, so the fixpoint
+    /// reduces to one `held` test. With `dead_pair` that test is exactly
+    /// the dead-cell table's: a held box off its goal can only be pushed
+    /// onto a dead cell, so its own cell is dead; and a dead cell is no
+    /// goal, and each push from it, with floor on both sides of its axis,
+    /// lands on a dead cell (`push_distances`).
+    fn lone_answer(
+        &self,
+        board: &Board,
+        dead_pair: Option<&Heuristic>,
+        index: usize,
+        from: Cell,
+        to: Cell,
+    ) -> Option<bool> {
+        let neighbors = board.neighbors()[to as usize];
+        if neighbors
+            .iter()
+            .any(|&cell| self.box_at(from, to, index, cell).is_some())
+        {
+            return None;
+        }
+        Some(match dead_pair {
+            Some(heuristic) => heuristic.dead(index, to),
+            None => held(neighbors, index, None, |_| false) && !board.on_goal(index, to),
+        })
     }
     /// Greatest freeze fixpoint over the moved box's box-adjacency component:
     /// start with every component box frozen and release any box with an axis
@@ -135,25 +188,11 @@ impl Deadlock {
                     continue;
                 }
                 let neighbors = board.neighbors()[cell as usize];
-                let blocker = |cell: Cell| {
-                    cell == NONE
-                        || self
-                            .box_at(from, to, index, cell)
-                            .is_some_and(|j| frozen[j])
+                let frozen_box = |cell: Cell| {
+                    self.box_at(from, to, index, cell)
+                        .is_some_and(|j| frozen[j])
                 };
-                // A push along an axis is impossible when either side is
-                // blocked, and fatal both ways when both sides are dead for
-                // this box's label. A NONE side is a blocker, so `dead` only
-                // ever sees board cells.
-                let held_axis = |a: Cell, b: Cell| {
-                    blocker(a)
-                        || blocker(b)
-                        || dead_pair
-                            .is_some_and(|heuristic| heuristic.dead(i, a) && heuristic.dead(i, b))
-                };
-                let held =
-                    held_axis(neighbors[0], neighbors[1]) && held_axis(neighbors[2], neighbors[3]);
-                if !held {
+                if !held(neighbors, i, dead_pair, frozen_box) {
                     frozen[i] = false;
                     changed = true;
                 }
@@ -525,6 +564,55 @@ mod tests {
         assert!(
             flagged >= 2_100 && from_solvable >= 190,
             "{flagged} {from_solvable}"
+        );
+    }
+
+    /// The shortcut for a box that lands with no box beside it answers as
+    /// the full fixpoint does, with and without the dead-pair case, on
+    /// every push of the explored catalog boards.
+    #[test]
+    fn lone_box_shortcut_matches_the_fixpoint() {
+        let (mut lone, mut lone_flags, mut grouped) = (0, [0; 2], 0);
+        for (id, board, states, edges) in explored_catalog() {
+            let heuristic = Heuristic::new(board);
+            let boxes = board.labels().len();
+            let mut deadlock = Deadlock::new(board);
+            for (s, out) in edges.iter().enumerate() {
+                deadlock.refresh(&states[s].boxes[..boxes]);
+                for &(to, push) in out {
+                    // Explored states keep the board's box order, so slot i
+                    // is the same box in both states.
+                    let Some((i, _)) = push else {
+                        continue;
+                    };
+                    let (from, cell) = (states[s].boxes[i], states[to].boxes[i]);
+                    let mut alone = false;
+                    for (k, dead_pair) in [None, Some(&heuristic)].into_iter().enumerate() {
+                        let full = deadlock.frozen_component(board, dead_pair, i, from, cell);
+                        let flagged = deadlock.is_dead_after_push(board, dead_pair, from, cell);
+                        assert_eq!(flagged, full, "{id}: state {s} to {to}");
+                        let shortcut = deadlock.lone_answer(board, dead_pair, i, from, cell);
+                        if let Some(answer) = shortcut {
+                            assert_eq!(answer, full, "{id}: state {s} to {to}");
+                            alone = true;
+                            lone_flags[k] += usize::from(answer);
+                        }
+                    }
+                    if alone {
+                        lone += 1;
+                    } else {
+                        grouped += 1;
+                    }
+                }
+            }
+        }
+        // A replica of this test counts 4_058 pushes that land the box
+        // alone, 960 and 1_545 of them flagged without and with the
+        // dead-pair case, and 854 beside another box; the bounds sit a
+        // little below, so the shortcut must stay the common case.
+        assert!(
+            lone >= 3_900 && lone_flags[0] >= 900 && lone_flags[1] >= 1_450 && grouped >= 800,
+            "{lone} {lone_flags:?} {grouped}"
         );
     }
 }
