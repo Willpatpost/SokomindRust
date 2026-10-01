@@ -211,9 +211,8 @@ pub(crate) struct Arena {
     heap: BinaryHeap<Entry>,
     /// Open-addressed slots, each a node id or [`NIL`] when empty. Ids stay
     /// below [`ID_MASK`], so a slot's top 32 - `ID_BITS` = 6 bits are spare:
-    /// too few for the planned 12-bit hash tag (X13), which is therefore
-    /// not implemented. A 6-bit tag is worth trying only if profiling shows
-    /// table finds dominate.
+    /// too few for a 12-bit hash tag, which is therefore not implemented. A
+    /// 6-bit tag is worth trying only if profiling shows table finds dominate.
     table: Vec<u32>,
     /// Boxes per state, the prefix of `State::boxes` that is hashed.
     boxes: usize,

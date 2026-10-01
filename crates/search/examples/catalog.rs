@@ -106,6 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 let name = mode.as_str();
+                // One clock from before Search::new times setup_us,
+                // first_route_us, search_us and the --time-ms limit, so the
+                // last three include setup (the arena reservation and the
+                // heuristic tables); reconstruct_us times solution() alone.
                 let started = Instant::now();
                 let mut search = Search::new(
                     board.clone(),
