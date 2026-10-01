@@ -5,6 +5,9 @@ use sokomind_core::{Board, Game, State};
 use sokomind_search::{Mode, ParseModeError, Proof, Search, Status, StopReason};
 use std::collections::{HashSet, VecDeque};
 
+/// The catalog's `tiny` board: an X and an A box, each with one goal, and a
+/// 20-move optimum. Every mode finishes it quickly, yet it is long enough for
+/// limits and stops to land mid-run.
 const TWO: &str = "OOOOOO\nO R  O\nO XO O\nOO A O\nOSa  O\nOOOOOO";
 /// The box is frozen against the top-right wall and can never reach its goal.
 const CORNERED: &str = "OOOOO\nOR XO\nOS  O\nOOOOO";
@@ -151,13 +154,13 @@ fn assert_route(board: &Board, route: &str, moves: u32, context: &str) {
     assert!(game.solved(), "{context}");
 }
 
-/// Runs all three modes against the BFS optimum and returns the exact run's
+/// Runs every mode against the BFS optimum and returns the exact run's
 /// node count. With `must_finish`, a limit is a failure; otherwise a run cut
 /// short by one only has to stay consistent. Every run must keep the stats'
 /// accounting identities.
 fn engines_agree(board: &Board, rows: &str, optimum: Option<u32>, must_finish: bool) -> usize {
     let mut full = 1;
-    for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
+    for mode in Mode::ALL {
         let context = format!("{mode:?} on {rows:?}");
         let mut search = drive(board, mode, 20_000, optimum, &context);
         assert_consistent(board, &mut search, optimum, &context);
@@ -314,7 +317,7 @@ fn engines_agree_with_bfs_on_fixed_boards() {
 #[test]
 fn searches_stopped_before_starting_claim_nothing() {
     let board = Board::parse(TWO).unwrap();
-    for mode in [Mode::Optimal, Mode::Fast, Mode::Quality] {
+    for mode in Mode::ALL {
         let mut search = Search::new(board.clone(), board.initial(), mode, 20_000, 8).unwrap();
         search.stop(StopReason::Cancelled);
         search.advance(32);
@@ -594,6 +597,8 @@ mod fixtures {
 /// keeper already stands behind a legal push.
 #[test]
 fn stand_walk_raises_the_root_bound() {
+    // The catalog's tutorial-push, also the fixtures module's tutorial_push
+    // row, repeated here as the plainest case of the raise.
     const TUTORIAL_PUSH: &str = "OOOOO\nO XSO\nO   O\nO R O\nOOOOO";
     for (rows, root, optimum) in [
         (TUTORIAL_PUSH, 4, 4),

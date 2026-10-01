@@ -1,7 +1,7 @@
 //! The search API's edges: malformed positions, the exported limits, error
 //! messages, interruption, and the stats and proof wire names.
 
-use sokomind_core::{Board, NONE, StateError};
+use sokomind_core::{Board, MAX_BOXES, NONE, StateError};
 use sokomind_search::{
     MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, Mode, Proof, Search, SearchError, SearchStats,
     SolutionError, Status, StopReason,
@@ -52,11 +52,12 @@ fn malformed_positions_return_structured_errors_in_every_mode() {
         },
     ));
     state = start;
-    state.boxes[31] = start.player;
+    let last = MAX_BOXES - 1;
+    state.boxes[last] = start.player;
     cases.push((
         state,
         StateError::InactiveBox {
-            index: 31,
+            index: last,
             cell: start.player,
         },
     ));
@@ -129,8 +130,11 @@ fn search_errors_keep_their_messages() {
     }
 }
 
+/// An interrupted search never reports Optimal or Unsolvable. Nothing here
+/// rests on a debug assertion, so it holds in test:release's release-test
+/// profile too.
 #[test]
-fn interruption_cannot_manufacture_a_verdict_in_release() {
+fn interruption_cannot_manufacture_a_verdict() {
     let board = Board::parse("OOOOO\nO R O\nO A O\nO a O\nOOOOO").unwrap();
     for reason in [StopReason::Cancelled, StopReason::TimeLimit] {
         let mut exact = Search::new(board.clone(), board.initial(), Mode::Optimal, 100, 4).unwrap();

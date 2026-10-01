@@ -8,6 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Queue pops per `advance` between time checks, as `POPS_PER_CHECK` in
+/// crates/server/src/solve.rs. It sets how finely the timings and the
+/// `first_route_*` fields resolve, so changing it moves recorded numbers.
+const POPS_PER_CHECK: u32 = 8;
+
 struct Options {
     states: usize,
     memory: usize,
@@ -117,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if options.time.is_some_and(|limit| started.elapsed() >= limit) {
                         search.stop(StopReason::TimeLimit);
                     } else {
-                        search.advance(8);
+                        search.advance(POPS_PER_CHECK);
                     }
                     if first_route_us.is_none() && search.best_moves().is_some() {
                         first_route_us = Some(started.elapsed().as_micros());
