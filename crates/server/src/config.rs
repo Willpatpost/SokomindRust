@@ -3,6 +3,10 @@ use crate::client::TrustedProxies;
 use sqlx::postgres::PgConnectOptions;
 use std::{env, error::Error, fmt::Display, ops::RangeInclusive, str::FromStr};
 
+/// SOLVE_CONCURRENCY's top. Each slot may reserve up to the top of
+/// MEMORY_MIB in crates/server/src/solve.rs, which asserts that 8 slots
+/// make 1 GiB; README and .env.example quote both numbers.
+pub const MAX_SOLVE_CONCURRENCY: u32 = 8;
 const MAX_PROGRESS_CONCURRENCY: u32 = 32;
 const MAX_RETENTION_DAYS: i32 = 36_500;
 
@@ -52,7 +56,7 @@ impl Config {
     pub fn from_lookup(var: impl Fn(&str) -> Option<String>) -> Result<Self, Box<dyn Error>> {
         let vars = Vars(var);
         let proxies = TrustedProxies::parse(&vars.value("TRUSTED_PROXIES").unwrap_or_default())?;
-        let solve_concurrency = vars.setting("SOLVE_CONCURRENCY", 1..=8, 1);
+        let solve_concurrency = vars.setting("SOLVE_CONCURRENCY", 1..=MAX_SOLVE_CONCURRENCY, 1);
         let solve_rate = vars.setting("SOLVE_RATE_PER_MINUTE", 1..=600, 20);
         let progress_concurrency =
             vars.setting("PROGRESS_CONCURRENCY", 1..=MAX_PROGRESS_CONCURRENCY, 4);

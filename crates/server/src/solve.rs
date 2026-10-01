@@ -36,6 +36,10 @@ use std::{
 /// crates/server/src/api.rs, stays under the page's 1.5 s HEALTH_TIMEOUT_MS
 /// in web/src/progress.ts.
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
+/// A solve's time budget when the request names none. README's
+/// `POST /api/solve` line quotes it.
+const DEFAULT_MS: u64 = 5000;
+const _: () = assert!(*TIME_MS.start() <= DEFAULT_MS && DEFAULT_MS <= *TIME_MS.end());
 /// Pops the search makes between cancel and deadline checks: a stop waits
 /// for at most this many pops, and one atomic load and clock read per batch
 /// cost little beside them.
@@ -44,11 +48,17 @@ const POPS_PER_CHECK: u32 = 8;
 /// memory range lower, so every accepted request is a valid search limit.
 /// 128 MiB holds about 1.83-4.19M states on the catalog's boards. Each
 /// SOLVE_CONCURRENCY slot reserves up to this cap, so solves reserve at most
-/// 128 MiB by default and 1 GiB at the 8-slot maximum. compose.yaml gives
-/// the API no memory limit; a host that sets one must allow for that on top
-/// of the process itself.
+/// 128 MiB by default and 1 GiB at the 8-slot maximum,
+/// [`MAX_SOLVE_CONCURRENCY`](crate::config::MAX_SOLVE_CONCURRENCY), which
+/// an assert below keeps exact. compose.yaml gives the API no memory limit;
+/// a host that sets one must allow for that on top of the process itself.
+///
+/// README (its limits, the `POST /api/solve` defaults and the Configuration
+/// table), .env.example and the memory select in web/index.html quote this
+/// cap and its 8-slot product; change them with it.
 const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=128;
 const _: () = assert!(*MEMORY_MIB.end() <= *MEMORY_MIB_RANGE.end());
+const _: () = assert!(crate::config::MAX_SOLVE_CONCURRENCY as usize * *MEMORY_MIB.end() == 1024);
 
 fn limits() -> Error {
     Error::bad(format!(
@@ -91,7 +101,8 @@ pub struct Request {
     actions: String,
     /// The search mode, as [`Mode::parse`] reads it.
     mode: String,
-    /// The time budget in milliseconds, within [`TIME_MS`]; 5000 by default.
+    /// The time budget in milliseconds, within [`TIME_MS`]; [`DEFAULT_MS`]
+    /// by default.
     #[serde(default = "default_ms")]
     time_ms: u64,
     /// The state cap, within [`MAX_STATES_RANGE`]; its top by default.
@@ -102,7 +113,7 @@ pub struct Request {
     memory_mib: usize,
 }
 fn default_ms() -> u64 {
-    5000
+    DEFAULT_MS
 }
 /// The search crate's [`MAX_STATES`](sokomind_search::MAX_STATES), which no
 /// [`MEMORY_MIB`] budget reaches, so by default `memory_mib` alone sizes a
@@ -170,10 +181,28 @@ pub struct ResultBody {
     /// Every [`SearchStats`] counter by name, as integers.
     stats: serde_json::Value,
 }
+/// Raises its flag when dropped. The handler holds one while its search
+/// runs, so a request dropped mid-solve tells [`drive`] to stop.
 struct CancelOnDrop(Arc<AtomicBool>);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Runs `search` until it ends, checking between batches of
+/// [`POPS_PER_CHECK`] pops whether the request was dropped (`cancel`) or
+/// `deadline` has passed since `started`. A cancel wins over the deadline,
+/// and either stops the search before its next pop.
+fn drive(search: &mut Search, cancel: &AtomicBool, started: Instant, deadline: Duration) {
+    while search.status() == Status::Running {
+        if cancel.load(Ordering::Relaxed) {
+            search.stop(StopReason::Cancelled);
+        } else if started.elapsed() >= deadline {
+            search.stop(StopReason::TimeLimit);
+        } else {
+            search.advance(POPS_PER_CHECK);
+        }
     }
 }
 
@@ -224,15 +253,7 @@ pub async fn solve(
             request.memory_mib,
         )
         .map_err(search_error)?;
-        while search.status() == Status::Running {
-            if cancel.load(Ordering::Relaxed) {
-                search.stop(StopReason::Cancelled);
-            } else if started.elapsed() >= deadline {
-                search.stop(StopReason::TimeLimit);
-            } else {
-                search.advance(POPS_PER_CHECK);
-            }
-        }
+        drive(&mut search, &cancel, started, deadline);
         // Checked on the incumbent's length before reconstruction, which
         // would otherwise fail a route alone over the limit as a 500.
         if let Some(moves) = search.best_moves() {
@@ -308,5 +329,38 @@ mod tests {
         assert_eq!(default_states(), *MAX_STATES_RANGE.end());
         assert!(MEMORY_MIB_RANGE.contains(MEMORY_MIB.start()));
         assert!(MEMORY_MIB_RANGE.contains(&default_memory()));
+    }
+
+    /// The router tests' solve board, which `D` solves in one move, as an
+    /// optimal search with room to finish.
+    fn tiny_search() -> Search {
+        let game = Game::at("OOOOO\nO R O\nO A O\nO a O\nOOOOO", "").unwrap();
+        Search::new(game.board().clone(), game.state(), Mode::Optimal, 1000, 4).unwrap()
+    }
+
+    /// A dropped request stops its search before the first pop, even with
+    /// time to spare, and a spent deadline does the same; only a live request
+    /// with time left runs the search to its route.
+    #[test]
+    fn drive_stops_on_cancel_before_the_deadline() {
+        let started = Instant::now();
+        let spare = Duration::from_secs(60);
+        let cases = [
+            (true, spare, Status::Cancelled),
+            (true, Duration::ZERO, Status::Cancelled),
+            (false, Duration::ZERO, Status::TimeLimit),
+            (false, spare, Status::Solved),
+        ];
+        for (cancelled, deadline, status) in cases {
+            let mut search = tiny_search();
+            drive(&mut search, &AtomicBool::new(cancelled), started, deadline);
+            let case = format!("cancelled {cancelled}, deadline {deadline:?}");
+            assert_eq!(search.status(), status, "{case}");
+            assert_eq!(search.expanded() > 0, status == Status::Solved, "{case}");
+        }
+        // The handler's guard raises the flag that drive reads.
+        let cancel = Arc::new(AtomicBool::new(false));
+        drop(CancelOnDrop(cancel.clone()));
+        assert!(cancel.load(Ordering::Relaxed));
     }
 }
