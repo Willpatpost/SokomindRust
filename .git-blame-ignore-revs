@@ -8,3 +8,5 @@
 5f003ea8af44bb06700dc1bc14f291578f1976a0
 # style: break out calls whose argument maps with an arrow
 fab305f0b182679abad55d634581d92c3207eb30
+# prettier code style (Prettier on four web/src files)
+f3b81664bc4260d2224c9f683022e922265b6679
