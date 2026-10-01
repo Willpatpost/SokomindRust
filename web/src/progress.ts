@@ -11,6 +11,7 @@ interface Score {
   pushes: number;
 }
 interface Options {
+  /** Replays `route` on `rows` and returns its counts; throws unless it solves the puzzle. */
   verify(rows: string, route: string): Score;
   show(best: storage.Best | null): void;
   status(message: string): void;
@@ -18,6 +19,8 @@ interface Options {
   connected?(persistence: boolean): void;
   fetch?: typeof fetch;
   scheduler?: Scheduler;
+  /** The profile id sent with every progress request: undefined reads or creates the one in
+   * browser storage, and null turns server sync off. */
   profile?: string | null;
 }
 /** The id of a puzzle loaded from pasted rows. The server stores progress only for catalog

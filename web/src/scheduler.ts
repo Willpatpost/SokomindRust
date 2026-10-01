@@ -6,6 +6,7 @@ export interface Scheduler {
   clearInterval(handle: number): void;
   clearTimeout(handle: number): void;
 }
+/** The page's clock and timers: performance.now and the window timer functions. */
 export const browserScheduler: Scheduler = {
   now: () => performance.now(),
   interval: (fn, ms) => window.setInterval(fn, ms),

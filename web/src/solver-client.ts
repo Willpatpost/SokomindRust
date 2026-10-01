@@ -45,13 +45,17 @@ interface Options {
   scheduler?: Scheduler;
   changed(): void;
   elapsed(ms: number): void;
+  /** Shows an accepted update with the last verified route, which an earlier update may have sent. */
   update(update: SearchUpdate, route: string | undefined): void;
   status(text: string): void;
+  /** Replays `prefix + route` and throws unless it solves the puzzle. A throw rejects the route
+   * and ends the search with the error as its status. */
   verify(prefix: string, route: string): void;
 }
 /** Runs one search at a time on either engine, replay-checks every route it reports through
  * `verify` before showing it, and keeps the last verified route after the search ends. */
 export class SolverClient {
+  /** The running search, the prefix and verified route the last one left, or idle after reset. */
   state: SolverState = { kind: 'idle' };
   private options: Options;
   private clock: Scheduler;
