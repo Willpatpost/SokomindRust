@@ -147,6 +147,27 @@ async fn solve_memory_caps_at_128_mib() {
     assert_eq!(state.solve_slots.available_permits(), 1);
 }
 
+/// The body limit admits the largest legal solve, a full route on the board
+/// with the longest JSON, and answers a body one byte over it with the
+/// `{error}` 413. The board is all wall, so the admitted solve is a 400.
+#[tokio::test]
+async fn body_limit_admits_the_largest_solve() {
+    let app = test_router(app_state(None));
+    let mut largest = solve_body();
+    largest["rows"] = Value::from(vec!["O"; sokomind_core::MAX_CELLS]);
+    largest["actions"] = json!("D".repeat(sokomind_core::MAX_ROUTE));
+    assert!(largest.to_string().len() <= BODY_LIMIT);
+    let (status, body) = request(app.clone(), "POST", "/api/solve", largest).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let mut over = json!({ "rows": [], "mode": "fast", "actions": "" });
+    let padding = BODY_LIMIT + 1 - over.to_string().len();
+    over["actions"] = json!("D".repeat(padding));
+    assert_eq!(over.to_string().len(), BODY_LIMIT + 1);
+    let (status, body) = request(app, "POST", "/api/solve", over).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(body["error"].is_string(), "{body}");
+}
+
 #[tokio::test]
 async fn busy_solves_keep_the_rate_budget() {
     let state = app_with(None, |config| config.solve_rate = 1);

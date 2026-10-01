@@ -5,6 +5,10 @@ use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+/// The most clients each limiter tracks at once. A full map is about 6 MiB
+/// (48-byte entries in 131,072 buckets), and a sweep does not shrink it.
+/// While it is full, unknown clients are refused until a sweep frees room
+/// (see [`RateLimiter`]).
 const MAX_TRACKED: usize = 65_536;
 
 /// Fixed-window per-client limiter for saves and native solves. Anonymous

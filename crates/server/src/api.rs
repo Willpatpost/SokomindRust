@@ -28,10 +28,11 @@ const HEALTH_TIMEOUT: Duration = Duration::from_millis(900);
 /// How long one database probe answers /api/health, so the database sees at
 /// most one probe a second however often health is polled.
 const HEALTH_TTL: Duration = Duration::from_secs(1);
-/// Bounds slow request bodies on direct runs: bodies are at most 128 KiB, so
-/// a client still sending after this long is holding a connection and a
-/// handler open, not uploading. Behind nginx it never fires, because nginx
-/// reads each whole body before passing the request on.
+/// Bounds slow request bodies on direct runs: bodies are at most 128 KiB
+/// (`BODY_LIMIT` in crates/server/src/main.rs), so a client still sending
+/// after this long is holding a connection and a handler open, not
+/// uploading. Behind nginx it never fires, because nginx reads each whole
+/// body before passing the request on.
 pub const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Saves each client address may make per `RATE_WINDOW`.
 pub const SAVES_PER_MINUTE: u32 = 60;
@@ -263,8 +264,8 @@ pub async fn health(State(app): State<App>) -> Json<serde_json::Value> {
 }
 
 /// /api/health's cached answer to whether PostgreSQL responds. Probes take no
-/// progress permit, so busy saves no longer read as persistence being off,
-/// and they run at most once per `HEALTH_TTL` whatever the request rate.
+/// progress permit, so busy saves never make persistence read as off, and
+/// they run at most once per `HEALTH_TTL` whatever the request rate.
 #[derive(Default)]
 pub struct Health {
     state: Mutex<Probe>,

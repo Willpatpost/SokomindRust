@@ -8,6 +8,9 @@ use crate::{ACTIONS, Board, Cell, ParseError, State, Step};
 /// `migrations/0001_progress.sql` and again in
 /// `migrations/0002_progress_fingerprint.sql`. Applied migrations are never
 /// edited, so changing this needs a new migration that replaces that check.
+/// A request body carries up to a full route, so the server's `BODY_LIMIT`
+/// (crates/server/src/main.rs, asserted against this) and deploy/nginx.conf's
+/// `client_max_body_size` must hold one.
 pub const MAX_ROUTE: usize = 100_000;
 
 /// Why a route was not replayed. Each variant displays the message the

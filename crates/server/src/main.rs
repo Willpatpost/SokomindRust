@@ -56,7 +56,18 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 /// The largest request body the JSON extractor reads; a larger one is 413.
+/// It must hold the largest legal request: a solve whose `actions` is a full
+/// [`MAX_ROUTE`](sokomind_core::MAX_ROUTE) route, on a board of
+/// [`MAX_CELLS`](sokomind_core::MAX_CELLS) one-cell rows, the longest board
+/// in JSON at four bytes a row. The assert below checks that with 1 KiB to
+/// spare for the other fields.
+///
+/// deploy/nginx.conf's `client_max_body_size`, README's status list and the
+/// [`api::BODY_TIMEOUT`] doc quote it; change them with it. Raise one
+/// without nginx's and nginx refuses the bodies between them first, with
+/// its own HTML 413.
 const BODY_LIMIT: usize = 128 * 1024;
+const _: () = assert!(BODY_LIMIT >= sokomind_core::MAX_ROUTE + 4 * sokomind_core::MAX_CELLS + 1024);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
