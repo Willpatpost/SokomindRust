@@ -242,10 +242,6 @@ struct SkipCounters {
 struct Prunes {
     /// The freeze rule's dead-pair axis case: an axis also holds a box when
     /// both its neighbors on it are dead cells for the box's label.
-    #[expect(
-        dead_code,
-        reason = "no detector reads it until the freeze rule gains its dead-pair axis case"
-    )]
     dead_pair: bool,
 }
 
@@ -265,10 +261,6 @@ pub(crate) struct Engine {
     reach: Reach,
     deadlock: Deadlock,
     /// Always [`Prunes::ALL`] outside tests.
-    #[expect(
-        dead_code,
-        reason = "no detector reads it until the freeze rule gains its dead-pair axis case"
-    )]
     prunes: Prunes,
     arena: Arena,
     status: Status,
@@ -654,7 +646,11 @@ impl Engine {
             self.skipped.pruned_bound += 1;
             return None;
         }
-        if self.deadlock.is_dead_after_push(&self.board, from, to) {
+        let dead_pair = self.prunes.dead_pair.then_some(&self.heuristic);
+        if self
+            .deadlock
+            .is_dead_after_push(&self.board, dead_pair, from, to)
+        {
             self.skipped.pruned_deadlocks += 1;
             return None;
         }
@@ -1062,8 +1058,9 @@ mod tests {
     /// reaches its detector fails instead of passing on identical runs.
     /// Zero until a detector reads the flag. Full literals rather than
     /// `..Prunes::ALL`, so a new flag fails to compile here until every row
-    /// sets it.
-    const TOGGLES: [(&str, Prunes, usize); 1] = [("dead_pair", Prunes { dead_pair: false }, 0)];
+    /// sets it. For `dead_pair`, the replica cited at `FINISH` changes 9
+    /// runs, all on catalog boards, 6 of them with fewer records generated.
+    const TOGGLES: [(&str, Prunes, usize); 1] = [("dead_pair", Prunes { dead_pair: false }, 6)];
     /// Enough for every finishing-leg run to end on its own. A Python
     /// replica of `pruning_never_changes_a_live_run`
     /// (pruning/replicas/live_run_replica.py, not tracked) puts the push

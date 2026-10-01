@@ -284,7 +284,7 @@ pub struct SearchStats {
     /// Geometrically legal pushes onto a label-specific dead cell.
     pub pruned_dead_cells: u64,
     /// Legal pushes rejected by the frozen-component (greatest-fixpoint)
-    /// deadlock rule.
+    /// deadlock rule, including its dead-pair axis case.
     pub pruned_deadlocks: u64,
     /// Children rejected because an equal/cheaper version is known or closed.
     pub pruned_duplicates: u64,

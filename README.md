@@ -185,9 +185,11 @@ cancellation stops it with a route, it reports `optimal` if the frontier's
 lower bound has reached the route's length, otherwise `bounded` (verified route
 plus a sound lower bound and gap). A run stopped before any route carries no
 proof. Every mode shares a sound post-push deadlock rule, the greatest freeze
-fixpoint over the pushed box's component. On every expanded state it covers
-the reference's fully blocked 2x2 wall/box squares and frozen-component
-fixpoints, and it only removes states from which no solution exists.
+fixpoint over the pushed box's component, where an axis holds a box when
+either neighbor is a wall or frozen box or both are dead cells for its label.
+On every expanded state it covers the reference's fully blocked 2x2 wall/box
+squares and frozen-component fixpoints, and it only removes states from which
+no solution exists.
 The objective is total remaining moves, not pushes. These are baseline algorithms:
 the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
 and route-repair strategies are not yet ported; Grand Hall performance parity
