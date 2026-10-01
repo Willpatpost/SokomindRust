@@ -63,7 +63,9 @@ export function plan({ quick, database }) {
     step('node scripts/parity.mjs --native target/bench/catalog.json'),
     step('npm run bench:observe', slow),
     step('npm run test:db', slow ?? (database ? undefined : 'SOKOMIND_TEST_DATABASE_URL is not set')),
-    step('npm run test:browser', slow),
+    // CI=true, which GitHub sets in every job, makes playwright.config.ts fail a
+    // leftover test.only and start its own preview server instead of reusing one.
+    { command: 'npm run test:browser', skip: slow, env: { CI: 'true' } },
   ];
 }
 

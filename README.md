@@ -444,8 +444,9 @@ or bound, a nondeterministic run, or a crash. `test:db` runs the ignored
 database that allows `CREATE SCHEMA`. `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
-`npx playwright install chromium`. With `CI` set, as in CI, a leftover
-`test.only` fails the run.
+`npx playwright install chromium`. CI and `validate` run it with `CI=true`, so
+a leftover `test.only` fails the run, and Playwright starts its own preview
+server, failing if port 4173 is already taken rather than reusing that server.
 
 CI's `deploy` job checks the deployment files, builds both images, and
 smoke-tests the stack they make; it pushes nothing. The Dockerfile's
