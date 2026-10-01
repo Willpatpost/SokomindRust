@@ -329,7 +329,7 @@ fn searches_stopped_before_starting_claim_nothing() {
 }
 
 /// [`Search::solution`] promises that a running search may call it between
-/// slices and stays as it was; the web worker rebuilds every improved route
+/// slices and stays as it was; the web worker rebuilds improved routes
 /// that way. A search probed after each improvement must end exactly as an
 /// unprobed twin, and some probe must land while the search still runs.
 #[test]

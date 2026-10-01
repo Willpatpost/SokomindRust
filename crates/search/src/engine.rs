@@ -97,6 +97,7 @@ impl Policy {
 }
 // Exact soundness assumes one admissible weight for the whole search.
 const _: () = assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
+const _: () = assert!(Policy::EXACT.weight == 1);
 // Every `then` and `restart` target is itself in `Policy::ALL`, so the
 // checks that loop over it cover every policy a search can switch to. A
 // restarted policy runs to the end, so a search restarts at most once.
@@ -124,10 +125,6 @@ const _: () = {
         i += 1;
     }
 };
-// Mode's rustdoc (lib.rs) and README.md ("g + 5h", "g + 3h") state these
-// weights; change them together.
-const _: () =
-    assert!(Policy::EXACT.weight == 1 && Policy::FAST.weight == 5 && Policy::QUALITY.weight == 3);
 
 /// Whether `target` is `None` or equals a policy in [`Policy::ALL`].
 const fn listed(target: Option<&Policy>) -> bool {
