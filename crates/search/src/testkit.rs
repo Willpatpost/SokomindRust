@@ -1,7 +1,9 @@
 //! Test-only helpers shared by the unit tests: the catalog, a seeded random
-//! source and the rooms it generates, and an exhaustive oracle that gives
-//! the exact remaining moves from every primitive state of a small board.
-use sokomind_core::{Board, State, Step};
+//! source and the rooms it generates, and two exhaustive oracles: the exact
+//! remaining moves from every primitive state of a small board, and whether
+//! each canonical state of one has a solution.
+use crate::engine::canonicalize;
+use sokomind_core::{Board, Cell, MAX_BOXES, State, Step};
 use std::{
     collections::{HashMap, VecDeque},
     sync::LazyLock,
@@ -80,9 +82,10 @@ impl Lcg {
 /// A walled room with a 4x4 floor holding one box set with its goals,
 /// the robot and up to two inner walls, all on distinct cells. Its draws
 /// pin the rooms of `flagged_pushes_leave_no_solution` in the deadlock
-/// tests, from `Lcg(0x5eed)`, and of `pruning_never_changes_a_live_run`
+/// tests and `corral_dead_room_states_have_no_solution` in the corral
+/// tests, both from `Lcg(0x5eed)`, and of `pruning_never_changes_a_live_run`
 /// in the engine tests, from `Lcg(0xd1ff)`; changing them swaps those
-/// boards and invalidates the Python counts both cite.
+/// boards and invalidates the Python counts all three cite.
 pub(crate) fn random_room(rng: &mut Lcg) -> String {
     const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
     let set = SETS[rng.below(SETS.len())];
@@ -161,4 +164,45 @@ pub(crate) fn remaining(board: &Board, states: &[State], edges: &[Vec<Edge>]) ->
         }
     }
     exact
+}
+
+/// Every state reachable by primitive moves, keyed canonically, mapped to
+/// whether a solved state is reachable from it. A 4x4 floor keeps this
+/// under 44k states. The deadlock and corral tests check their flags
+/// against it on the rooms `random_room` draws.
+pub(crate) fn solvable_states(board: &Board) -> HashMap<(Cell, [Cell; MAX_BOXES]), bool> {
+    let key = |mut state: State| {
+        canonicalize(board, &mut state);
+        (state.player, state.boxes)
+    };
+    let mut ids = HashMap::from([(key(board.initial()), 0)]);
+    let mut states = vec![board.initial()];
+    let mut parents: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut head = 0;
+    while head < states.len() {
+        for d in 0..4 {
+            let mut next = states[head];
+            if board.step(&mut next, d).is_none() {
+                continue;
+            }
+            let id = *ids.entry(key(next)).or_insert_with(|| {
+                states.push(next);
+                parents.push(Vec::new());
+                states.len() - 1
+            });
+            parents[id].push(head);
+        }
+        head += 1;
+    }
+    let mut solvable: Vec<bool> = states.iter().map(|s| board.solved(s)).collect();
+    let mut stack: Vec<usize> = (0..states.len()).filter(|&s| solvable[s]).collect();
+    while let Some(s) = stack.pop() {
+        for &parent in &parents[s] {
+            if !solvable[parent] {
+                solvable[parent] = true;
+                stack.push(parent);
+            }
+        }
+    }
+    ids.into_iter().map(|(k, id)| (k, solvable[id])).collect()
 }

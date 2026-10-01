@@ -4,8 +4,8 @@
 //!
 //! A [`Search`] runs one of three [`Mode`]s over the same engine. It expands
 //! pushes rather than single steps, its costs count every move, the walks
-//! between pushes included, and every mode prunes dead cells and frozen
-//! boxes:
+//! between pushes included, and every mode prunes dead cells, frozen boxes
+//! and sealed corrals:
 //!
 //! - [`Mode::Fast`]: weighted A* that stops at its first route.
 //! - [`Mode::Quality`]: Fast, then a lighter weight that keeps shortening
@@ -53,6 +53,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 mod arena;
+mod corral;
 mod deadlock;
 mod engine;
 mod exact;
@@ -73,7 +74,7 @@ use std::ops::RangeInclusive;
 /// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
-/// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,789,285 states at
+/// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,788,993 states at
 /// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
 /// test `memory_binds_a_full_limit_at_every_budget`). A request at this
 /// limit therefore reserves nearly its whole memory budget up front, even on
@@ -292,10 +293,13 @@ pub struct SearchStats {
     pub pruned_assignment: u64,
     /// Popped nodes or children rejected by an incumbent cost bound.
     pub pruned_bound: u64,
+    /// Expanded states whose pushes were skipped because a sealed corral
+    /// left no solution.
+    pub pruned_corrals: u64,
 }
 /// Length shared by [`SearchStats::FIELDS`] and [`SearchStats::values`], so
 /// neither list can grow without the other.
-const STAT_COUNT: usize = 10;
+const STAT_COUNT: usize = 11;
 impl SearchStats {
     /// The counters' wire names in declaration order. The server's `stats`
     /// object, the WASM diagnostics ABI and the benchmark corpus all pair
@@ -311,6 +315,7 @@ impl SearchStats {
         "pruned_duplicates",
         "pruned_assignment",
         "pruned_bound",
+        "pruned_corrals",
     ];
     /// The counters in [`Self::FIELDS`] order, widened to u64. The
     /// destructure names every field, so a new counter fails to compile
@@ -327,6 +332,7 @@ impl SearchStats {
             pruned_duplicates,
             pruned_assignment,
             pruned_bound,
+            pruned_corrals,
         } = *self;
         [
             u64::from(unique_states),
@@ -339,6 +345,7 @@ impl SearchStats {
             pruned_duplicates,
             pruned_assignment,
             pruned_bound,
+            pruned_corrals,
         ]
     }
 }

@@ -110,7 +110,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free push A*: one policy-driven engine over a reserved arena and transposition table, reachability, label assignment heuristic, and sound deadlock pruning; exact proofs |
+| `crates/search` | Dependency-free push A*: one policy-driven engine over a reserved arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs |
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX, bounded and rate-limited native CPU jobs, replay-verified best routes in SQLx/PostgreSQL |
@@ -189,11 +189,31 @@ fixpoint over the pushed box's component, where an axis holds a box when
 either neighbor is a wall or frozen box or both are dead cells for its label.
 On every expanded state it covers the reference's fully blocked 2x2 wall/box
 squares and frozen-component fixpoints, and it only removes states from which
-no solution exists.
+no solution exists. Every mode also skips the children of an expanded state
+with a sealed corral: a region the robot cannot reach that holds a box off its
+goal or an empty goal, where every push of one of the region's boxes from a
+cell the robot reaches is dead under the same rule over the region's boxes
+alone (a region with more than six such pushes is not checked). Boxes outside
+the region count as floor, since they may still move, so no solution leaves
+through such a state.
 The objective is total remaining moves, not pushes. These are baseline algorithms:
-the reference's advanced portfolio, tunnel/corral/PDB machinery, generators,
-and route-repair strategies are not yet ported; Grand Hall performance parity
-is not claimed.
+the reference's advanced portfolio, PDB machinery and fuller corral search,
+generators, and route-repair strategies are not yet ported; Grand Hall
+performance parity is not claimed. Some techniques are rejected outright:
+
+- PI-corral successor restriction and corral ordering: push-objective
+  techniques that gave false proofs under the move objective in the sister
+  ports and can lose routes in Fast and Quality.
+- Corral analysis that treats boxes outside the corral as permanent blockers,
+  which reported a board solvable in 3 moves unsolvable (Sokomind2's audit,
+  F-001).
+- Tunnel macros, forced-push macros and the goal-commitment skip: the
+  reference measured tunnel macros slower and ships them off, and none of the
+  three prunes anything or tightens a bound under push A* with an exact
+  keeper walk.
+- Sokomind2's linear-conflict and interaction-boost terms, and goal cuts as a
+  heuristic term: none is a lower bound, and the first two gave a false optimal
+  proof and a false bound there.
 
 Board text has one line per row: `O` is a wall, a space floor, `R` the robot,
 `X` a box whose goals are `S`, and any other uppercase letter a box whose goals
@@ -216,7 +236,7 @@ at the default cap reserves nearly its whole budget up front, even on a small
 board: the memory budget is the bound a caller declares, and one that wants a
 smaller footprint asks for less memory or fewer states. The search memory metric
 is computed from reserved buffer sizes (arena, queue, table, and per-cell flood,
-deadlock, dead-cell, and distance buffers) plus a fixed allowance for the
+deadlock, corral, dead-cell, and distance buffers) plus a fixed allowance for the
 longest route and scratch buffers, not process RSS, allocator overhead, WASM
 runtime, or frontend memory.
 Deadline checks occur between bounded expansion batches; setup/reconstruction can

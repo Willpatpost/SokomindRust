@@ -194,6 +194,7 @@ fn stats_values_follow_field_order_and_proofs_name_their_wire_kind() {
             "pruned_duplicates",
             "pruned_assignment",
             "pruned_bound",
+            "pruned_corrals",
         ]
     );
     let stats = SearchStats {
@@ -207,12 +208,13 @@ fn stats_values_follow_field_order_and_proofs_name_their_wire_kind() {
         pruned_duplicates: 8,
         pruned_assignment: 9,
         pruned_bound: u64::MAX,
+        pruned_corrals: 11,
     };
     assert_eq!(
         stats.values(),
-        [1, 2, 3, 4, u64::from(u32::MAX), 6, 7, 8, 9, u64::MAX]
+        [1, 2, 3, 4, u64::from(u32::MAX), 6, 7, 8, 9, u64::MAX, 11]
     );
-    assert_eq!(SearchStats::default().values(), [0; 10]);
+    assert_eq!(SearchStats::default().values(), [0; 11]);
     let proofs = [
         Proof::Bounded {
             lower_bound: 1,

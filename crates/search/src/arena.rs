@@ -1,6 +1,6 @@
 use crate::{
-    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status, deadlock::Deadlock,
-    heuristic::Heuristic, reach::Reach,
+    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status, corral::Corral,
+    deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
 };
 use sokomind_core::{Cell, MAX_BOXES, MAX_CELLS, MAX_ROUTE, NONE, State};
 use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
@@ -230,12 +230,14 @@ impl Arena {
         if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
             return Err(SearchError::Limits);
         }
-        // Flood and deadlock buffers and the heuristic tables per cell, plus
-        // the route, its string and the fixed scratch. Bytes are counted in
-        // u64, since usize is 32 bits on wasm32, and saturate, so a board too
-        // large to count never fits instead of wrapping.
-        let per_cell =
-            Reach::BYTES_PER_CELL + Deadlock::BYTES_PER_CELL + Heuristic::bytes_per_cell(boxes);
+        // Flood, deadlock and corral buffers and the heuristic tables per
+        // cell, plus the route, its string and the fixed scratch. Bytes are
+        // counted in u64, since usize is 32 bits on wasm32, and saturate, so
+        // a board too large to count never fits instead of wrapping.
+        let per_cell = Reach::BYTES_PER_CELL
+            + Deadlock::BYTES_PER_CELL
+            + Corral::BYTES_PER_CELL
+            + Heuristic::bytes_per_cell(boxes);
         let fixed_bytes = (cells as u64)
             .saturating_mul(per_cell as u64)
             .saturating_add(FIXED_SCRATCH as u64);
@@ -800,7 +802,7 @@ mod tests {
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
     /// entry and 8 to 16 bytes of table, so no budget holds a full
     /// `MAX_STATES`: 256 MiB holds 8,388,607 states at one box, where the
-    /// next state would double the table, and 2,789,285 at `MAX_BOXES` on
+    /// next state would double the table, and 2,788,993 at `MAX_BOXES` on
     /// `MAX_CELLS` cells (`MAX_STATES`'s doc).
     #[test]
     fn memory_binds_a_full_limit_at_every_budget() {
@@ -809,7 +811,7 @@ mod tests {
             (4, 1, 8_388_607),
             (MAX_CELLS, 1, 8_388_607),
             (4, MAX_BOXES, 2_793_036),
-            (MAX_CELLS, MAX_BOXES, 2_789_285),
+            (MAX_CELLS, MAX_BOXES, 2_788_993),
         ] {
             let arena = Arena::new(cells, boxes, MAX_STATES, top).unwrap();
             assert_eq!(arena.node_limit, fits, "{cells} cells, {boxes} boxes");
@@ -818,17 +820,17 @@ mod tests {
         }
     }
 
-    /// The exact edge at 64 MiB for the largest board and box count: 692,133
-    /// states fit with 72 bytes to spare, and one more scales the request.
+    /// The exact edge at 64 MiB for the largest board and box count: 691,841
+    /// states fit with 24 bytes to spare, and one more scales the request.
     #[test]
     fn a_limit_one_past_the_budget_is_scaled_to_it() {
-        let fits = Arena::new(MAX_CELLS, MAX_BOXES, 692_133, 64).unwrap();
-        assert_eq!(fits.node_limit, 692_133);
+        let fits = Arena::new(MAX_CELLS, MAX_BOXES, 691_841, 64).unwrap();
+        assert_eq!(fits.node_limit, 691_841);
         assert_eq!(fits.limit_status(), Status::StateLimit);
-        assert_eq!(fits.reserved_bytes(), (64 << 20) - 72);
+        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
         drop(fits);
-        let scaled = Arena::new(MAX_CELLS, MAX_BOXES, 692_134, 64).unwrap();
-        assert_eq!(scaled.node_limit, 692_133);
+        let scaled = Arena::new(MAX_CELLS, MAX_BOXES, 691_842, 64).unwrap();
+        assert_eq!(scaled.node_limit, 691_841);
         assert_eq!(scaled.limit_status(), Status::MemoryLimit);
     }
 }

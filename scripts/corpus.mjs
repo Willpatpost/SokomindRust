@@ -61,6 +61,7 @@ export const diagnosticFields = [
   'pruned_duplicates',
   'pruned_assignment',
   'pruned_bound',
+  'pruned_corrals',
 ];
 
 let built = false;

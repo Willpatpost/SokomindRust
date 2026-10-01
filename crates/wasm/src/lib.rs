@@ -205,9 +205,9 @@ impl WasmSearch {
     /// [`SearchStats::FIELDS`](sokomind_search::SearchStats::FIELDS) order,
     /// as `scripts/parity.mjs` reads them (unique states, duplicate
     /// improvements, reopenings, stale pops, peak queue, then
-    /// dead-cell/deadlock/duplicate/assignment/bound prunes). f64 exactly
-    /// represents all counters under the node cap. Kept separate from the
-    /// small six-value progress ABI.
+    /// dead-cell/deadlock/duplicate/assignment/bound prunes, then
+    /// sealed-corral prunes). f64 exactly represents all counters under the
+    /// node cap. Kept separate from the small six-value progress ABI.
     pub fn diagnostics(&self) -> Vec<f64> {
         self.search
             .stats()

@@ -74,6 +74,12 @@ impl Reach {
     pub(crate) fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
     }
+    /// How many cells the last fill reached, the player's included. The
+    /// queue holds each reached cell once, and box cells are stamped but
+    /// never queued.
+    pub(crate) fn reached(&self) -> usize {
+        self.queue.len()
+    }
     /// Appends a shortest walk from the player to `cell`, which the last
     /// `fill` reached, as direction indices from its last step back to its
     /// first. Each step takes the first direction, in `U D L R` order, whose
@@ -107,7 +113,8 @@ mod tests {
     const ROOM: &str = "OOOOOOOO\nOR  O  O\nO AOO  O\nO  B   O\nOa b   O\nOOOOOOOO";
 
     /// Every reached cell gets a walk as long as its distance that replays
-    /// as plain moves, never touching a box, and ends on the cell.
+    /// as plain moves, never touching a box, and ends on the cell, and
+    /// `reached` counts exactly those cells.
     #[test]
     fn walk_replays_as_a_shortest_path() {
         let board = Board::parse(ROOM).unwrap();
@@ -134,6 +141,7 @@ mod tests {
             walks += 1;
         }
         assert!(walks > 10, "{walks}");
+        assert_eq!(reach.reached(), walks);
     }
 
     /// The fill after epoch `u32::MAX` wraps: it zeroes every stamp and
