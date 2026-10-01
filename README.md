@@ -145,22 +145,23 @@ distances, and a minimum-cost assignment per box label
 a re-solve for two, and a one-row dual repair of the parent's duals for groups
 of 3 or more; pushes onto a cell with no reachable goal of the box's label are
 dropped before the estimate).
-Each edge is one push plus a shortest walk to its support cell. Keeper position
-remains part of state identity. Walks are reconstructed only for reported routes.
+Each edge is one push plus a shortest walk to its stand, the cell behind the
+box. Keeper position remains part of state identity. Walks are reconstructed
+only for reported routes.
 Each arena record is 12 bytes plus its box cells, each queue entry one 8-byte
 key packing `f`, `h`, and a 26-bit arena id, and each table slot a 4-byte arena
 index.
 
 The estimate is the assignment's push count. The start state also adds the
-keeper's walk to its first push: the larger of the Manhattan distances to a cell
-beside the nearest box and to the stand of the nearest statically legal push,
-one whose target cell and stand are free floor and whose target is not a dead
-cell for that box. Every route from an unsolved state opens with such a push,
-walls and other boxes only lengthen the walk to it, and those walking moves are
-disjoint from the pushes the assignment counts, so the start's estimate stays
-admissible. On a pushed child the same stand walk only prunes: once a route is
-known, a child whose moves so far, estimate, and walk reach its length is
-dropped, so queue keys and stored estimates stay push-only.
+keeper's walk to its first push: the Manhattan distance to the stand of the
+nearest statically legal push, one whose target cell and stand are free floor
+and whose target is not a dead cell for that box. Every route from an unsolved
+state opens with such a push, walls and other boxes only lengthen the walk to
+it, and those walking moves are disjoint from the pushes the assignment counts,
+so the start's estimate stays admissible. On a pushed child the same stand walk
+only prunes: once a route is known, a child whose moves so far, estimate, and
+walk reach its length is dropped, so queue keys and stored estimates stay
+push-only.
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
