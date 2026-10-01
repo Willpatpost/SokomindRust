@@ -5,12 +5,19 @@ import type { Snapshot } from './protocol.ts';
 // the snapshot instead.
 const WALL = 255; // sokomind_core::WALL
 const PLAIN = 88; // 'X': the label of unlettered boxes and their goals
+/** The largest tile, in CSS pixels: a small board is drawn at this size. */
+const MAX_TILE_PX = 48;
+/** The most height a board may take, in CSS pixels: a taller one gets smaller tiles, down to MIN_TILE_PX. */
+const MAX_BOARD_HEIGHT_PX = 540;
+/** The smallest tile, in CSS pixels. A board that would need smaller tiles to fit keeps this size
+ * and scrolls instead. */
+const MIN_TILE_PX = 4;
 export class BoardView {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   /** Live computed style of the board container. */
   private wrap: CSSStyleDeclaration;
-  /** The whole board fits at 4 px tiles or larger, so it never scrolls and swipes can move the robot. */
+  /** The whole board fits at MIN_TILE_PX tiles or larger, so it never scrolls and swipes can move the robot. */
   fits = true;
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -33,9 +40,9 @@ export class BoardView {
       - parseFloat(this.wrap.paddingLeft)
       - parseFloat(this.wrap.paddingRight)
       - 1;
-    const fit = Math.min(48, available / width, 540 / height);
-    const tile = Math.max(4, fit);
-    this.fits = fit >= 4;
+    const fit = Math.min(MAX_TILE_PX, available / width, MAX_BOARD_HEIGHT_PX / height);
+    const tile = Math.max(MIN_TILE_PX, fit);
+    this.fits = fit >= MIN_TILE_PX;
     // An oversized board scrolls, so touch pans it instead of swiping.
     this.canvas.classList.toggle('pan', !this.fits);
     // The backing store stays well under the 32,767 px browser limit on both

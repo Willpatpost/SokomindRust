@@ -14,6 +14,9 @@ interface Options {
   scheduler?: Scheduler;
   profile?: string | null;
 }
+/** The id of a puzzle loaded from pasted rows. The server stores progress only for catalog
+ * puzzles, so a custom one is never synced. */
+export const CUSTOM_PUZZLE_ID = 'custom';
 /** Health re-probe backoff: the first retry waits 2 s, and each further miss
  * doubles the wait up to 5 minutes. */
 const PROBE_FIRST_MS = 2000, PROBE_MAX_MS = 300_000;
@@ -128,7 +131,7 @@ export class ProgressClient {
     this.options.show(best);
   }
   private remote(context: Context | undefined): context is Context {
-    return !!context && this.persistence && !!this.profile && context.id !== 'custom';
+    return !!context && this.persistence && !!this.profile && context.id !== CUSTOM_PUZZLE_ID;
   }
   /** Posts a solving route unless the server has already answered for exactly this one,
    * as when Replay best or redoing the final move solves the puzzle again. */

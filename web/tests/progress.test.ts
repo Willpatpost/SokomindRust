@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProgressClient } from '../src/progress.ts';
+import { CUSTOM_PUZZLE_ID, ProgressClient } from '../src/progress.ts';
 import { Clock, brandCheckedFetch, deferred, installMemoryStorage, withGlobalFetch } from './fakes.ts';
 const storage = installMemoryStorage();
 const PROFILE = 'a'.repeat(32);
@@ -37,7 +37,7 @@ test('sync posts the route with the profile header and reports the server verdic
   assert.equal(encoded.calls[0].url, '/api/progress/a%20b%2Fc');
 });
 test('remote calls are skipped without persistence, a profile, or a catalog puzzle', async () => {
-  for (const [id, persistence, overrides] of [['p', false, {}], ['p', true, { profile: null }], ['custom', true, {}]] as const) {
+  for (const [id, persistence, overrides] of [['p', false, {}], ['p', true, { profile: null }], [CUSTOM_PUZZLE_ID, true, {}]] as const) {
     const { client, calls, statuses } = setup(undefined, overrides);
     client.select(id, 'rows'); client.persistence = persistence;
     await client.sync('D'); await client.pull();

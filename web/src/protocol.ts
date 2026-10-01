@@ -1,5 +1,7 @@
 /** sokomind_core::MAX_ROUTE: the longest route Rust replays. */
 export const MAX_ROUTE = 100_000;
+/** sokomind_core::ACTIONS: the route letter of each direction index, the index WasmGame.step takes. */
+export const ACTIONS = 'UDLR';
 /** sokomind_core::ReplayError::PastLimit's text, which POST /api/solve sends when the position's
  * moves plus the best route pass MAX_ROUTE. The worker and SolverClient show the same text. */
 export const PAST_LIMIT_MESSAGE = `Position and route together exceed the ${MAX_ROUTE}-move replay limit`;

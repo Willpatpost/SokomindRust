@@ -9,7 +9,7 @@ import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Sna
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeSnapshot } from './transport.ts';
 import { Playback } from './playback.ts';
-import { ProgressClient } from './progress.ts';
+import { CUSTOM_PUZZLE_ID, ProgressClient } from './progress.ts';
 import { statusText } from './verdict.ts';
 
 interface Puzzle { id: string; title: string; difficulty: string; rows: string[]; hint?: string }
@@ -42,7 +42,7 @@ const setStatus = (value: string) => setText('search-status', value);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
 const customPuzzle = (text: string): Puzzle => ({
-  id: 'custom',
+  id: CUSTOM_PUZZLE_ID,
   title: 'Your puzzle',
   difficulty: 'custom',
   rows: text.split('\n'),
@@ -208,9 +208,9 @@ async function start() {
   await init({ module_or_path: wasmUrl });
   const selector = select('puzzles');
   for (const puzzle of catalog) selector.add(new Option(`${puzzle.title} · ${puzzle.difficulty}`, puzzle.id));
-  selector.add(new Option('Custom puzzle', 'custom'));
+  selector.add(new Option('Custom puzzle', CUSTOM_PUZZLE_ID));
   const saved = storage.session();
-  const savedPuzzle = saved?.id === 'custom' ? customPuzzle(saved.rows) : catalog.find(p => p.id === saved?.id);
+  const savedPuzzle = saved?.id === CUSTOM_PUZZLE_ID ? customPuzzle(saved.rows) : catalog.find(p => p.id === saved?.id);
   const canRestore = savedPuzzle && savedPuzzle.rows.join('\n') === saved?.rows;
   // A stale saved layout falls back to the saved puzzle itself, not puzzle one.
   const target = savedPuzzle ?? catalog[0];
@@ -225,7 +225,7 @@ async function start() {
     }
   }
   selector.onchange = () => {
-    if (selector.value === 'custom') {
+    if (selector.value === CUSTOM_PUZZLE_ID) {
       selector.value = loaded().puzzle.id;
       $<HTMLTextAreaElement>('rows').closest('details')!.open = true;
       return;

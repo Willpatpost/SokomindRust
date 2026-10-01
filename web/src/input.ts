@@ -1,4 +1,4 @@
-/** What player input drives. Directions index "UDLR": 0 up, 1 down, 2 left, 3 right. */
+/** What player input drives. Directions index ACTIONS in protocol.ts ('UDLR'): 0 up, 1 down, 2 left, 3 right. */
 export interface InputHandlers {
   move(direction: number): void;
   /** The Z key. */
