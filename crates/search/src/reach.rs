@@ -135,4 +135,41 @@ mod tests {
         }
         assert!(walks > 10, "{walks}");
     }
+
+    /// The fill after epoch `u32::MAX` wraps: it zeroes every stamp and
+    /// restarts at epoch 1, so neither the stamps an old flood left at 1 nor
+    /// the walls still at 0 from `new` pass for reached or box cells.
+    #[test]
+    fn epoch_wrap_clears_stale_stamps() {
+        let board = Board::parse(ROOM).unwrap();
+        let start = board.initial();
+        // Walk around to box B and push it right, so the old flood measures
+        // from another cell and stamps a box on a cell that is floor now.
+        let mut other = start;
+        for d in [1, 1, 1, 3, 0, 3] {
+            assert!(board.step(&mut other, d).is_some(), "direction {d}");
+        }
+        assert_ne!(other.boxes, start.boxes);
+        let cells = board.tiles().len();
+        let mut reach = Reach::new(cells);
+        reach.fill(&board, &other);
+        assert_eq!(reach.epoch, 1);
+        // Skip the 2^32 - 2 fills between, leaving the old stamps in place.
+        reach.epoch = u32::MAX;
+        reach.fill(&board, &start);
+        assert_eq!(reach.epoch, 1, "the fill wrapped the epoch");
+        let mut fresh = Reach::new(cells);
+        fresh.fill(&board, &start);
+        for cell in 0..cells {
+            let cell = cell as Cell;
+            assert_eq!(reach.distance(cell), fresh.distance(cell), "cell {cell}");
+            assert_eq!(reach.blocked(cell), fresh.blocked(cell), "cell {cell}");
+            if fresh.distance(cell) != NONE {
+                let (mut walk, mut fresh_walk) = (Vec::new(), Vec::new());
+                reach.append_walk_reversed(&board, cell, &mut walk);
+                fresh.append_walk_reversed(&board, cell, &mut fresh_walk);
+                assert_eq!(walk, fresh_walk, "cell {cell}");
+            }
+        }
+    }
 }
