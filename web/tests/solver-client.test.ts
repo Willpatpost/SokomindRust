@@ -157,6 +157,23 @@ test('final optimal and bounded proofs must match the verified route length', as
   assert.deepEqual(matching.statuses, []);
   assert.equal(matching.updates.length, 2);
 });
+test('a reply that contradicts the verified route ends the search and is never shown', async () => {
+  const done = (patch: object) => ({ ...progress(), type: 'done', metrics: { ...progress().metrics, ...patch } });
+  for (const [route, reply, status] of [
+    [undefined, done({ status: 'solved' }), 'Solved reply has no verified route'],
+    ['D', done({ status: 'exhausted', proof: { kind: 'unsolvable' } }), 'Unsolvable reply conflicts with verified route'],
+    ['D', { ...progress(), metrics: { ...progress().metrics, lowerBound: 2 } }, 'Solver bound exceeds verified route'],
+  ] as const) {
+    const { client, worker, statuses, updates } = setup();
+    await client.solve('browser', request);
+    if (route) worker.reply(progress(route));
+    worker.reply(reply);
+    assert.equal(client.state.kind, 'completed');
+    assert.equal(client.route, route);
+    assert.deepEqual(statuses, [status]);
+    assert.equal(updates.length, route ? 1 : 0);
+  }
+});
 test('native cancellation ignores late successful responses', async () => {
   const pending = deferred<Response>();
   let signal: AbortSignal | undefined;

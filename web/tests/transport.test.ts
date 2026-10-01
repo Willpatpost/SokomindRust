@@ -23,31 +23,31 @@ test('native proofs normalize without guessing unknown kinds', () => {
   assert.throws(() => decodeNativeReply({ ...native(), proof: { kind: 'optimal', lower_bound: 0, upper_bound: 1 } }), /bounds/);
 });
 test('both transport boundaries reject malformed counters, statuses and routes', () => {
-  for (const patch of [
-    { expanded: -1 },
-    { generated: 0.5 },
-    { reserved_bytes: Infinity },
-    { moves: '1' },
-    { pushes: 2 },
-    { elapsed_ms: NaN },
-    { status: 'new_status' },
-    { status: 'running' },
-    { route: 'XD' },
-    { route: 'DD' },
-    { route: null },
-  ])
-    assert.throws(() => decodeNativeReply({ ...native(), ...patch }));
-  for (const value of [
-    null,
-    [],
-    'reply',
-    { type: 'mystery' },
-    { type: 'error', message: 1 },
-    { ...progress(), metrics: { ...progress().metrics, proof: { kind: 'mystery' } } },
-    { ...progress(), type: 'done' },
-    { ...progress('D'), route: 'D'.repeat(100001) },
-  ])
-    assert.throws(() => decodeWorkerReply(value));
+  for (const [patch, error] of [
+    [{ expanded: -1 }, /Invalid solver expanded/],
+    [{ generated: 0.5 }, /Invalid solver generated/],
+    [{ reserved_bytes: Infinity }, /Invalid solver reserved bytes/],
+    [{ moves: '1' }, /Invalid solver moves/],
+    [{ pushes: 2 }, /Invalid native route counters/],
+    [{ elapsed_ms: NaN }, /Invalid solver elapsed time/],
+    [{ status: 'new_status' }, /Unknown solver status/],
+    [{ status: 'running' }, /Inconsistent solver completion/],
+    [{ route: 'XD' }, /Invalid solver route/],
+    [{ route: 'DD' }, /Route and move count disagree/],
+    [{ route: null }, /Invalid native route counters/],
+  ] as const)
+    assert.throws(() => decodeNativeReply({ ...native(), ...patch }), error);
+  for (const [value, error] of [
+    [null, /Invalid solver response/],
+    [[], /Invalid solver response/],
+    ['reply', /Invalid solver response/],
+    [{ type: 'mystery' }, /Unknown worker reply/],
+    [{ type: 'error', message: 1 }, /Invalid worker error/],
+    [{ ...progress(), metrics: { ...progress().metrics, proof: { kind: 'mystery' } } }, /Unknown solver proof kind/],
+    [{ ...progress(), type: 'done' }, /Inconsistent solver completion/],
+    [{ ...progress('D'), route: 'D'.repeat(100001) }, /Invalid solver route/],
+  ] as const)
+    assert.throws(() => decodeWorkerReply(value), error);
 });
 test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   const empty = decodeMetricTuple(new Uint32Array([2, 4, 128, 0xffffffff, 0, 0xffffffff]), 'running');
@@ -56,9 +56,32 @@ test('tuple ABI preserves sentinels and tolerates appended diagnostics', () => {
   assert.deepEqual(decodeMetricTuple([2, 4, 128, 5, 1, 3, 99], 'time_limit').proof, { kind: 'bounded', lower: 3, upper: 5 });
   assert.deepEqual(decodeMetricTuple([2, 4, 128, 1, 2, 1], 'solved').proof, { kind: 'optimal', moves: 1 });
   assert.deepEqual(decodeMetricTuple([2, 4, 128, 0xffffffff, 3, 0xffffffff], 'exhausted').proof, { kind: 'unsolvable' });
-  for (const tuple of [[1], [1, 2, 3, 4, 99, 0], [1, 2, 3, 0xffffffff, 2, 0], [1, 2, 3, 2, 1, 3]])
-    assert.throws(() => decodeMetricTuple(tuple, 'solved'));
-  assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'));
+  for (const [tuple, error] of [
+    [[1], /Invalid WASM metrics tuple/],
+    [[1, 2, 3, 4, 99, 0], /Unknown WASM proof kind/],
+    [[1, 2, 3, 0xffffffff, 2, 0], /Inconsistent optimal proof/],
+    [[1, 2, 3, 2, 1, 3], /Invalid solver proof bounds/],
+  ] as const)
+    assert.throws(() => decodeMetricTuple(tuple, 'solved'), error);
+  assert.throws(() => decodeMetricTuple([1, 2, 3, 0xffffffff, 0, 0xffffffff], 'unknown'), /Unknown solver status/);
+});
+test('each proof guard rejects the contradiction it names', () => {
+  for (const [tuple, status, error] of [
+    [[1, 2, 3, 2, 0, 3], 'running', /Invalid solver bounds/],
+    [[1, 2, 3, 5, 3, 0xffffffff], 'exhausted', /Inconsistent unsolvable proof/],
+    [[1, 2, 3, 0xffffffff, 3, 0xffffffff], 'time_limit', /Inconsistent unsolvable proof/],
+  ] as const)
+    assert.throws(() => decodeMetricTuple(tuple, status), error);
+  // A tuple's proof reuses its own best and bound, so these mismatches need a metrics object.
+  const metrics = { ...progress().metrics, best: 2, lowerBound: 1, status: 'time_limit' };
+  for (const [proof, error] of [
+    [{ kind: 'optimal', moves: 1 }, /Inconsistent optimal proof/],
+    [{ kind: 'bounded', lower: 1, upper: 3 }, /Inconsistent bounded proof/],
+    [{ kind: 'bounded', lower: 2, upper: 2 }, /Inconsistent bounded proof/],
+  ] as const)
+    assert.throws(() => decodeWorkerReply({ type: 'done', elapsedMs: 20, metrics: { ...metrics, proof } }), error);
+  const bounded = { ...native(), proof: { kind: 'bounded', lower_bound: 1, upper_bound: 2 } };
+  assert.throws(() => decodeNativeReply(bounded), /Inconsistent bounded proof/);
 });
 test('a best past MAX_ROUTE is a legal count, but a route past it is still refused', () => {
   for (const best of [MAX_ROUTE + 1, 0xfffffffe]) assert.equal(decodeMetricTuple([2, 4, 128, best, 0, 0xffffffff], 'running').best, best);
