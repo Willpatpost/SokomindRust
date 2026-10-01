@@ -58,7 +58,9 @@ where
             .as_nanos(),
         SCHEMAS.fetch_add(1, Ordering::Relaxed)
     );
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    // The name comes only from the process id, a timestamp and a counter,
+    // never from input, so the spliced SQL is safe to assert.
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&mut admin)
         .await
         .unwrap();
@@ -95,8 +97,9 @@ where
     }
 }
 
+/// Drops a schema that `live` named, so its name is safe to splice too.
 async fn drop_schema(admin: &mut PgConnection, schema: &str) {
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(admin)
         .await
         .unwrap();
