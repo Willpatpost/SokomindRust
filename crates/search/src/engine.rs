@@ -728,33 +728,20 @@ impl Engine {
         }
         Inserted::Queued
     }
-    /// Every unsolved route walks to a box before its first push. Ignoring
-    /// walls and all other boxes can only shorten that walk. These walking
-    /// moves are disjoint from the assignment's required pushes, so they add
-    /// to its admissible estimate. Keep assignment costs separately cached.
-    /// Only the root queues this walk. A pushed child's player stands next
-    /// to the box it just pushed, so its box walk is 0, and `admit` uses
-    /// its stand walk only as a prune, which keeps queue keys and stored
+    /// The root's estimate: its assignment's pushes plus the keeper's walk
+    /// to its first push, bounded by [`Self::stand_walk`], the Manhattan
+    /// distance to the nearest stand of a statically legal push. Those
+    /// walking moves are disjoint from the counted pushes, so the sum stays
+    /// admissible. A root with no statically legal push has no route and
+    /// adds no walk. Only the root queues this walk: `admit` uses the stand
+    /// walk on children only as a prune, which keeps queue keys and stored
     /// estimates push-only.
     fn root_estimate(&self, state: &State, pushes: u32) -> u32 {
         if pushes == 0 && self.board.solved(state) {
             return 0;
         }
-        let width = self.board.width();
-        let x = state.player as usize % width;
-        let y = state.player as usize / width;
-        let walk = state.boxes[..self.board.labels().len()]
-            .iter()
-            .map(|&cell| x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1)
-            .min()
-            .unwrap_or(0);
-        // The first push needs the keeper on its stand, not just next to a
-        // box.
-        let walk = {
-            let boxes = &state.boxes[..self.board.labels().len()];
-            walk.max(self.stand_walk(state.player, boxes, |cell| boxes.contains(&cell), 1) as usize)
-        };
-        pushes + walk as u32
+        let boxes = &state.boxes[..self.board.labels().len()];
+        pushes + self.stand_walk(state.player, boxes, |cell| boxes.contains(&cell), 1)
     }
     /// The Manhattan distance from `player` to the nearest stand of a
     /// statically legal push, or 0 when there is none. Pushing box `j` in
@@ -1169,11 +1156,11 @@ mod tests {
         assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
     }
 
-    /// The root estimate is pushes + max(box walk, stand walk). It rises
-    /// over pushes + box walk by exactly these gains, on exactly these
-    /// catalog boards, so a change to either walk, to the dead masks or to
-    /// the catalog shows here. The gain reads only cells and dead masks,
-    /// not the push count.
+    /// The root estimate is pushes + stand walk. It rises over pushes + box
+    /// walk (the step to the nearest box's side, recomputed below) by
+    /// exactly these gains, on exactly these catalog boards, so a change to
+    /// either walk, to the dead masks or to the catalog shows here. The gain
+    /// reads only cells and dead masks, not the push count.
     ///
     /// The seven gains come from a Python replica of the engine's start
     /// estimate, written from the stand-walk rule before this code and not
