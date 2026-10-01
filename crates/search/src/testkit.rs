@@ -16,10 +16,12 @@ const MIN_EXPLORED: usize = 8;
 /// Successor state and, for a push, the box index and direction.
 pub(crate) type Edge = (usize, Option<(usize, usize)>);
 /// A catalog board that fits under `CAP`: its id, the board, every
-/// primitive state reachable from its start (the start first) and each
-/// state's edges.
+/// primitive state reachable from its start without expanding solved ones
+/// (the start first) and each state's edges.
 pub(crate) type Explored = (String, Board, Vec<State>, Vec<Vec<Edge>>);
 
+/// The fitting catalog boards, explored on first use, which panics when
+/// fewer than `MIN_EXPLORED` fit.
 static EXPLORED: LazyLock<Vec<Explored>> = LazyLock::new(|| {
     let explored: Vec<Explored> = catalog()
         .into_iter()
