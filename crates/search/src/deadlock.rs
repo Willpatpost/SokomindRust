@@ -8,6 +8,15 @@ use std::mem::size_of;
 /// Occupancy marker for a cell without a box.
 const EMPTY: u8 = u8::MAX;
 
+/// Whether a box with the four `neighbors` of [`Board::neighbors`] is held
+/// on both axes, up-down and left-right: each has a wall or a `blocked`
+/// cell on one side. Pushing the box along a held axis is illegal while its
+/// blockers stay. `blocked` only ever sees board cells, never `NONE`.
+fn held(neighbors: [Cell; 4], blocked: impl Fn(Cell) -> bool) -> bool {
+    let axis = |a: Cell, b: Cell| a == NONE || b == NONE || blocked(a) || blocked(b);
+    axis(neighbors[0], neighbors[1]) && axis(neighbors[2], neighbors[3])
+}
+
 /// Sound post-push deadlock detection: one greatest freeze fixpoint over the
 /// pushed box's component. Besides frozen groups of any shape, on every state
 /// the engine expands it flags each push that completes a 2x2 square of boxes
@@ -70,9 +79,26 @@ impl Deadlock {
     /// Whether pushing the box at `from` to `to` creates a deadlock in the
     /// state last given to `refresh`. A newly created deadlock always
     /// involves the moved box, so only the moved box's component is analyzed.
+    /// Many pushes, most of them on the catalog boards, land the box with no
+    /// box beside it; `lone_answer` answers those without the fixpoint.
     pub(crate) fn is_dead_after_push(&self, board: &Board, from: Cell, to: Cell) -> bool {
         let index = self.at(from).expect("refresh saw a box at from");
-        self.frozen_component(board, index, from, to)
+        self.lone_answer(board, index, from, to)
+            .unwrap_or_else(|| self.frozen_component(board, index, from, to))
+    }
+    /// The fixpoint's answer for the push of `index` from `from` to `to`
+    /// when no box borders `to` after it, else `None`. The component is
+    /// then the box alone, which no partner can hold, so the fixpoint
+    /// reduces to one `held` test.
+    fn lone_answer(&self, board: &Board, index: usize, from: Cell, to: Cell) -> Option<bool> {
+        let neighbors = board.neighbors()[to as usize];
+        if neighbors
+            .iter()
+            .any(|&cell| self.box_at(from, to, index, cell).is_some())
+        {
+            return None;
+        }
+        Some(held(neighbors, |_| false) && !board.on_goal(index, to))
     }
     /// Greatest freeze fixpoint over the moved box's box-adjacency component:
     /// start with every component box frozen and release any box with an axis
@@ -115,15 +141,11 @@ impl Deadlock {
                     continue;
                 }
                 let neighbors = board.neighbors()[cell as usize];
-                let blocker = |cell: Cell| {
-                    cell == NONE
-                        || self
-                            .box_at(from, to, index, cell)
-                            .is_some_and(|j| frozen[j])
+                let frozen_box = |cell: Cell| {
+                    self.box_at(from, to, index, cell)
+                        .is_some_and(|j| frozen[j])
                 };
-                let held = (blocker(neighbors[0]) || blocker(neighbors[1]))
-                    && (blocker(neighbors[2]) || blocker(neighbors[3]));
-                if !held {
+                if !held(neighbors, frozen_box) {
                     frozen[i] = false;
                     changed = true;
                 }
@@ -141,7 +163,11 @@ impl Deadlock {
 #[cfg(test)]
 mod tests {
     use super::{Deadlock, EMPTY};
-    use crate::{engine::canonicalize, heuristic::Heuristic, testkit::Lcg};
+    use crate::{
+        engine::canonicalize,
+        heuristic::Heuristic,
+        testkit::{Lcg, explored_catalog},
+    };
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
     use std::collections::HashMap;
 
@@ -409,6 +435,45 @@ mod tests {
         assert!(
             flagged >= 10_000 && from_solvable >= 450,
             "{flagged} {from_solvable}"
+        );
+    }
+
+    /// The shortcut for a box that lands with no box beside it answers as
+    /// the full fixpoint does on every push of the explored catalog boards.
+    #[test]
+    fn lone_box_shortcut_matches_the_fixpoint() {
+        let (mut lone, mut lone_flags, mut grouped) = (0, 0, 0);
+        for (id, board, states, edges) in explored_catalog() {
+            let boxes = board.labels().len();
+            let mut deadlock = Deadlock::new(board);
+            for (s, out) in edges.iter().enumerate() {
+                deadlock.refresh(&states[s].boxes[..boxes]);
+                for &(to, push) in out {
+                    // Explored states keep the board's box order, so slot i
+                    // is the same box in both states.
+                    let Some((i, _)) = push else {
+                        continue;
+                    };
+                    let (from, cell) = (states[s].boxes[i], states[to].boxes[i]);
+                    let full = deadlock.frozen_component(board, i, from, cell);
+                    let flagged = deadlock.is_dead_after_push(board, from, cell);
+                    assert_eq!(flagged, full, "{id}: state {s} to {to}");
+                    if let Some(answer) = deadlock.lone_answer(board, i, from, cell) {
+                        assert_eq!(answer, full, "{id}: state {s} to {to}");
+                        lone += 1;
+                        lone_flags += usize::from(answer);
+                    } else {
+                        grouped += 1;
+                    }
+                }
+            }
+        }
+        // A replica of this test counts 4_058 pushes that land the box
+        // alone, 960 of them flagged, and 854 beside another box; the bounds
+        // sit a little below, so the shortcut must stay the common case.
+        assert!(
+            lone >= 3_900 && lone_flags >= 900 && grouped >= 800,
+            "{lone} {lone_flags} {grouped}"
         );
     }
 }
