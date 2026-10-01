@@ -2,6 +2,10 @@
 // invariants, the scoreboard and bench:observe's review helpers. No filesystem
 // or process access, so scripts/bench-gate.test.mjs can exercise every rule
 // without cargo.
+import { MODES } from '../web/src/protocol.ts';
+
+// The modes, in the order catalog.rs writes them and serialize sorts by.
+export { MODES };
 
 /**
  * A case of the current run as toCase builds it, or of a committed file as load()
@@ -53,7 +57,6 @@
  */
 
 export const SCHEMA_VERSION = 2;
-export const MODES = ['fast', 'quality', 'optimal'];
 /** @type {ReadonlySet<string>} */
 export const FINISHED = new Set(['solved', 'exhausted']);
 /** @type {ReadonlySet<string>} */
@@ -225,7 +228,7 @@ export function compare(prev, cur, { sameConfig }) {
     if (!c) continue;
     const P = fields(p),
       C = fields(c),
-      flagged = new Set();
+      flagged = /** @type {Set<string>} */ (new Set());
     /**
      * @param {'hard' | 'soft' | 'improved' | 'changed'} bucket
      * @param {string | null} rule
@@ -303,6 +306,7 @@ export function mustRecord(diff) {
 export function invariants(cases, evidence = []) {
   /** @type {Failure[]} */
   const failures = [];
+  /** @type {Map<string, number>} */
   const best = new Map();
   const fingerprints = new Map(cases.map(c => [c.id, c.fingerprint]));
   /**
@@ -310,7 +314,8 @@ export function invariants(cases, evidence = []) {
    * @param {number | null} moves
    */
   const offer = (id, moves) => {
-    if (moves !== null && (!best.has(id) || moves < best.get(id))) best.set(id, moves);
+    const known = best.get(id);
+    if (moves !== null && (known === undefined || moves < known)) best.set(id, moves);
   };
   for (const c of cases) offer(c.id, c.moves);
   for (const e of evidence) if (e.fingerprint === fingerprints.get(e.id)) offer(e.id, e.moves);
@@ -332,8 +337,8 @@ export function invariants(cases, evidence = []) {
       none: moves === null,
     })[proof];
     if (!consistent) fail('I2', `proof=${proof} disagrees with moves=${moves} lower_bound=${lower} status=${c.status}`);
-    if (!best.has(c.id)) continue;
     const route = best.get(c.id);
+    if (route === undefined) continue;
     if (lower !== null && lower > route) fail('I3', `lower bound ${lower} exceeds a verified ${route}-move route`);
     if (proof === 'optimal' && moves !== route) fail('I3', `claims ${moves} moves optimal but a ${route}-move route exists`);
     if (proof === 'unsolvable') fail('I3', `claims unsolvable but a ${route}-move route exists`);
@@ -439,6 +444,7 @@ function section(title, findings, limit) {
   if (!findings.length) return [`${title}: none`];
   const lines = [`${title} (${findings.length}):`];
   if (findings.length > limit) {
+    /** @type {Map<string, number>} */
     const tally = new Map();
     for (const f of findings) tally.set(f.field, (tally.get(f.field) ?? 0) + 1);
     lines.push(`  by field: ${[...tally].map(([field, n]) => `${field} x${n}`).join(', ')}`);
