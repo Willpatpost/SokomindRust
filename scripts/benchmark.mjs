@@ -82,7 +82,7 @@ function save(name, text) {
   writeFileSync(resolve(root, 'target/bench', name), text);
 }
 /**
- * Saves the records to target/bench/catalog.json and prints each mode's median search time.
+ * Saves the records to target/bench/catalog.json and prints each mode's median search time, setup included.
  * @param {CorpusRecord[]} records
  */
 function raw(records) {
@@ -91,7 +91,7 @@ function raw(records) {
     const times = records.filter(r => r.mode === mode).map(r => r.search_us);
     return times.length ? [`${mode} ${(median(times) / 1000).toFixed(1)} ms`] : [];
   });
-  console.log(`Median search time (observational): ${medians.join(', ') || 'no runs'}.`);
+  console.log(`Median search time, setup included (observational): ${medians.join(', ') || 'no runs'}.`);
 }
 /** @param {import('./bench-gate.mjs').ReportFields} fields */
 function report(fields) {

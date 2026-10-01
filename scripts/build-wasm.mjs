@@ -1,3 +1,5 @@
+// npm run wasm: builds the sokomind-wasm cdylib under the wasm-release profile,
+// then generates its web bindings into web/wasm with wasm-bindgen.
 import { run, env, root } from './toolchain.mjs';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';

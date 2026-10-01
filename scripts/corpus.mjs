@@ -1,3 +1,6 @@
+// The catalog, its line-ending-normalized hash and the native corpus, shared by
+// benchmark.mjs and parity.mjs. nativeCorpus builds the catalog example once per
+// process (--locked, release) and parses the JSON line it prints per search.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -29,10 +32,10 @@ import { env, root, run } from './toolchain.mjs';
  * @property {number} reserved_bytes
  * @property {number | null} first_route_expanded
  * @property {number | null} first_route_generated
- * @property {number} setup_us
- * @property {number | null} first_route_us
- * @property {number} search_us
- * @property {number} reconstruct_us
+ * @property {number} setup_us Search::new alone
+ * @property {number | null} first_route_us From before Search::new to the end of the slice that found the first route
+ * @property {number} search_us From before Search::new to the end of the search, setup included
+ * @property {number} reconstruct_us solution() alone
  * @property {Record<string, number>} stats
  */
 

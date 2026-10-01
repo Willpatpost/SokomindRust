@@ -1,3 +1,8 @@
+// The environment and spawn helpers every script uses. env puts the
+// project-local tools under .tools (README.md "Run locally") ahead of the
+// system path, keeping Windows' "Path" key; commands start in the repo root
+// without a shell. attempt returns a command's exit code; run ends this
+// process when the command fails.
 import { existsSync } from 'node:fs';
 import { resolve, delimiter } from 'node:path';
 import { spawnSync } from 'node:child_process';

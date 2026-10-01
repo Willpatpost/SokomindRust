@@ -1,3 +1,8 @@
+// Checks the WASM build in web/wasm against the native corpus: each catalog
+// search must match its native record's status, counters, bound, proof,
+// diagnostics and route and stay within its memory budget, and each route must
+// replay to a solved board. npm run test:parity builds the WASM first; CI and
+// validate run this file with --native after their one WASM build.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -49,13 +54,15 @@ const { default: init, WasmGame, WasmSearch } = await import(pathToFileURL(resol
 const wasm = await init({ module_or_path: readFileSync(resolve(root, 'web/wasm/sokomind_bg.wasm')) });
 const native = options.native ? recorded(options.native) : nativeCorpus();
 const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')]));
+/** Pops per advance(). parity sets no deadline, so any batch size gives the same records. */
+const POPS_PER_ADVANCE = 8;
 let verified = 0;
 for (const reference of native) {
   const rows = puzzles.get(reference.id);
   const context = `${reference.id}/${reference.mode}`;
   const search = new WasmSearch(rows, '', reference.mode, reference.max_states, reference.memory_mib);
   try {
-    while (search.advance(8)) {}
+    while (search.advance(POPS_PER_ADVANCE)) {}
     // The worker's own decoder: parity checks what the UI reads, not a copy of it.
     const metrics = decode(context, () => decodeMetricTuple(search.metrics(), search.status()));
     assert.deepEqual(
