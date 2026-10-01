@@ -1,6 +1,9 @@
 [workspace]
 members = ["crates/core", "crates/search", "crates/wasm", "crates/server"]
-resolver = "2"
+# A virtual workspace takes no resolver from its members' edition (all 2024),
+# so it names one. Resolver 3 is MSRV-aware: a lock refresh prefers dependency
+# versions whose own rust-version is no newer than the one set below.
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
