@@ -23,9 +23,9 @@ const PROOFS: Record<Proof['kind'], Proof> = {
 // SolverClient reject an unsolvable proof beside a route, but the text is still pinned.
 const CLAIMS: Record<Proof['kind'], string> = {
   optimal: 'proven move-optimal from this position',
-  bounded: 'within 4 of optimal',
+  bounded: 'within 4 moves of optimal',
   unsolvable: 'proven unsolvable',
-  none: 'within 4 of optimal',
+  none: 'within 4 moves of optimal',
 };
 const ROUTE = 'D'.repeat(24);
 const metrics = (status: SearchStatus, proof: Proof): Metrics => ({
@@ -55,7 +55,7 @@ test('a route without a certified bound is unproven, and the gap is measured on 
   }
   // A throttled worker route can trail the best the search has found.
   const trailing = { ...metrics('running', PROOFS.none), best: 22 };
-  assert.equal(statusText(trailing, ROUTE), '24 remaining moves · within 4 of optimal. Searching…');
+  assert.equal(statusText(trailing, ROUTE), '24 remaining moves · within 4 moves of optimal. Searching…');
   const optimal = metrics('solved', PROOFS.optimal);
   assert.equal(statusText(optimal, ROUTE), '24 remaining moves · proven move-optimal from this position. Search complete.');
 });

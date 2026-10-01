@@ -119,6 +119,7 @@
             O, R, S and X are reserved, so o, r, s and x are not goals. Spaces are floor.
           </p>
           <label for="rows">Puzzle rows</label>
+          <!-- maxlength is Board::parse's text cap, MAX_CELLS * 2 bytes (crates/core/src/board.rs). -->
           <textarea id="rows" spellcheck="false" rows="9" maxlength="8192"></textarea>
           <button id="load-custom">Play these rows</button>
         </details>
@@ -133,7 +134,7 @@
           <h2>How to play</h2>
           <p>
             Push every box onto its matching goal. You can push one box at a time, but you cannot pull.
-            Use arrow keys, WASD, or the buttons.
+            Use arrow keys or WASD (Z undoes), swipe on the board, or the buttons.
           </p>
           <p id="storage" class="fine">
             Progress stays in this browser. PostgreSQL sync is available when the server is connected.

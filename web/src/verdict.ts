@@ -18,7 +18,7 @@ function routeClaim({ lowerBound, proof }: Metrics, route: string): string {
       return 'proven unsolvable';
     case 'bounded':
     case 'none':
-      return lowerBound === undefined ? 'optimality unproven' : `within ${route.length - lowerBound} of optimal`;
+      return lowerBound === undefined ? 'optimality unproven' : `within ${route.length - lowerBound} moves of optimal`;
   }
 }
 
