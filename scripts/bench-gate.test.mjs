@@ -236,6 +236,50 @@ test('R1-R4 and S3 improvements must be recorded, S1 and S2 ones are information
   assert.equal(formatReport({ action: 'update', cases: [], config: CONFIG, diff: removed, failures: [], source: 'def' }).hard, 0);
 });
 
+test('formatReport lists invariant failures and catalog changes, tallies findings past its limit by field, shows ? for no value', () => {
+  // A stat only the new run reports is changed from undefined.
+  const gained = { key: 'a:fast', rule: null, field: 'stats.new_stat', from: undefined, to: 4 };
+  assert.deepEqual(diff(fast(), fast({ stats: { unique_states: 150, duplicate_improvements: 3, new_stat: 4 } })).changed, [gained]);
+  const { text, hard } = formatReport({
+    action: 'check',
+    cases: [full()],
+    config: CONFIG,
+    diff: {
+      hard: [],
+      soft: [],
+      improved: [
+        { key: 'a:fast', rule: 'R1', field: 'moves', from: 12, to: 10 },
+        { key: 'a:optimal', rule: 'S1', field: 'expanded', from: 500, to: 100 },
+        { key: 'b:fast', rule: 'R1', field: 'moves', from: 14, to: 13 },
+      ],
+      changed: [gained],
+      missing: ['gone:fast'],
+      extra: ['new:fast'],
+    },
+    failures: [{ key: 'a:optimal', rule: 'I2', message: 'proof=bounded disagrees with moves=10 lower_bound=10 status=solved' }],
+    baseline: 'abc',
+    source: 'def',
+    catalogChangesAreHard: true,
+    limit: 1,
+  });
+  assert.equal(hard, 2, 'the missing case and the extra case');
+  assert.deepEqual(text.split('\n'), [
+    'INVARIANT FAILURES (1):',
+    '  a:optimal  I2  proof=bounded disagrees with moves=10 lower_bound=10 status=solved',
+    'Missing cases (1): gone:fast',
+    'Extra cases (1): new:fast',
+    'Hard: none',
+    'Soft: none',
+    'Improved (3):',
+    '  by field: moves x2, expanded x1',
+    '  a:fast  R1  moves: 12 -> 10',
+    '  ... 2 more in target/bench/report.txt',
+    'Changed (1):',
+    '  a:fast  -  stats.new_stat: ? -> 4',
+    'BENCH check v2: cases=1 config=20000/64 hard=2 soft=0 improved=3 changed=1 invariants=FAIL(1) baseline=abc source=def',
+  ]);
+});
+
 test('scoreboard counts routes, proofs, capped lower bounds and records per proof', () => {
   /**
    * @param {string} id
