@@ -1,14 +1,16 @@
 name: Validate
 # Pushes to main and pull requests (not every branch push, so an open pull
-# request is validated once per update, not twice). Docs-only changes skip it;
-# workflow_dispatch runs it on demand. The weekly schedule runs only the deploy
-# job, whose base images change upstream while this repository does not.
+# request is validated once per update, not twice). A change to LICENSE alone
+# skips it, but a README-only change does not: scripts/mirrors.test.mjs checks
+# the values README.md copies. workflow_dispatch runs it on demand. The weekly
+# schedule runs only the deploy job, whose base images change upstream while
+# this repository does not.
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', LICENSE]
+    paths-ignore: [LICENSE]
   pull_request:
-    paths-ignore: ['**.md', LICENSE]
+    paths-ignore: [LICENSE]
   workflow_dispatch:
   schedule:
     - cron: '17 6 * * 1' # Mondays, 06:17 UTC

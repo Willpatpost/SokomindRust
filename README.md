@@ -355,7 +355,8 @@ and `TRUSTED_PROXIES` ever differ, every client shares one rate-limit bucket.
 
 CI (`.github/workflows/ci.yml`) runs these on pushes to `main`, on pull
 requests, and on demand (`workflow_dispatch`); a push or pull request that
-changes only Markdown files or `LICENSE` starts no run. The first five run on
+changes only `LICENSE` starts no run, but a README-only one does, because
+`test:scripts` checks the values this README copies. The first five run on
 Ubuntu and Windows and the rest, after `npm ci`, on Ubuntu with a PostgreSQL 18
 service. Every job names its runner image exactly (`ubuntu-24.04`,
 `windows-2025-vs2026`) rather than a `-latest` label, and those that run Node
