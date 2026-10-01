@@ -36,6 +36,9 @@ import { env, root, run } from './toolchain.mjs';
  * @property {Record<string, number>} stats
  */
 
+// Bytes per MiB: budgets are set in MiB, while the records and the WASM metrics count bytes.
+export const MIB = 1024 * 1024;
+
 const catalogText = readFileSync(resolve(root, 'data/puzzles.json'), 'utf8');
 /** @type {Puzzle[]} */
 export const catalog = JSON.parse(catalogText);
@@ -59,7 +62,7 @@ export function nativeCorpus(args = []) {
   if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
   built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
-  const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * MIB });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `Corpus exited ${result.status}`);
   return result.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));

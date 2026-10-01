@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { decodeMetricTuple, decodeSnapshot } from '../web/src/transport.ts';
 import { MODES } from './bench-gate.mjs';
-import { catalog, catalogHash, diagnosticFields, nativeCorpus } from './corpus.mjs';
+import { MIB, catalog, catalogHash, diagnosticFields, nativeCorpus } from './corpus.mjs';
 import { root } from './toolchain.mjs';
 
 // `--native <file>` checks WASM against native records already on disk instead
@@ -55,7 +55,7 @@ for (const reference of native) {
       best: metrics.best ?? null, lower: metrics.lowerBound ?? null, proof: metrics.proof },
     { status: reference.status, expanded: reference.expanded, generated: reference.generated,
       best: reference.moves, lower: reference.lower_bound, proof: reference.proof }, context);
-    assert(metrics.reservedBytes <= reference.memory_mib * 1048576, `${context}: WASM budget exceeded`);
+    assert(metrics.reservedBytes <= reference.memory_mib * MIB, `${context}: WASM budget exceeded`);
     assert.deepEqual(Array.from(search.diagnostics()), diagnosticFields.map(field => reference.stats[field]), `${context}: diagnostics`);
     const route = search.solution();
     assert.equal(route ?? null, reference.route, `${context}: route differs`);
@@ -76,4 +76,4 @@ for (const reference of native) {
   } finally { search.free(); }
 }
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
-console.log(`WASM retained linear memory: ${(wasm.memory.buffer.byteLength / 1048576).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`);
+console.log(`WASM retained linear memory: ${(wasm.memory.buffer.byteLength / MIB).toFixed(2)} MiB (one reused test instance, not per-worker RSS).`);

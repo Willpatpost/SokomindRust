@@ -1,6 +1,7 @@
 // Pure benchmark-gate logic: baseline schema, regression rules, false-proof
-// invariants and the scoreboard. No filesystem or process access, so
-// scripts/bench-gate.test.mjs can exercise every rule without cargo.
+// invariants, the scoreboard and bench:observe's review helpers. No filesystem
+// or process access, so scripts/bench-gate.test.mjs can exercise every rule
+// without cargo.
 
 /**
  * A case of the current run as toCase builds it, or of a committed file as load()
@@ -353,6 +354,43 @@ export function scoreboard(cases) {
 export function scoreboardDelta(before, after) {
   return after.map((row, i) => Object.fromEntries(Object.entries(row).map(([name, value]) =>
     [name, typeof value === 'number' && typeof before[i]?.[name] === 'number' ? value - before[i][name] : value])));
+}
+
+/**
+ * The median of a non-empty list of timings in microseconds. An even-length list
+ * has two middle values; their mean, rounded to a whole microsecond, is the median.
+ * @param {readonly number[]} list
+ * @returns {number}
+ */
+export function median(list) {
+  const sorted = [...list].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+/**
+ * Pairs each case with the reference case of the same key for bench:observe's
+ * review deltas, but only on the same board: when the fingerprints differ, the
+ * board was edited after the reference was recorded, and a delta would compare
+ * two different boards.
+ * @template {Case} T
+ * @param {readonly Case[]} cases
+ * @param {readonly T[]} reference
+ * @returns {{ pairs: Map<string, T>, changed: string[] }} pairs: the reference case by key; changed: the ids
+ *   whose board differs from the reference's, each once.
+ */
+export function pairReference(cases, reference) {
+  const prior = new Map(reference.map(c => [key(c), c]));
+  /** @type {Map<string, T>} */
+  const pairs = new Map();
+  /** @type {string[]} */
+  const changed = [];
+  for (const c of cases) {
+    const p = prior.get(key(c));
+    if (p && p.fingerprint === c.fingerprint) pairs.set(key(c), p);
+    else if (p && !changed.includes(c.id)) changed.push(c.id);
+  }
+  return { pairs, changed };
 }
 
 /** @param {unknown} value */

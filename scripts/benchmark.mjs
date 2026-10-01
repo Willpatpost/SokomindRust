@@ -19,13 +19,15 @@ import {
   invariants,
   key,
   load,
+  median,
   mustRecord,
+  pairReference,
   scoreboard,
   scoreboardDelta,
   serialize,
   toCase,
 } from './bench-gate.mjs';
-import { catalog, catalogHash, nativeCorpus, sourceRevision } from './corpus.mjs';
+import { MIB, catalog, catalogHash, nativeCorpus, sourceRevision } from './corpus.mjs';
 import { root } from './toolchain.mjs';
 
 /** @typedef {import('./corpus.mjs').CorpusRecord} CorpusRecord */
@@ -41,7 +43,7 @@ const REFERENCE = resolve(root, 'benchmarks/observe-reference.json');
 const REGENERATE = { [BASELINE]: 'npm run bench:update', [REFERENCE]: 'npm run bench:observe -- --update' };
 const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
 // bench:observe's fixed size, which observe-reference.json records: far below sokomind_search::MAX_STATES
-// (60M) on purpose, so a run stays short. It is an observation size, not a cap; --states and --memory override it.
+// on purpose, so a run stays short. It is an observation size, not a cap; --states and --memory override it.
 const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
 const order = catalog.map(puzzle => puzzle.id);
@@ -72,8 +74,6 @@ const options = spec => parseArgs({ args: rest, options: spec, strict: true, all
  */
 const corpus = (config, extra = []) =>
   nativeCorpus(['--states', String(config.maxStates), '--memory', String(config.memoryMiB), ...extra]);
-/** @param {readonly number[]} list */
-const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
 /**
  * @param {string} name
  * @param {string} text
@@ -172,7 +172,9 @@ function update() {
 // baseline's and the committed reference's routes count as evidence), a crash,
 // a board missing from the catalog, or repeats that differ in anything but
 // timings. The deltas against the committed reference are for review and never
-// fail it; --update records a new reference only when the invariants hold.
+// fail it; a board edited since the reference was recorded gets none, and the
+// summary line names it. --update records a new reference only when the
+// invariants hold.
 function observe() {
   const values = options({ states: { type: 'string' }, memory: { type: 'string' }, repeat: { type: 'string' }, update: { type: 'boolean' } });
   const config = {
@@ -202,19 +204,18 @@ function observe() {
   const cases = records.map(r => ({ ...toCase(r), search_us: r.search_us, first_route_us: r.first_route_us }));
   const failures = invariants(cases, [...baseline.cases, ...(reference?.cases ?? [])]);
   const comparable = reference?.maxStates === config.maxStates && reference?.memoryMiB === config.memoryMiB;
-  /** @type {Map<string, ObserveCase>} */
-  const prior = new Map(comparable ? /** @type {ObserveCase[]} */ (reference.cases).map(c => [key(c), c]) : []);
+  const { pairs, changed } = pairReference(cases, comparable ? /** @type {ObserveCase[]} */ (reference.cases) : []);
   /**
    * @param {number | null} now
    * @param {number | null} then
    */
   const delta = (now, then) => now === null || then === null ? '' : now - then;
   console.table(cases.map(c => {
-    const p = prior.get(key(c));
+    const p = pairs.get(key(c));
     return {
       id: c.id, mode: c.mode, status: c.status, moves: c.moves, lb: c.lower_bound, proof: c.proof,
       expanded: c.expanded, generated: c.generated, firstRouteExpanded: c.first_route_expanded,
-      reservedMiB: +(c.reserved_bytes / 1048576).toFixed(1), searchMs: +(c.search_us / 1000).toFixed(1),
+      reservedMiB: +(c.reserved_bytes / MIB).toFixed(1), searchMs: +(c.search_us / 1000).toFixed(1),
       ...(p ? { dMoves: delta(c.moves, p.moves), dLb: delta(c.lower_bound, p.lower_bound),
         dExpanded: delta(c.expanded, p.expanded), dSearchMs: +((c.search_us - p.search_us) / 1000).toFixed(1) } : {}),
     };
@@ -223,7 +224,8 @@ function observe() {
   for (const f of failures) console.log(`INVARIANT FAILURE  ${f.key}  ${f.rule}  ${f.message}`);
   const state = !reference ? 'none' : comparable ? reference.sourceRevision : 'config-differs';
   console.log(`OBSERVE v${SCHEMA_VERSION}: boards=${OBSERVE.puzzles.length} config=${config.maxStates}/${config.memoryMiB}`
-    + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} reference=${state}`);
+    + ` invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} reference=${state}`
+    + (changed.length ? ` changed-boards=${changed.join(',')}` : ''));
   save('observe.json', JSON.stringify({ catalogHash, ...config, repeat, records }, null, 2) + '\n');
   if (failures.length) return false;
   if (values.update) {

@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compare, formatReport, invariants, load, mustRecord, scoreboard, scoreboardDelta, serialize, toCase } from './bench-gate.mjs';
+import {
+  compare,
+  formatReport,
+  invariants,
+  load,
+  median,
+  mustRecord,
+  pairReference,
+  scoreboard,
+  scoreboardDelta,
+  serialize,
+  toCase,
+} from './bench-gate.mjs';
 
 /** @typedef {import('./bench-gate.mjs').Case} Case */
 /** @typedef {import('./bench-gate.mjs').Finding} Finding */
@@ -210,4 +222,25 @@ test('scoreboard counts routes, proofs, capped lower bounds and records per proo
   assert.equal(delta[2].mode, 'optimal');
   assert.equal(delta[2].movesSum, 0);
   assert.equal(delta[0].recordsPerProof, null);
+});
+
+test('median takes the middle value, or the rounded mean of the two middle values', () => {
+  const samples = [30, 10, 20];
+  assert.equal(median(samples), 20);
+  assert.deepEqual(samples, [30, 10, 20], 'the input stays unsorted');
+  assert.equal(median([7]), 7);
+  assert.equal(median([40, 10]), 25);
+  assert.equal(median([1, 2]), 2);
+  assert.equal(median([4, 1, 3, 2]), 3);
+  assert.equal(median([1000, 9, 10, 11]), 11);
+});
+
+test('observe deltas pair a case only with the same board in the reference', () => {
+  const reference = [full(), fast(), full({ id: 'b', fingerprint: 'old' }), fast({ id: 'b', fingerprint: 'old' }), full({ id: 'gone' })];
+  const cases = [fast({ moves: 9 }), full(), full({ id: 'b' }), fast({ id: 'b' }), full({ id: 'new' })];
+  const { pairs, changed } = pairReference(cases, reference);
+  assert.deepEqual([...pairs.keys()], ['a:fast', 'a:optimal']);
+  assert.equal(pairs.get('a:fast'), reference[1]);
+  assert.deepEqual(changed, ['b']);
+  assert.deepEqual(pairReference(cases, []), { pairs: new Map(), changed: [] });
 });
