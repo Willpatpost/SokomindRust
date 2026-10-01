@@ -1,5 +1,5 @@
 //! Game rules through the public API: route limits, prefix replay, board
-//! steps, state validation, undo, and replay errors.
+//! steps, state validation, undo, reset, and replay errors.
 
 use sokomind_core::{
     Board, Cell, Game, MAX_ROUTE, NONE, ParseError, ReplayError, State, StateError, Step,
@@ -264,5 +264,34 @@ fn rules_undo_and_atomic_replay() {
     ] {
         assert_eq!(game.replay(route), Err(error), "{route}");
         assert_eq!(&snapshot(&game), trail.last().unwrap());
+    }
+}
+
+/// The web app's Restart button and Replay best both start from `reset`,
+/// which must forget the position, history, route and pushes together,
+/// whether the game was mid-route or solved.
+#[test]
+fn reset_forgets_every_move() {
+    let board = Board::parse(CROSSING_PAIR).unwrap();
+    for route in ["DL", "DLDR"] {
+        let mut game = Game::new(board.clone());
+        game.replay(route).unwrap();
+        assert!(game.pushes() > 0, "{route}");
+        game.reset();
+        assert_eq!(game.state(), board.initial(), "{route}");
+        assert_eq!(
+            (game.moves(), game.pushes(), game.actions()),
+            (0, 0, ""),
+            "{route}"
+        );
+        assert!(!game.solved(), "{route}");
+        assert!(!game.undo(), "{route}");
+        // Play resumes from the start with fresh counters.
+        assert!(game.step(decode_direction(b'D').unwrap()), "{route}");
+        assert_eq!(
+            (game.moves(), game.pushes(), game.actions()),
+            (1, 1, "D"),
+            "{route}"
+        );
     }
 }
