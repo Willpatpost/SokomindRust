@@ -2,12 +2,36 @@
 //! source for generated rooms, and an exhaustive oracle that gives the exact
 //! remaining moves from every primitive state of a small board.
 use sokomind_core::{Board, State, Step};
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::LazyLock,
+};
 
-/// Primitive states per board at most; at least 8 catalog boards fit.
+/// Primitive states per board at most; see `MIN_EXPLORED`.
 const CAP: usize = 20_000;
+/// How many catalog boards fit under `CAP` today. `explored_catalog`
+/// checks it once, so a catalog edit that drops one fails there, in one
+/// place.
+const MIN_EXPLORED: usize = 8;
 /// Successor state and, for a push, the box index and direction.
 pub(crate) type Edge = (usize, Option<(usize, usize)>);
+/// A catalog board that fits under `CAP`: its id, the board, every
+/// primitive state reachable from its start (the start first) and each
+/// state's edges.
+pub(crate) type Explored = (String, Board, Vec<State>, Vec<Vec<Edge>>);
+
+static EXPLORED: LazyLock<Vec<Explored>> = LazyLock::new(|| {
+    let explored: Vec<Explored> = catalog()
+        .into_iter()
+        .filter_map(|(id, board)| {
+            let (states, edges) = explore(&board)?;
+            Some((id, board, states, edges))
+        })
+        .collect();
+    let ids: Vec<&str> = explored.iter().map(|(id, ..)| id.as_str()).collect();
+    assert!(explored.len() >= MIN_EXPLORED, "{ids:?}");
+    explored
+});
 
 /// Every catalog board with its id.
 pub(crate) fn catalog() -> Vec<(String, Board)> {
@@ -30,6 +54,11 @@ pub(crate) fn catalog() -> Vec<(String, Board)> {
         .collect()
 }
 
+/// The catalog boards that fit under `CAP`, explored once per test binary.
+pub(crate) fn explored_catalog() -> &'static [Explored] {
+    &EXPLORED
+}
+
 /// 64-bit LCG with Knuth's MMIX multiplier and increment. Tests seed it with
 /// a literal, so every run sees the same generated rooms and walks. A test's
 /// seed and order of draws pin its rooms; changing either silently swaps the
@@ -49,7 +78,7 @@ impl Lcg {
 /// Every primitive state reachable from the start, without expanding solved
 /// ones, or `None` past `CAP` states. Box order is the board's: estimates
 /// and walks ignore order inside a group.
-pub(crate) fn explore(board: &Board) -> Option<(Vec<State>, Vec<Vec<Edge>>)> {
+fn explore(board: &Board) -> Option<(Vec<State>, Vec<Vec<Edge>>)> {
     let key = |state: &State| (state.player, state.boxes);
     let mut states = vec![board.initial()];
     let mut index = HashMap::from([(key(&board.initial()), 0)]);

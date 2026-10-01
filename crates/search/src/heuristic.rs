@@ -369,7 +369,7 @@ fn cost(distance: u16) -> i32 {
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use crate::engine::canonicalize;
-    use crate::testkit::{Lcg, catalog, explore, remaining};
+    use crate::testkit::{Lcg, explored_catalog, remaining};
     use sokomind_core::{Board, Cell, NONE};
     use std::mem::size_of;
 
@@ -525,13 +525,9 @@ mod tests {
     /// it by at most one.
     #[test]
     fn heuristic_is_admissible_and_consistent() {
-        let mut checked = Vec::new();
-        for (id, board) in catalog() {
-            let Some((states, edges)) = explore(&board) else {
-                continue;
-            };
-            let exact = remaining(&board, &states, &edges);
-            let heuristic = Heuristic::new(&board);
+        for (id, board, states, edges) in explored_catalog() {
+            let exact = remaining(board, states, edges);
+            let heuristic = Heuristic::new(board);
             let estimates: Vec<_> = states
                 .iter()
                 .map(|state| heuristic.estimate(state))
@@ -554,8 +550,6 @@ mod tests {
                     );
                 }
             }
-            checked.push(id);
         }
-        assert!(checked.len() >= 8, "{checked:?}");
     }
 }

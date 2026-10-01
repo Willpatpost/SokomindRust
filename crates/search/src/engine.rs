@@ -842,7 +842,7 @@ mod tests {
     use crate::{
         Status,
         heuristic::Heuristic,
-        testkit::{Lcg, catalog, explore, remaining},
+        testkit::{Lcg, catalog, explored_catalog, remaining},
     };
     use sokomind_core::{Board, Cell, NONE, State};
 
@@ -1079,14 +1079,10 @@ mod tests {
     /// testkit's exploration cap.
     #[test]
     fn stand_walk_is_admissible_and_consistent() {
-        let mut checked = Vec::new();
-        for (id, board) in catalog() {
-            let Some((states, edges)) = explore(&board) else {
-                continue;
-            };
+        for (id, board, states, edges) in explored_catalog() {
             let engine =
                 Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-            let exact = remaining(&board, &states, &edges);
+            let exact = remaining(board, states, edges);
             let values: Vec<_> = states
                 .iter()
                 .map(|state| estimates(&engine, state))
@@ -1109,9 +1105,7 @@ mod tests {
                     }
                 }
             }
-            checked.push(id);
         }
-        assert!(checked.len() >= 8, "{checked:?}");
     }
 
     /// The child prune's inputs: occupancy from the parent's flood plus
@@ -1121,10 +1115,7 @@ mod tests {
     #[test]
     fn stand_walk_after_a_push_matches_a_fresh_scan() {
         let (mut pushes, mut onward) = (0, 0);
-        for (id, board) in catalog() {
-            let Some((states, edges)) = explore(&board) else {
-                continue;
-            };
+        for (id, board, states, edges) in explored_catalog() {
             let mut engine =
                 Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
             let n = board.labels().len();
