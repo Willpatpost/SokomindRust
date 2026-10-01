@@ -40,7 +40,7 @@ test('synchronous construction and initial post failures restore completed state
   assert.equal(post.clock.tasks.size, 0);
 });
 test('route is replay checked, retained after cancellation, and transport is torn down', async () => {
-  const { client, worker, clock, verified } = setup();
+  const { client, worker, clock, statuses, verified } = setup();
   await client.solve('browser', { ...request, actions: 'U' });
   worker.reply(progress('D'));
   assert.deepEqual(verified, ['UD']);
@@ -48,11 +48,63 @@ test('route is replay checked, retained after cancellation, and transport is tor
   client.cancel();
   assert.equal(worker.messages.at(-1)?.type, 'cancel');
   clock.advance(1000);
+  assert.deepEqual(statuses, ['Stopped. Verified route retained.']);
   assert.equal(client.route, 'D');
   assert.equal(client.busy, false);
   assert.equal(worker.terminated, true);
   assert.equal(worker.onmessage, null);
   assert.equal(clock.tasks.size, 0);
+});
+test('the cancel grace and the deadline watchdog say whether a verified route is retained', async () => {
+  for (const [route, stopped, deadline] of [
+    [undefined, 'Stopped.', 'Worker deadline reached.'],
+    ['D', 'Stopped. Verified route retained.', 'Stopped at deadline. Verified route retained.'],
+  ] as const) {
+    const cancelled = setup();
+    await cancelled.client.solve('browser', request);
+    if (route) cancelled.worker.reply(progress(route));
+    cancelled.client.cancel();
+    cancelled.clock.advance(1000);
+    assert.deepEqual(cancelled.statuses, [stopped]);
+    const late = setup();
+    await late.client.solve('browser', request);
+    if (route) late.worker.reply(progress(route));
+    late.clock.advance(request.timeMs + 2000);
+    assert.deepEqual(late.statuses, [deadline]);
+    assert.equal(late.client.route, route);
+    assert.equal(late.client.busy, false);
+    assert.equal(late.worker.terminated, true);
+    assert.equal(late.clock.tasks.size, 0);
+  }
+});
+test('a worker error event ends the search with its message and tears the worker down', async () => {
+  for (const [message, status] of [
+    ['', 'Worker failed to start'],
+    ['Uncaught SyntaxError: Unexpected token', 'Uncaught SyntaxError: Unexpected token'],
+  ]) {
+    const { client, worker, clock, statuses } = setup();
+    await client.solve('browser', request);
+    worker.onerror!({ message } as ErrorEvent);
+    assert.deepEqual(statuses, [status]);
+    assert.equal(client.state.kind, 'completed');
+    assert.equal(worker.terminated, true);
+    assert.equal(worker.onerror, null);
+    assert.equal(clock.tasks.size, 0);
+  }
+});
+test('dropRoute forgets only a completed route and keeps its prefix', async () => {
+  const { client, worker, clock, statuses } = setup();
+  await client.solve('browser', { ...request, actions: 'U' });
+  worker.reply(progress('D'));
+  client.dropRoute();
+  assert.equal(client.route, 'D');
+  client.cancel();
+  clock.advance(1000);
+  assert.deepEqual(statuses, ['Stopped. Verified route retained.']);
+  client.dropRoute();
+  assert.equal(client.state.kind, 'completed');
+  assert.equal(client.route, undefined);
+  assert.equal(client.prefix, 'U');
 });
 test('old callbacks and watchdogs cannot finish a replacement search', async () => {
   const first = new Worker(),
@@ -177,7 +229,7 @@ test('a reply that contradicts the verified route ends the search and is never s
 test('native cancellation ignores late successful responses', async () => {
   const pending = deferred<Response>();
   let signal: AbortSignal | undefined;
-  const { client, updates } = setup({
+  const { client, statuses, updates } = setup({
     fetch: (async (_url, options) => {
       signal = options?.signal as AbortSignal;
       return pending.promise;
@@ -190,6 +242,7 @@ test('native cancellation ignores late successful responses', async () => {
   await done;
   assert.equal(client.state.kind, 'idle');
   assert.equal(updates.length, 0);
+  assert.deepEqual(statuses, ['Stopped waiting for the native search.']);
 });
 test('native timeout completes immediately even if a transport ignores abort', async () => {
   const pending = deferred<Response>();
