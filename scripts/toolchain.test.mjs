@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { childEnv, env } from './toolchain.mjs';
+import { attempt, childEnv, env } from './toolchain.mjs';
 
 /** @param {string} key */
 const isPath = key => key.toUpperCase() === 'PATH';
@@ -20,4 +20,11 @@ test("childEnv sets a command's variables over env, keeps env's path entry and l
   assert.deepEqual(childEnv(), env);
   assert.notEqual(childEnv(), env, 'a copy, not env itself');
   assert.deepEqual(env, before, 'env is unchanged');
+});
+
+test('attempt hands a command its extra variables, for that command only', () => {
+  // Node itself as the command, so no cargo is needed; the probe name is one nobody sets.
+  const probe = "process.exit(process.env.SOKOMIND_ATTEMPT_PROBE === 'set' ? 0 : 3)";
+  assert.equal(attempt(process.execPath, ['-e', probe], { SOKOMIND_ATTEMPT_PROBE: 'set' }), 0);
+  assert.equal(attempt(process.execPath, ['-e', probe]), 3);
 });
