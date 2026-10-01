@@ -139,8 +139,7 @@ test('unverified and overflowing routes are rejected before becoming playable', 
   overflow.worker.reply(progress('D'));
   assert.equal(overflow.client.route, undefined);
   assert.equal(overflow.verified.length, 0);
-  // ReplayError::PastLimit's text in crates/core/src/game.rs, which POST /api/solve sends too.
-  assert.deepEqual(overflow.statuses, ['Position and route together exceed the 100000-move replay limit']);
+  assert.deepEqual(overflow.statuses, [PAST_LIMIT_MESSAGE]);
 });
 test('a best past the replay limit leaves no route, and the replay-limit error ends the search', async () => {
   const { client, worker, statuses, updates } = setup();

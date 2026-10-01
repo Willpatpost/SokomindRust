@@ -37,8 +37,7 @@ pub enum ReplayError {
     /// [`MAX_ROUTE`]; see [`Game::check_extension`].
     ///
     /// `PAST_LIMIT_MESSAGE` in `web/src/protocol.ts` copies its text word for
-    /// word, for the web worker to show, and `web/tests/solver-client.test.ts`
-    /// pins it, so a wording change must update both.
+    /// word, for the web worker to show (checked by `scripts/mirrors.test.mjs`).
     PastLimit,
 }
 impl std::fmt::Display for ReplayError {
