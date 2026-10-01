@@ -395,15 +395,20 @@ through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
 `--`, so quote it there: `npm run validate '--' --quick`. It runs neither
 `npm ci` nor CI's deploy job.
 
+Every npm script that runs cargo, except `fmt:check`, passes `--locked`, as the
+Dockerfile's builds do, so a `Cargo.lock` that no longer matches the manifests
+fails the step instead of being silently rewritten, locally as in CI. After a
+hand edit to a `Cargo.toml`, refresh the lock with
+`node scripts/rust.mjs update --workspace` and commit it with the edit.
 `lint:rust` runs Clippy on every target with warnings as errors, under the
 workspace lints in `Cargo.toml`: unsafe code is denied, and an exported item or
 crate root (tests and examples included) without a doc fails. `--keep-going`
 lets one run report every failing target, not just the first. `doc:rust` builds
-the workspace's own docs (`cargo doc --workspace --no-deps`); CI and `validate`
-set `RUSTDOCFLAGS=-D warnings`, so a broken intra-doc link, a link from a public
-item to a private one, or any other rustdoc warning fails the step, where a
-plain `npm run doc:rust` only prints it. `format:check` runs Prettier
-(`prettier --check .`) over what `.prettierignore` leaves: the web app,
+the workspace's own docs (`cargo doc --locked --workspace --no-deps`); CI and
+`validate` set `RUSTDOCFLAGS=-D warnings`, so a broken intra-doc link, a link
+from a public item to a private one, or any other rustdoc warning fails the
+step, where a plain `npm run doc:rust` only prints it. `format:check` runs
+Prettier (`prettier --check .`) over what `.prettierignore` leaves: the web app,
 `scripts` (`*.mjs` and `tsconfig.json`), and the root config files, in the
 style `.prettierrc.json` sets; `npm run format` rewrites them. Commits that only
 reformat are listed in `.git-blame-ignore-revs`, which GitHub's blame view
