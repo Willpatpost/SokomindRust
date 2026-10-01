@@ -95,8 +95,11 @@ fn limits_follow_the_exported_ranges() {
     }
 }
 
-/// The web app shows these texts when the WASM search refuses to start or
-/// to hand over a route, so the typed variants keep the old wording.
+/// The WASM search throws these texts when it refuses to start or a route
+/// rebuild fails, so the typed variants keep the old wording. `TooLong` is
+/// only a guard now: `web/src/solver.worker.ts` never rebuilds a best past
+/// `MAX_ROUTE`, and it and POST /api/solve check the replay limit first and
+/// report `ReplayError::PastLimit`'s text instead.
 #[test]
 fn search_errors_keep_their_messages() {
     let cases = [

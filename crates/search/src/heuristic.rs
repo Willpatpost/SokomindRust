@@ -16,7 +16,7 @@ const _: () = assert!(
     (MAX_BOXES + 1) * MAX_CELLS < INF as usize
         && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
 );
-// Duals indices and group_of labels fit a byte.
+// Duals indices and group_of group indices fit a byte.
 const _: () = assert!(MAX_BOXES < u8::MAX as usize);
 /// Group size from which a child's group cost is repaired from the parent's
 /// duals with one augment instead of re-solved. Models put the crossover at

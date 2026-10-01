@@ -193,7 +193,10 @@ impl WasmSearch {
     /// the route and replays it on the board before returning it, and
     /// throws when the route is longer than
     /// [`MAX_ROUTE`](sokomind_core::MAX_ROUTE) moves or the replay check
-    /// fails.
+    /// fails. The web worker calls it only for a best that fits in
+    /// `MAX_ROUTE` after the constructor's `actions`, so the worker never
+    /// meets the first error; for a finished search whose best does not fit,
+    /// the worker reports `ReplayError::PastLimit`'s text instead.
     pub fn solution(&mut self) -> Result<Option<String>, JsError> {
         Ok(self.search.solution()?)
     }

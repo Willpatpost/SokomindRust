@@ -8,7 +8,8 @@ pub const NONE: Cell = u16::MAX;
 pub const MAX_BOXES: usize = 32;
 /// The most cells a board may have, counting the walls that pad short rows.
 /// [`Board::parse`] also caps the text at twice this many bytes (8 KiB),
-/// enough for a one-column board of this many rows.
+/// enough for a one-column board of this many rows; `web/index.html` copies
+/// that cap as the `#rows` textarea's `maxlength="8192"`.
 pub const MAX_CELLS: usize = 4096;
 /// The tile value of a wall; floor is 0 and a goal is its label.
 pub const WALL: u8 = 255;
