@@ -43,6 +43,8 @@ fn ragged_rows_are_padded_with_walls() {
     let board = Board::parse("OOOOOO\nOR XS\nOO").unwrap();
     assert_eq!((board.width(), board.height()), (6, 3));
     assert_eq!([board.tiles()[11], board.tiles()[17]], [WALL; 2]);
+    // An S goal's tile is the label its boxes carry.
+    assert_eq!(board.tiles()[10], b'X');
     // The padding blocks movement like any other wall.
     assert_eq!(board.neighbors()[10][3], NONE);
 }
