@@ -98,6 +98,9 @@ impl Policy {
 // Exact soundness assumes one admissible weight for the whole search.
 const _: () = assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
 const _: () = assert!(Policy::EXACT.weight == 1);
+// Mode's docs (lib.rs) call Quality's weight lighter than Fast's, and the
+// arena's key-width test takes Fast's as the largest.
+const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // Every `then` and `restart` target is itself in `Policy::ALL`, so the
 // checks that loop over it cover every policy a search can switch to. A
 // restarted policy runs to the end, so a search restarts at most once.

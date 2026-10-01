@@ -767,7 +767,8 @@ mod tests {
         );
         let largest = Key::new(Key::F_SAT, Key::H_SAT, ID_MASK - 1);
         assert_eq!(largest.0, u64::MAX - 1);
-        // MAX_ROUTE plus the fast policy's weight 5 times the largest h.
+        // MAX_ROUTE plus Policy::FAST's weight, the largest, times the largest
+        // h (checked by scripts/mirrors.test.mjs).
         let worst = MAX_ROUTE as u64 + 5 * u64::from(MAX_QUEUED_H);
         assert_eq!(worst, 775_840);
         let key = Key::new(worst, MAX_QUEUED_H, MAX_STATES as u32);

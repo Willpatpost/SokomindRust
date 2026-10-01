@@ -658,7 +658,7 @@ test("board.ts's WALL equals sokomind_core::WALL", () => {
   assert.equal(read('web/src/board.ts', /const WALL = (\d+);/), read('crates/core/src/board.rs', /pub const WALL: u8 = (\d+);/));
 });
 
-test("the README and Mode's docs quote the weights of Policy::FAST and Policy::QUALITY", () => {
+test("the README, Mode's docs and the arena's key test quote the weights of Policy::FAST and Policy::QUALITY", () => {
   const fast = read('crates/search/src/engine.rs', /const FAST: Self = Self \{\s+weight: (\d+),/);
   const quality = read('crates/search/src/engine.rs', /const QUALITY: Self = Self \{\s+weight: (\d+),/);
   assert.equal(read('README.md', /weighted A\* \(`g \+ (\d+)h`\)/), fast);
@@ -667,6 +667,7 @@ test("the README and Mode's docs quote the weights of Policy::FAST and Policy::Q
   assert.equal(read('README.md', /starts over at\s+`g \+ (\d+)h`/), quality);
   assert.equal(read('crates/search/src/lib.rs', /then weight (\d+) in the same arena/), quality);
   assert.equal(read('crates/search/src/lib.rs', /starts over at weight (\d+)\./), quality);
+  assert.equal(read('crates/search/src/arena.rs', /let worst = MAX_ROUTE as u64 \+ (\d+) \* u64::from\(MAX_QUEUED_H\);/), fast);
 });
 
 test("the README quotes heuristic.rs's REPAIR_CROSSOVER", () => {
