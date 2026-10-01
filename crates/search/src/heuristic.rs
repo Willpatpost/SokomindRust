@@ -16,7 +16,7 @@ const _: () = assert!(
     (MAX_BOXES + 1) * MAX_CELLS < INF as usize
         && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
 );
-// Duals indices fit a byte.
+// Duals indices and group_of labels fit a byte.
 const _: () = assert!(MAX_BOXES < u8::MAX as usize);
 /// Group size from which a child's group cost is repaired from the parent's
 /// duals with one augment instead of re-solved. Models put the crossover at
@@ -45,6 +45,13 @@ pub(crate) struct Heuristic {
 struct Group {
     start: usize,
     len: usize,
+}
+
+impl Group {
+    /// The group's box slots, which are also its goal columns.
+    fn range(&self) -> Range<usize> {
+        self.start..self.start + self.len
+    }
 }
 
 /// Hungarian working state for one group: 1-based potentials and matching,
@@ -88,14 +95,14 @@ impl ParentGroup {
     };
 }
 
-/// Plain reverse-push distances, cell-major per goal column: the fewest
+/// Reverse-push distances, cell-major per goal column: the fewest
 /// pushes a lone box needs from each cell when the keeper may stand anywhere,
 /// `NONE` when unreachable. A legal push from `from` to `to` gives
 /// d(from) <= d(to) + 1 (pulling the box back is a reverse push), so an entry
 /// drops by at most one per push. It may rise by any amount or become NONE.
 /// A min-cost matching over such entries therefore drops by at most one per
 /// push: consistent in pushes, and so in moves.
-pub(crate) fn plain_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16> {
+fn push_distances(board: &Board, columns: &[(Cell, u8)]) -> Vec<u16> {
     let goals = columns.len();
     let mut distances = vec![NONE; board.tiles().len() * goals];
     let mut queue = Vec::with_capacity(board.tiles().len());
@@ -130,7 +137,7 @@ impl Heuristic {
     pub(crate) const fn bytes_per_cell(boxes: usize) -> usize {
         size_of::<u32>() + boxes * size_of::<u16>()
     }
-    /// The estimator over the plain push-distance table, so its estimates
+    /// The estimator over the reverse-push distance table, so its estimates
     /// are admissible and consistent.
     pub(crate) fn new(board: &Board) -> Self {
         let mut groups = Vec::new();
@@ -149,7 +156,7 @@ impl Heuristic {
         let mut columns = board.goals().to_vec();
         columns.sort_by_key(|&(_, label)| label);
         let goals = columns.len();
-        let distances = plain_distances(board, &columns);
+        let distances = push_distances(board, &columns);
         let dead = (0..board.tiles().len())
             .map(|cell| {
                 let row = &distances[cell * goals..(cell + 1) * goals];
@@ -157,9 +164,7 @@ impl Heuristic {
                     .iter()
                     .enumerate()
                     .filter(|(_, group)| {
-                        row[group.start..group.start + group.len]
-                            .iter()
-                            .all(|&distance| distance == NONE)
+                        row[group.range()].iter().all(|&distance| distance == NONE)
                     })
                     .fold(0, |mask, (g, _)| mask | (1u32 << g))
             })
@@ -184,8 +189,7 @@ impl Heuristic {
     /// interchangeable with it, the run of equal labels that
     /// [`canonicalize`](crate::engine::canonicalize) sorts.
     pub(crate) fn group(&self, i: usize) -> Range<usize> {
-        let group = &self.groups[self.group_of[i] as usize];
-        group.start..group.start + group.len
+        self.groups[self.group_of[i] as usize].range()
     }
 
     /// Distances from `cell` to each of `group`'s goals, in column order.
@@ -201,9 +205,7 @@ impl Heuristic {
     pub(crate) fn estimate(&self, state: &State) -> Option<u32> {
         let mut total = 0u32;
         for group in &self.groups {
-            total += self
-                .solve(group, &state.boxes[group.start..group.start + group.len])?
-                .0;
+            total += self.solve(group, &state.boxes[group.range()])?.0;
         }
         Some(total)
     }
@@ -224,7 +226,7 @@ impl Heuristic {
     ) -> Option<u32> {
         let g = self.group_of[i] as usize;
         let group = &self.groups[g];
-        let range = group.start..group.start + group.len;
+        let range = group.range();
         if cache.group != g {
             // Never `None`: every group of a queued state is feasible.
             let (cost, duals) = self.solve(group, &parent.boxes[range.clone()])?;

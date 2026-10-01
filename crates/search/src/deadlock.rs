@@ -28,6 +28,7 @@ pub(crate) struct Deadlock {
 impl Deadlock {
     /// The occupancy map.
     pub(crate) const BYTES_PER_CELL: usize = size_of::<u8>();
+    /// An empty occupancy map for `board`, allocated once.
     pub(crate) fn new(board: &Board) -> Self {
         Self {
             occupancy: vec![EMPTY; board.tiles().len()],
@@ -47,6 +48,8 @@ impl Deadlock {
         self.placed[..boxes.len()].copy_from_slice(boxes);
         self.placed_len = boxes.len();
     }
+    /// Index of the box on `cell` as of the last refresh; `None` for no box
+    /// or for `NONE`, the missing neighbor past an edge.
     fn at(&self, cell: Cell) -> Option<usize> {
         if cell == NONE {
             return None;

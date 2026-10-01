@@ -16,6 +16,7 @@ impl Reach {
     /// Distances, stamps and the queue.
     pub(crate) const BYTES_PER_CELL: usize =
         size_of::<u16>() + size_of::<u32>() + size_of::<Cell>();
+    /// An empty flood over a board of `cells` cells, allocated once.
     pub(crate) fn new(cells: usize) -> Self {
         Self {
             distances: vec![NONE; cells],
@@ -24,6 +25,8 @@ impl Reach {
             queue: Vec::with_capacity(cells),
         }
     }
+    /// Starts a flood: bumps the epoch so every stamp is stale, zeroing the
+    /// stamps when it wraps, then stamps the boxes and queues the keeper.
     fn begin(&mut self, board: &Board, state: &State) {
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
