@@ -34,7 +34,7 @@ const RETENTION_SWEEP: Duration = Duration::from_secs(3600);
 /// times PROGRESS_RETENTION_BATCH_SIZE records per `RETENTION_SWEEP`.
 /// README's Configuration table and .env.example quote this cap; change them
 /// with it.
-const RETENTION_MAX_BATCHES: usize = 20;
+pub const RETENTION_MAX_BATCHES: usize = 20;
 /// statement_timeout, or a cancel request, stopped the statement.
 const QUERY_CANCELED: &str = "57014";
 /// lock_timeout ran out while the statement waited for a lock.
@@ -187,33 +187,42 @@ pub async fn expire_batch(db: &PgPool, days: i32, batch_size: i64) -> Result<u64
         .map(|result| result.rows_affected())
 }
 
+/// One retention sweep: [`expire_batch`] batches of up to `batch_size`
+/// records until one comes back short, one fails, or
+/// [`RETENTION_MAX_BATCHES`] full batches have run. Returns the records
+/// deleted and whether the cap ended the sweep; a failure is logged and
+/// ends it with what it deleted so far.
+pub async fn sweep(db: &PgPool, days: i32, batch_size: i64) -> (u64, bool) {
+    let mut deleted = 0;
+    for _ in 0..RETENTION_MAX_BATCHES {
+        match expire_batch(db, days, batch_size).await {
+            Ok(count) => {
+                deleted += count;
+                if count < batch_size as u64 {
+                    return (deleted, false);
+                }
+            }
+            Err(error) => {
+                eprintln!("Progress retention sweep failed: {}", error.message);
+                return (deleted, false);
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    (deleted, true)
+}
+
 /// Deletes records whose best route was last improved more than `days`
 /// ago: at startup (the first tick is immediate), then every hour.
 async fn expire_progress(db: PgPool, days: i32, batch_size: i64) {
-    let mut sweep = tokio::time::interval(RETENTION_SWEEP);
+    let mut hourly = tokio::time::interval(RETENTION_SWEEP);
     loop {
-        sweep.tick().await;
-        let (mut deleted, mut full) = (0, 0);
-        for _ in 0..RETENTION_MAX_BATCHES {
-            match expire_batch(&db, days, batch_size).await {
-                Ok(count) => {
-                    deleted += count;
-                    if count < batch_size as u64 {
-                        break;
-                    }
-                    full += 1;
-                }
-                Err(error) => {
-                    eprintln!("Progress retention sweep failed: {}", error.message);
-                    break;
-                }
-            }
-            tokio::task::yield_now().await;
-        }
+        hourly.tick().await;
+        let (deleted, capped) = sweep(&db, days, batch_size).await;
         if deleted > 0 {
             eprintln!("Deleted {deleted} progress records older than {days} days");
         }
-        if full == RETENTION_MAX_BATCHES {
+        if capped {
             eprintln!(
                 "Progress retention sweep reached its cap of {RETENTION_MAX_BATCHES} batches; any remaining expired records wait for the next sweep"
             );
@@ -318,14 +327,30 @@ mod tests {
         assert_eq!(violation.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
+    /// The clock is paused, so tokio skips straight to the deadline: the
+    /// test takes no real time and sees `EXECUTION_TIMEOUT` pass, give or
+    /// take the timer's 1 ms rounding.
+    #[tokio::test(start_paused = true)]
     async fn execution_deadline_is_service_unavailable() {
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let error = run(std::future::pending::<Result<(), sqlx::Error>>())
             .await
             .unwrap_err();
         assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error.message, "PostgreSQL operation timed out; retry later");
-        assert!(started.elapsed() < Duration::from_secs(4));
+        let elapsed = started.elapsed();
+        let deadline = EXECUTION_TIMEOUT..=EXECUTION_TIMEOUT + Duration::from_millis(1);
+        assert!(deadline.contains(&elapsed), "{elapsed:?}");
+    }
+
+    /// A batch that fails ends the sweep at once, with nothing deleted and
+    /// the cap not reached; a closed pool fails every batch without waiting.
+    #[tokio::test]
+    async fn a_failed_batch_ends_the_sweep() {
+        let closed = PgPoolOptions::new()
+            .connect_lazy("postgres://invalid@127.0.0.1:1/invalid")
+            .unwrap();
+        closed.close().await;
+        assert_eq!(sweep(&closed, 30, 500).await, (0, false));
     }
 }

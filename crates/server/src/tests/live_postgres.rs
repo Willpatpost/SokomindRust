@@ -380,7 +380,8 @@ async fn live_postgres_statement_timeouts_leave_the_pool_usable() {
 
 /// Retention deletes, in bounded batches through its index, the records last
 /// improved before its window, skips rows another transaction has locked,
-/// and keeps everything newer.
+/// and keeps everything newer. A sweep stops after `RETENTION_MAX_BATCHES`
+/// full batches and otherwise at its first short one.
 #[tokio::test]
 #[ignore = "requires SOKOMIND_TEST_DATABASE_URL pointing to a dedicated test database"]
 async fn live_postgres_retention_expires_only_old_unlocked_records() {
@@ -414,16 +415,14 @@ async fn live_postgres_retention_expires_only_old_unlocked_records() {
                 .unwrap();
         assert_eq!(retained, 1);
         lock.rollback().await.unwrap();
-        let mut deleted = 10;
-        loop {
-            let batch = database::expire_batch(&db, 30, 500).await.unwrap();
-            assert!(batch <= 500);
-            deleted += batch;
-            if batch < 500 {
-                break;
-            }
-        }
-        assert_eq!(deleted, 10_000);
+        // One-record batches run into the cap with expired records left.
+        let capped = database::RETENTION_MAX_BATCHES as u64;
+        assert_eq!(database::sweep(&db, 30, 1).await, (capped, true));
+        // The rest is 19 full batches of 500 and a short one, under the cap.
+        assert_eq!(
+            database::sweep(&db, 30, 500).await,
+            (10_000 - 10 - capped, false)
+        );
         let left: Vec<String> = sqlx::query_scalar("SELECT puzzle_id FROM progress ORDER BY 1")
             .fetch_all(&db)
             .await
