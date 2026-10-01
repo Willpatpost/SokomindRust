@@ -12,6 +12,11 @@ const MAX_BOARD_HEIGHT_PX = 540;
 /** The smallest tile, in CSS pixels. A board that would need smaller tiles to fit keeps this size
  * and scrolls instead. */
 const MIN_TILE_PX = 4;
+/** The longest side of the canvas backing store, in device pixels. It stays well under the
+ * 32,767 px browser limit, so an oversized board renders at a lower pixel ratio, never blank. */
+const MAX_BACKING_PX = 14_000;
+/** The highest device-pixel ratio the board is drawn at. */
+const MAX_PIXEL_RATIO = 2;
 /** Draws the board on a canvas sized to its container, and keeps the canvas's aria-label current. */
 export class BoardView {
   private canvas: HTMLCanvasElement;
@@ -38,9 +43,7 @@ export class BoardView {
     this.fits = fit >= MIN_TILE_PX;
     // An oversized board scrolls, so touch pans it instead of swiping.
     this.canvas.classList.toggle('pan', !this.fits);
-    // The backing store stays well under the 32,767 px browser limit on both
-    // axes: an oversized board renders at a lower pixel ratio, never blank.
-    const ratio = Math.min(devicePixelRatio || 1, 2, 14000 / (width * tile), 14000 / (height * tile));
+    const ratio = Math.min(devicePixelRatio || 1, MAX_PIXEL_RATIO, MAX_BACKING_PX / (Math.max(width, height) * tile));
     const pixelWidth = Math.round(width * tile * ratio);
     const pixelHeight = Math.round(height * tile * ratio);
     // Assigning a size reallocates and clears the backing store, even an unchanged one.
