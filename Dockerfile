@@ -5,10 +5,15 @@
 # setup-node reads; the deploy job in ci.yml fails when the two differ.
 ARG NODE_VERSION=24.14.0
 
+# The Debian release under the rust, debian and node images. The server binary
+# links rust-base's glibc and runs on the server stage's debian image, so those
+# two must share a release; web-build's Node takes it too, so one edit moves all.
+ARG DEBIAN_RELEASE=trixie
+
 # The toolchain rust-toolchain.toml pins. The file comes first, so every cargo
 # and rustup call below uses it. The deploy job in ci.yml fails when this tag,
 # or Cargo.toml's rust-version, differs from it.
-FROM rust:1.98.1-bookworm AS rust-base
+FROM rust:1.98.1-${DEBIAN_RELEASE} AS rust-base
 WORKDIR /app
 COPY rust-toolchain.toml ./
 
@@ -35,7 +40,7 @@ COPY data data
 COPY migrations migrations
 RUN cargo build --locked --release -p sokomind-server
 
-FROM debian:bookworm-slim AS server
+FROM debian:${DEBIAN_RELEASE}-slim AS server
 COPY --from=server-build /app/target/release/sokomind-server /usr/local/bin/sokomind-server
 USER 65532:65532
 ENV BIND_ADDR=0.0.0.0:3000
@@ -75,7 +80,7 @@ COPY crates/wasm crates/wasm
 RUN cargo build --locked -p sokomind-wasm --target wasm32-unknown-unknown --profile wasm-release \
     && wasm-bindgen --target web --out-dir web/wasm --out-name sokomind target/wasm32-unknown-unknown/wasm-release/sokomind_wasm.wasm
 
-FROM node:${NODE_VERSION}-bookworm-slim AS web-build
+FROM node:${NODE_VERSION}-${DEBIAN_RELEASE}-slim AS web-build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

@@ -85,8 +85,10 @@ recreates the network with the new subnet. Were the old network left in place,
 NGINX's address would fall outside `TRUSTED_PROXIES` and every client would share
 one rate-limit bucket.
 
-The `Dockerfile` builds both images. `rust-base` is the Rust 1.98.1 image with
-`rust-toolchain.toml`, and `stubs` adds the workspace manifests with stub
+The `Dockerfile` builds both images on Debian's current stable release, which
+`ARG DEBIAN_RELEASE` names once for the Rust, Debian and Node images (the server
+binary links the Rust image's glibc and runs on the Debian one, so the two must
+match). `rust-base` is the Rust 1.98.1 image with `rust-toolchain.toml`, and `stubs` adds the workspace manifests with stub
 sources, so each build stage compiles its dependencies first, in a layer that
 survives crate edits. Target `server` (compose's `api`) builds in
 `server-build`. Target `web` reads `wasm-bindgen`'s version from `Cargo.lock` in
