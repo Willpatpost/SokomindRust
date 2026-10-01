@@ -328,6 +328,57 @@ fn searches_stopped_before_starting_claim_nothing() {
     }
 }
 
+/// [`Search::solution`] promises that a running search may call it between
+/// slices and stays as it was; the web worker rebuilds every improved route
+/// that way. A search probed after each improvement must end exactly as an
+/// unprobed twin, and some probe must land while the search still runs.
+#[test]
+fn solution_between_slices_leaves_the_search_unchanged() {
+    let outcome = |search: &Search| {
+        (
+            search.status(),
+            search.best_moves(),
+            search.expanded(),
+            search.generated(),
+            search.stats(),
+            search.proof(),
+            search.lower_bound(),
+        )
+    };
+    let mut mid_run = 0;
+    let reordered = REORDERED.map(|(rows, _)| rows);
+    for rows in BOARDS.map(|(rows, _)| rows).into_iter().chain(reordered) {
+        let board = Board::parse(rows).unwrap();
+        for mode in Mode::ALL {
+            for pops in [1, 8] {
+                let context = format!("{mode:?} by {pops}: {rows:?}");
+                let new = || Search::new(board.clone(), board.initial(), mode, 20_000, 8).unwrap();
+                let (mut plain, mut probed) = (new(), new());
+                while plain.status() == Status::Running {
+                    plain.advance(pops);
+                }
+                let mut best = None;
+                while probed.status() == Status::Running {
+                    probed.advance(pops);
+                    if probed.best_moves() != best {
+                        best = probed.best_moves();
+                        let route = probed.solution().unwrap().expect(&context);
+                        assert_route(&board, &route, best.unwrap(), &context);
+                        mid_run += usize::from(probed.status() == Status::Running);
+                    }
+                }
+                assert_eq!(outcome(&probed), outcome(&plain), "{context}");
+                assert_eq!(
+                    probed.solution().unwrap(),
+                    plain.solution().unwrap(),
+                    "{context}"
+                );
+            }
+        }
+    }
+    assert!(mid_run > 0, "no route was rebuilt mid-search");
+}
+
 #[test]
 fn interrupted_optimal_keeps_a_sound_gap() {
     let board = Board::parse(TWO).unwrap();
