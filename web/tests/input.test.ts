@@ -28,7 +28,9 @@ test('arrow keys and WASD move in either case, and Z undoes', () => {
 });
 test('a Ctrl, Meta or Alt chord, or a key typed into a form field, stays with the browser', () => {
   const none = { ctrlKey: false, metaKey: false, altKey: false };
-  const ctrl = { ...none, ctrlKey: true }, meta = { ...none, metaKey: true }, alt = { ...none, altKey: true };
+  const ctrl = { ...none, ctrlKey: true };
+  const meta = { ...none, metaKey: true };
+  const alt = { ...none, altKey: true };
   for (const [modifiers, editable, ignored] of [
     [none, false, false],
     [none, true, true],
@@ -38,5 +40,6 @@ test('a Ctrl, Meta or Alt chord, or a key typed into a form field, stays with th
     [meta, true, true],
     [alt, false, true],
     [alt, true, true],
-  ] as const) assert.equal(ignoresKey(modifiers, editable), ignored, JSON.stringify({ ...modifiers, editable }));
+  ] as const)
+    assert.equal(ignoresKey(modifiers, editable), ignored, JSON.stringify({ ...modifiers, editable }));
 });
