@@ -564,10 +564,10 @@ impl Engine {
                     || self.reach.blocked(to)
                     || self.reach.distance(stand) == NONE
                 {
-                    // A box pushed onto a dead cell would only fail the
-                    // estimate below, and every check in between just
-                    // skips the child, so dropping it here changes no
-                    // count or result.
+                    // Illegal: a wall or a box ahead, no cell to stand
+                    // on, or a stand the keeper cannot reach. Such a push
+                    // is no move, so it counts as nothing; dead cells are
+                    // a counted prune in admit.
                     continue;
                 }
                 let push = Push {

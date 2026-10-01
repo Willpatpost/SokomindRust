@@ -39,8 +39,10 @@ impl ExactSearch {
             _ => (frontier < u32::MAX as u64).then_some(frontier as u32),
         }
     }
-    /// Terminal proof; `None` while running or without an incumbent. A limit
-    /// or cancellation keeps every bound computed so far.
+    /// Terminal proof; `None` while running or without a sound certificate
+    /// (see [`certify`]), and an exhausted search with no route proves
+    /// `Unsolvable`. A limit or cancellation keeps every bound computed so
+    /// far.
     pub(crate) fn proof(&self) -> Option<Proof> {
         certify(self.0.status(), self.0.best_moves(), self.lower_bound())
     }
@@ -51,7 +53,9 @@ impl ExactSearch {
 fn certify(status: Status, best: Option<u32>, lower: Option<u32>) -> Option<Proof> {
     match status {
         Status::Running => None,
-        Status::Exhausted => Some(Proof::Unsolvable),
+        // The engine ends Exhausted only while it has no incumbent. A route
+        // would refute Unsolvable, so one falls through to the bounds below.
+        Status::Exhausted if best.is_none() => Some(Proof::Unsolvable),
         _ => {
             // A saturated g stands for any count at or above it, so it
             // bounds nothing from above.
@@ -74,7 +78,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_saturated_incumbent_certifies_nothing() {
+    fn certify_proves_only_from_an_exact_incumbent() {
         let ends = [
             Status::Solved,
             Status::StateLimit,
@@ -107,5 +111,11 @@ mod tests {
             certify(Status::Exhausted, None, None),
             Some(Proof::Unsolvable)
         );
+        // An exhaustion that kept a route never proves Unsolvable.
+        assert_eq!(
+            certify(Status::Exhausted, Some(3), Some(3)),
+            Some(Proof::Optimal { moves: 3 })
+        );
+        assert_eq!(certify(Status::Exhausted, Some(G_SAT), Some(1)), None);
     }
 }

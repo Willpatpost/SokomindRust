@@ -431,8 +431,9 @@ impl Arena {
     }
     /// Re-keys every entry queued at `g + from * h` as `g + to * h`, in the
     /// reserved allocation, so the order is as if each entry had been queued
-    /// at `to`. g comes from the entry's record, which is exact even where
-    /// the old key saturated.
+    /// at `to`. g comes from the entry's record, exact up to [`G_SAT`],
+    /// which is past [`Key::F_SAT`], so an entry whose old key saturated
+    /// re-keys correctly and a `G_SAT` g saturates the new key too.
     pub(crate) fn reweight(&mut self, from: u32, to: u32) {
         let mut entries = std::mem::take(&mut self.heap).into_vec();
         for Reverse(key) in &mut entries {
