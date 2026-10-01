@@ -19,8 +19,10 @@ const _: () = assert!(
 // Duals indices and group_of group indices fit a byte.
 const _: () = assert!(MAX_BOXES < u8::MAX as usize);
 /// Group size from which a child's group cost is repaired from the parent's
-/// duals with one augment instead of re-solved. Models put the crossover at
-/// 2-4; re-measure it on real hardware.
+/// duals with one augment instead of re-solved. Measured with bench:observe
+/// at 1,000,000 states (2026-10-01), every search identical: 2 took 6.8%
+/// more summed search time than 3, 4 was within noise (0.9% less), and
+/// never repairing took 34% more.
 const REPAIR_CROSSOVER: usize = 3;
 // Each label group owns one bit of a cell's dead mask, and there are at most
 // as many groups as boxes.
