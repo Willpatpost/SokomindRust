@@ -1,0 +1,10 @@
+# Formatting-only commits for git blame to skip. GitHub's blame view reads
+# this file; for a local git blame, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: apply Prettier to scripts/ and root config
+7e1059fd8970f5b26c68ecd71ea38907cdad6f25
+# style: apply Prettier to web/
+5f003ea8af44bb06700dc1bc14f291578f1976a0
+# style: break out calls whose argument maps with an arrow
+fab305f0b182679abad55d634581d92c3207eb30
