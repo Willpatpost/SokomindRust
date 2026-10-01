@@ -85,21 +85,21 @@ recreates the network with the new subnet. Were the old network left in place,
 NGINX's address would fall outside `TRUSTED_PROXIES` and every client would share
 one rate-limit bucket.
 
-The `Dockerfile` builds both images on Debian's current stable release, which
-`ARG DEBIAN_RELEASE` names once for the Rust, Debian and Node images (the server
-binary links the Rust image's glibc and runs on the Debian one, so the two must
-match). `rust-base` is the Rust 1.98.1 image with `rust-toolchain.toml`, and `stubs` adds the workspace manifests with stub
-sources, so each build stage compiles its dependencies first, in a layer that
-survives crate edits. Target `server` (compose's `api`) builds in
-`server-build`. Target `web` reads `wasm-bindgen`'s version from `Cargo.lock` in
-`wasm-bindgen-version` and installs that `wasm-bindgen-cli` in `wasm-tools`
-(a `Cargo.lock` edit that keeps that version keeps the installed CLI), builds
-the WASM package in `wasm-build` and the app in `web-build`, and copies the app
-into the NGINX image. `web-build` runs `npm run build:image`, the same app
-type-check and bundle as `build:web` without the test type-check, which CI runs,
-so `web/tests` stays out of the build context. The two targets share only
-`rust-base` and `stubs`, so a server-only edit runs no WASM step and a WASM-only
-edit no server step;
+The `Dockerfile` builds both images. Its Rust, Debian and Node base images
+share the Debian release that `ARG DEBIAN_RELEASE` names once (the server binary
+links the Rust image's glibc and runs on the Debian one, so the two must match).
+`rust-base` is the Rust 1.98.1 image with `rust-toolchain.toml`, and `stubs`
+adds the workspace manifests with stub sources, so each build stage compiles its
+dependencies first, in a layer that survives crate edits. Target `server`
+(compose's `api`) builds in `server-build`. Target `web` reads `wasm-bindgen`'s
+version from `Cargo.lock` in `wasm-bindgen-version` and installs that
+`wasm-bindgen-cli` in `wasm-tools` (a `Cargo.lock` edit that keeps that version
+keeps the installed CLI), builds the WASM package in `wasm-build` and the app in
+`web-build`, and copies the app into the NGINX image. `web-build` runs
+`npm run build:image`, the same app type-check and bundle as `build:web` without
+the test type-check, which CI runs, so `web/tests` stays out of the build
+context. The two targets share only `rust-base` and `stubs`, so a server-only
+edit runs no WASM step and a WASM-only edit no server step;
 `docker compose build api` builds only the server image. `web-build` runs the
 Node image that `ARG NODE_VERSION` names, whose default must equal
 `.node-version`, and the `rust-base` tag must equal the version
