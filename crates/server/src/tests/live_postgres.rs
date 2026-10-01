@@ -164,7 +164,11 @@ async fn live_postgres_migrations_run_without_the_request_limits() {
                 .fetch_one(&db)
                 .await
                 .unwrap();
-        assert_eq!(applied, 3);
+        let migrations = database::MIGRATIONS
+            .iter()
+            .filter(|migration| !migration.migration_type.is_down_migration())
+            .count();
+        assert_eq!(applied, migrations as i64);
         // pg_settings reports both limits in milliseconds, where
         // current_setting would switch to seconds for whole ones.
         let limits = "SELECT s.setting, l.setting FROM pg_settings s, pg_settings l

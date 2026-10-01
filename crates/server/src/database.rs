@@ -2,7 +2,7 @@
 use crate::{api::Error, config};
 use sqlx::{
     PgPool,
-    migrate::MigrateError,
+    migrate::{MigrateError, Migrator},
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 use std::time::{Duration, Instant};
@@ -150,12 +150,15 @@ pub async fn run_migrations(options: &PgConnectOptions) -> Result<(), Box<dyn st
     Ok(())
 }
 
+/// The schema migrations, embedded from migrations/ at build time.
+pub static MIGRATIONS: Migrator = sqlx::migrate!("../../migrations");
+
 /// Applies pending migrations through `migrator`, a one-connection pool
 /// opened with [`migration_options`], then closes it whatever the result.
 /// Closing ends the session, which releases sqlx's advisory lock even when a
 /// failed migration left it held.
 pub async fn migrate(migrator: PgPool) -> Result<(), MigrateError> {
-    let result = sqlx::migrate!("../../migrations").run(&migrator).await;
+    let result = MIGRATIONS.run(&migrator).await;
     migrator.close().await;
     result
 }
