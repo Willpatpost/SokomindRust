@@ -216,6 +216,13 @@ performance parity is not claimed. Some techniques are rejected outright:
   costliest prunes, so for about 6% less time memory-bound runs generated up
   to 3.6 times as many states and lost routes, a proof and lower bounds, and
   the second was measured slower for little extra pruning.
+- The reference's 9x9 pattern windows, sound but eligible on few cells: on
+  random walks over the 34 capped Optimal boards they flagged 0.003% of the
+  pushes the current prunes admit, all on one board (0.185% there). A
+  whole-board pattern database per label group (2 to 5 boxes, at most 2^20
+  entries) fits 11 capped boards, beat the assignment estimate by 2 at the
+  start of only one, and gained under 0.5 moves on average along random walks
+  on every board.
 - Tunnel macros, forced-push macros and the goal-commitment skip: the
   reference measured tunnel macros slower and ships them off, and none of the
   three prunes anything or tightens a bound under push A* with an exact
