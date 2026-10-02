@@ -93,7 +93,8 @@ fn known(h: u16) -> Option<u32> {
 
 /// Metadata is fixed-size; box cells live in an active-prefix column. Parent
 /// indices always refer to immutable appended versions, never overwritten
-/// states. Only the two flags ever change after the append.
+/// states. Only the two flags ever change after the append, except when
+/// [`Arena::clear_keeping`] moves a path down and renumbers its parents.
 #[derive(Clone, Copy)]
 struct Record {
     g: u32,
@@ -110,8 +111,9 @@ impl Record {
     const DIRECTION_SHIFT: u32 = 28;
     /// Expanded at least once.
     const CLOSED: u32 = 1 << 30;
-    /// A later version of the state has replaced this one in the table, so
-    /// its queued entry is stale.
+    /// No table slot names this record: a later version of the state
+    /// replaced it, or [`Arena::clear_keeping`] detached it. Any queued
+    /// entry for it is stale.
     const SUPERSEDED: u32 = 1 << 31;
     /// A fresh, open version of `node`.
     fn new(node: &Node) -> Self {
@@ -192,8 +194,8 @@ fn hash(player: Cell, boxes: &[Cell]) -> usize {
 
 /// What the arena counts as it inserts and queues. Each field is the
 /// [`crate::SearchStats`] counter of the same name; the engine counts the
-/// rest. [`Arena::clear`] keeps them, so a restarted search counts both
-/// arenas.
+/// rest. [`Arena::clear`] and [`Arena::clear_keeping`] keep them, so a
+/// restarted search counts both arenas, and a kept record only once.
 #[derive(Default)]
 pub(crate) struct TableCounters {
     pub unique_states: u32,
@@ -391,8 +393,9 @@ impl Arena {
             closed: record.has(Record::CLOSED),
         }
     }
-    /// Whether a later version of the node's state has replaced it: exactly
-    /// when [`Arena::find`] on its state would not return this id.
+    /// Whether a later version of the node's state has replaced it, or
+    /// [`Arena::clear_keeping`] detached it: exactly when [`Arena::find`] on
+    /// its state would not return this id.
     pub(crate) fn is_superseded(&self, id: u32) -> bool {
         self.nodes[id as usize].has(Record::SUPERSEDED)
     }
@@ -429,6 +432,55 @@ impl Arena {
         self.box_cells.clear();
         self.heap.clear();
         self.table.fill(NIL);
+    }
+    /// Empties the arena like [`Arena::clear`], except that the path from
+    /// the root to `id` stays at the front, root first, as detached records:
+    /// each keeps its g, h, keeper, push direction, flags and box cells, with
+    /// its parent renumbered, and is marked superseded. No table slot binds
+    /// one and no queue entry names one, so [`Arena::find`] never returns
+    /// it and nothing pops it; the path only carries a route to replay and
+    /// its length as a bound. No counter changes, since each record was
+    /// counted when it was inserted. Returns `id`'s new id, one below the
+    /// path's length, so the next insert gets the path's length. Returns
+    /// `None`, with nothing changed, when the path would leave no room below
+    /// the limit for one more record, the start a fresh search needs.
+    pub(crate) fn clear_keeping(&mut self, id: u32) -> Option<u32> {
+        // Count the path first, so a refusal changes nothing. A parent is
+        // always older than its child, since records are only ever appended.
+        let mut len = 1;
+        let mut link = self.nodes[id as usize].parent();
+        while link != NIL {
+            len += 1;
+            link = self.nodes[link as usize].parent();
+        }
+        if len >= self.node_limit {
+            return None;
+        }
+        // The table, refilled below, is the scratch for the path's old ids,
+        // root first: it has a slot for every record twice over, so nothing
+        // outside the reservation is allocated.
+        let mut old = id;
+        for new in (0..len).rev() {
+            self.table[new] = old;
+            old = self.nodes[old as usize].parent();
+        }
+        // Root first: the record at old id `old` moves down to `new` <= `old`,
+        // over a record already moved or not kept, never one still to move.
+        for new in 0..len {
+            let old = self.table[new] as usize;
+            let parent = if new == 0 { ID_MASK } else { new as u32 - 1 };
+            let mut record = self.nodes[old];
+            record.link = (record.link & !ID_MASK) | parent | Record::SUPERSEDED;
+            self.nodes[new] = record;
+            let begin = old * self.boxes;
+            self.box_cells
+                .copy_within(begin..begin + self.boxes, new * self.boxes);
+        }
+        self.nodes.truncate(len);
+        self.box_cells.truncate(len * self.boxes);
+        self.heap.clear();
+        self.table.fill(NIL);
+        Some(len as u32 - 1)
     }
     /// Re-keys every entry queued at `g + from * h` as `g + to * h`, in the
     /// reserved allocation, so the order is as if each entry had been queued
@@ -615,6 +667,99 @@ mod tests {
         // Ids restart at 0; the counters keep counting.
         assert_eq!(arena.insert(node, slot), 0);
         assert_eq!(arena.counters.unique_states, 2);
+    }
+
+    /// A kept path stays at the front as detached records: root first,
+    /// parents renumbered, every field and flag but superseded as it was,
+    /// in no table slot and no queue. The counters are unchanged, the next
+    /// insert follows the path, and a path that leaves no room for it is
+    /// refused.
+    #[test]
+    fn clear_keeping_detaches_the_path_and_forgets_the_rest() {
+        let at = |cell: Cell| {
+            let mut state = State {
+                player: 1,
+                boxes: [NONE; MAX_BOXES],
+            };
+            state.boxes[..2].copy_from_slice(&[cell, cell + 1]);
+            state
+        };
+        let mut arena = Arena::new(100, 2, 10, 4).unwrap();
+        // (cell, g, parent, direction) per id: a root, a child the path
+        // leaves behind, and the path's next two nodes, 0 -> 2 -> 3.
+        let nodes = [(10, 0, NIL, 0), (20, 3, 0, 1), (30, 4, 0, 2), (40, 9, 2, 3)];
+        for &(cell, g, parent, direction) in &nodes {
+            let state = at(cell);
+            let (slot, _) = arena.find(&state);
+            let node = Node {
+                state,
+                g,
+                parent,
+                direction,
+                h: 5,
+            };
+            let id = arena.insert(node, slot);
+            arena.enqueue(u64::from(g) + 5, 5, id);
+        }
+        arena.close(0);
+        arena.close(2);
+        let counters = |arena: &Arena| {
+            let counters = arena.counters();
+            (
+                counters.unique_states,
+                counters.duplicate_improvements,
+                counters.reopened_states,
+                counters.peak_queue,
+            )
+        };
+        let before = counters(&arena);
+        assert_eq!(arena.clear_keeping(3), Some(2));
+        assert_eq!((arena.len(), arena.dequeue()), (3, None));
+        assert_eq!(counters(&arena), before);
+        // Old ids 0, 2 and 3 are now 0, 1 and 2.
+        for (new, (old, parent)) in [(0, NIL), (2, 0), (3, 1)].into_iter().enumerate() {
+            let (cell, g, _, direction) = nodes[old];
+            let id = new as u32;
+            let node = arena.node(id);
+            assert_eq!(node.state, at(cell));
+            assert_eq!(
+                (node.g, node.parent, node.direction, node.h),
+                (g, parent, direction, 5)
+            );
+            assert_eq!(arena.meta(id).closed, old != 3);
+            assert!(arena.is_superseded(id));
+            assert_eq!(arena.find(&node.state).1, None);
+        }
+        // The child left behind is forgotten too, and counts as new again.
+        let (slot, found) = arena.find(&at(20));
+        assert_eq!(found, None);
+        let node = Node {
+            state: at(20),
+            g: 3,
+            parent: NIL,
+            direction: 0,
+            h: 5,
+        };
+        assert_eq!(arena.insert(node, slot), 3);
+        assert_eq!(arena.counters.unique_states, before.0 + 1);
+
+        // At a limit of 3, a path of 3 records leaves no room for a fourth.
+        let mut full = Arena::new(100, 2, 3, 4).unwrap();
+        for (id, cell) in [10, 20, 30].into_iter().enumerate() {
+            let state = at(cell);
+            let (slot, _) = full.find(&state);
+            let node = Node {
+                state,
+                g: id as u32,
+                parent: id.checked_sub(1).map_or(NIL, |parent| parent as u32),
+                direction: 0,
+                h: 5,
+            };
+            full.insert(node, slot);
+        }
+        assert_eq!(full.clear_keeping(2), None);
+        assert_eq!((full.len(), full.find(&at(30)).1), (3, Some(2)));
+        assert_eq!(full.clear_keeping(1), Some(1));
     }
 
     /// Every record field at its extremes, with every flag combination.

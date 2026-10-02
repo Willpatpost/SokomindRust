@@ -33,9 +33,10 @@ pub(crate) struct Policy {
     /// search continues in the same arena under that policy, with the queue
     /// re-keyed at its weight.
     then: Option<&'static Policy>,
-    /// Where filling the arena with no route starts over instead of ending
-    /// the search: the arena is emptied in place and the start re-seeded
-    /// under that policy, which then runs exactly as a fresh search.
+    /// Where filling the arena starts over instead of ending the search:
+    /// the arena is emptied in place, except for the incumbent's path, and
+    /// the start re-seeded under that policy, which then runs as a fresh
+    /// search with the incumbent, if any, as the bound to beat.
     restart: Option<&'static Policy>,
 }
 impl Policy {
@@ -76,23 +77,37 @@ impl Policy {
         then: Some(&Self::QUALITY),
         ..Self::FAST
     };
-    /// Quality mode: [`Self::FAST_THEN_QUALITY`], except that when Fast
-    /// fills the arena without a route the search starts over as plain
-    /// [`Self::QUALITY`]. Each result is then the Fast-then-Quality result or
-    /// the plain Quality one, with the same reservation.
-    pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
+    /// Quality mode's second phase: [`Self::QUALITY`], except that when its
+    /// arena fills the search starts over as plain [`Self::QUALITY`],
+    /// bounded by the route it has.
+    pub(crate) const QUALITY_RESTART: Self = Self {
         restart: Some(&Self::QUALITY),
-        ..Self::FAST_THEN_QUALITY
+        ..Self::QUALITY
+    };
+    /// Quality mode: [`Self::FAST_THEN_QUALITY`], except that the first time
+    /// the arena fills, in either phase and with a route or without, the
+    /// search starts over once as plain [`Self::QUALITY`] in the emptied
+    /// arena, which keeps only its route's path, as the bound to beat. Fast
+    /// then Quality would have stopped at that same fill with that same
+    /// route, so the result is never longer than Fast then Quality's; when
+    /// Fast fills the arena without a route, it is the plain Quality result.
+    /// When the route's path alone leaves no room for the start, it stops
+    /// where Fast then Quality does.
+    pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
+        then: Some(&Self::QUALITY_RESTART),
+        restart: Some(&Self::QUALITY),
+        ..Self::FAST
     };
     /// Every policy a search can run. The const asserts below read it, so a
     /// new policy must be added here: they check that every `then` and
     /// `restart` target is listed, but cannot see which policies modes start
     /// with.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::EXACT,
         Self::FAST,
         Self::QUALITY,
         Self::FAST_THEN_QUALITY,
+        Self::QUALITY_RESTART,
         Self::FAST_THEN_QUALITY_RESTART,
     ];
 }
@@ -104,7 +119,8 @@ const _: () = assert!(Policy::EXACT.weight == 1);
 const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // Every `then` and `restart` target is itself in `Policy::ALL`, so the
 // checks that loop over it cover every policy a search can switch to. A
-// restarted policy runs to the end, so a search restarts at most once.
+// restarted policy has no next phase and no restart of its own, so it runs
+// to the end and a search restarts at most once.
 const _: () = {
     let all = Policy::ALL;
     let mut i = 0;
@@ -278,7 +294,8 @@ pub(crate) struct Engine {
     expanded: u32,
     skipped: SkipCounters,
     incumbent: Option<u32>,
-    /// Records a restart discarded; they still count as generated.
+    /// Records a restart dropped; they still count as generated. The
+    /// incumbent's path stays in the arena, so it counts there, once.
     discarded: u32,
     /// g + queued h (at least 1) of a node whose expansion a limit cut short.
     /// Under an admissible h, no route through its unpushed successors along
@@ -329,8 +346,9 @@ enum Popped {
 enum Inserted {
     /// Stored and queued; the expansion goes on.
     Queued,
-    /// The arena was full and the search started over, dropping the child
-    /// and the rest of its parent's expansion.
+    /// The arena was full and the search started over, dropping the rest
+    /// of its parent's expansion. A solved child was kept first and is the
+    /// incumbent the restart carries; any other child is dropped too.
     Restarted,
     /// The search ended: a limit or a solved push stopped it.
     Stopped,
@@ -373,8 +391,10 @@ impl Engine {
         search.seed();
         Ok(search)
     }
-    /// Inserts and queues the start in an empty arena, or ends the search
-    /// when the start has no goal assignment.
+    /// Inserts and queues the start in an arena that is empty or holds only
+    /// a restart's kept path, or ends the search when the start has no goal
+    /// assignment. No kept record is in the table, so the start is always a
+    /// new state.
     fn seed(&mut self) {
         let h = self.heuristic.estimate(&self.start);
         let (slot, _) = self.arena.find(&self.start);
@@ -477,15 +497,26 @@ impl Engine {
         self.policy = next;
         true
     }
-    /// Starts over under the policy's restart while there is no route: the
-    /// arena is emptied in place, so the rest of the run is a fresh search
-    /// whose records add to the discarded ones. False when there is none.
+    /// Starts over under the policy's restart: the arena is emptied in
+    /// place but for the incumbent's path, so the rest of the run is a fresh
+    /// search bounded by the incumbent, whose records add to the dropped
+    /// ones. False when there is no restart, or when the path would leave no
+    /// room below the limit for the start, which a fresh search needs.
     fn restart(&mut self) -> bool {
-        let (None, Some(&next)) = (self.incumbent, self.policy.restart) else {
+        let Some(&next) = self.policy.restart else {
             return false;
         };
-        self.discarded += self.arena.len() as u32;
-        self.arena.clear();
+        let before = self.arena.len() as u32;
+        if let Some(id) = self.incumbent {
+            let Some(kept) = self.arena.clear_keeping(id) else {
+                return false;
+            };
+            self.incumbent = Some(kept);
+        } else {
+            self.arena.clear();
+        }
+        // The kept path is still in the arena, so generated counts it once.
+        self.discarded += before - self.arena.len() as u32;
         self.policy = next;
         self.seed();
         true
@@ -641,8 +672,8 @@ impl Engine {
                 };
                 match self.insert(&parent, child) {
                     Inserted::Queued => {}
-                    // The parent went with the emptied arena; the next pop
-                    // takes the re-seeded start.
+                    // The arena was emptied but for the incumbent's path;
+                    // the next pop takes the re-seeded start.
                     Inserted::Restarted => return ControlFlow::Continue(()),
                     Inserted::Stopped => return ControlFlow::Break(()),
                 }
@@ -756,8 +787,9 @@ impl Engine {
         })
     }
     /// Stores and queues an admitted child, recording it when it is solved.
-    /// At a full arena the search starts over or ends instead, and a solved
-    /// child may end it too.
+    /// At a full arena a solved child is kept as the incumbent, in the spare
+    /// slot, and then the search starts over or ends. Below the limit a
+    /// solved child may end it.
     #[inline]
     fn insert(&mut self, parent: &Parent, child: Child) -> Inserted {
         let Child { node, h, slot } = child;
@@ -765,13 +797,14 @@ impl Engine {
         // improves the incumbent.
         let goal = h == 0 && self.board.solved(&node.state);
         if self.arena.is_full() {
-            // The rest of this expansion belongs to the discarded arena.
-            if !goal && self.restart() {
-                return Inserted::Restarted;
-            }
-            // Keep a solution discovered at the exact limit.
+            // Keep a solution discovered at the exact limit, for the restart
+            // to carry or the stop to report.
             if goal {
                 self.incumbent = Some(self.arena.insert(node, slot));
+            }
+            // The rest of this expansion belongs to the discarded arena.
+            if self.restart() {
+                return Inserted::Restarted;
             }
             // An expanded node is unsolved, so at least one move remains.
             self.stop_at_limit(parent.node.g as u64 + parent.queued_h.max(1) as u64);
@@ -999,11 +1032,29 @@ mod tests {
         assert!(improved >= MIN_IMPROVED, "{improved}");
     }
 
-    /// Checks Quality mode against its sources at one limit: the Fast then
-    /// Quality run when Fast finds a route, otherwise Fast's discarded arena
-    /// followed by a fresh Quality run. Returns the restarted run.
-    fn check_restart(context: &str, board: &Board, max_states: usize) -> Engine {
-        let (fast, _) = run(board, Policy::FAST, max_states);
+    /// How a Quality run relates to the Fast then Quality run at the same
+    /// limit, which it follows pop for pop up to its first full arena.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Restart {
+        /// The same run: Fast then Quality ended on its own, or its route's
+        /// path left no room below the limit for a fresh start.
+        Never,
+        /// Fast filled the arena without a route; plain Quality took over.
+        Fresh,
+        /// The arena filled with a route, which the fresh Quality run kept
+        /// as the bound to beat.
+        Carrying,
+    }
+
+    /// Checks Quality mode against Fast then Quality at one limit. Up to the
+    /// first full arena the two make the same pops and inserts; there Fast
+    /// then Quality stops and Quality starts over, so Quality generates more
+    /// exactly when it restarted. Its route then ends no longer, and when
+    /// Fast filled the arena without a route the rest is a fresh Quality
+    /// run. Returns the Quality run, the Fast then Quality run and how they
+    /// relate.
+    fn check_restart(context: &str, board: &Board, max_states: usize) -> (Engine, Engine, Restart) {
+        let (both, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
         let (mut restart, _) = run(board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
         let stats = restart.stats();
         assert_eq!(
@@ -1015,26 +1066,47 @@ mod tests {
             let route = restart.solution().unwrap().unwrap();
             assert_eq!(route.len(), moves as usize, "{context}");
         }
-        if fast.best_moves().is_some() {
-            let (both, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
-            assert_eq!(outcome(&restart), outcome(&both), "{context}");
-        } else if fast.status() == Status::Exhausted {
-            // No route is reachable, so there is nothing to restart for.
-            assert_eq!(outcome(&restart), outcome(&fast), "{context}");
+        // Two arenas at most, each with at most the spare node past the limit.
+        assert!(
+            restart.generated() as usize <= 2 * (max_states + 1),
+            "{context}"
+        );
+        let filled = matches!(both.status(), Status::StateLimit | Status::MemoryLimit);
+        let how = if restart.generated() <= both.generated() {
+            Restart::Never
+        } else if both.best_moves().is_none() {
+            Restart::Fresh
         } else {
-            let (quality, _) = run(board, Policy::QUALITY, max_states);
-            assert_eq!(
-                outcome(&restart),
-                (
-                    quality.status(),
-                    quality.best_moves(),
-                    fast.expanded() + quality.expanded(),
-                    fast.generated() + quality.generated()
-                ),
-                "{context}"
-            );
+            Restart::Carrying
+        };
+        match how {
+            Restart::Never => {
+                // Only a route's path can leave no room to start over.
+                assert!(!filled || both.best_moves().is_some(), "{context}");
+                assert_eq!(outcome(&restart), outcome(&both), "{context}");
+            }
+            Restart::Fresh => {
+                assert!(filled, "{context}");
+                let (quality, _) = run(board, Policy::QUALITY, max_states);
+                assert_eq!(
+                    outcome(&restart),
+                    (
+                        quality.status(),
+                        quality.best_moves(),
+                        both.expanded() + quality.expanded(),
+                        both.generated() + quality.generated()
+                    ),
+                    "{context}"
+                );
+            }
+            Restart::Carrying => {
+                assert!(filled, "{context}");
+                let (moves, before) = (restart.best_moves().unwrap(), both.best_moves().unwrap());
+                assert!(moves <= before, "{context}: {moves} > {before}");
+                assert!(restart.expanded() >= both.expanded(), "{context}");
+            }
         }
-        restart
+        (restart, both, how)
     }
 
     /// Quality mode on the whole catalog. Fast misses 27 boards at this
@@ -1042,46 +1114,68 @@ mod tests {
     /// after 2,000 records in all, where Fast given 10,000 states needs
     /// 2,920 records for a 79-move route. A Python replica of the engine
     /// with the sealed-corral check (pruning/replicas/corral_port.py, not
-    /// tracked) gives these counts.
+    /// tracked) gives these counts. Its extension with Quality's phases and
+    /// restart (pruning/replicas/quality_restart.py, not tracked) has Fast
+    /// then Quality fill the arena with 14 of Fast's 30 routes, and Quality
+    /// start over with each, shortening 2.
     #[test]
-    fn quality_restarts_fresh_only_when_fast_fills_the_arena() {
-        let mut rescued = Vec::new();
+    fn quality_restarts_once_when_the_arena_first_fills() {
+        let (mut rescued, mut carried, mut shortened) = (Vec::new(), 0, 0);
         for (id, board) in catalog() {
-            let restart = check_restart(&id, &board, STATES);
-            if restart.best_moves().is_some() && restart.generated() as usize > STATES + 1 {
-                rescued.push(id);
+            let (restart, both, how) = check_restart(&id, &board, STATES);
+            match how {
+                Restart::Fresh if restart.best_moves().is_some() => rescued.push(id),
+                Restart::Carrying => {
+                    carried += 1;
+                    shortened += usize::from(restart.best_moves() < both.best_moves());
+                }
+                _ => {}
             }
         }
         assert!(rescued.iter().any(|id| id == "expert-maze"), "{rescued:?}");
+        assert!(carried > 0 && shortened > 0, "{carried} {shortened}");
     }
 
-    /// Sweeps every limit on a small board, through the one where Fast's
-    /// route takes the spare node, in slices of one pop and of 2^20.
+    /// Sweeps every limit on two small boards, through the one where Fast's
+    /// route takes the spare node, in slices of one pop and of 2^20. On
+    /// tiny, Quality starts over without a route at the smallest limits and
+    /// carries Fast's route once it fits, the spare node included. At one
+    /// state, ultra-tiny's one-push route takes the spare node with no room
+    /// left for a fresh start, so Quality stops where Fast then Quality does.
     #[test]
     fn restart_survives_state_limit_boundaries() {
-        let (id, board) = catalog().into_iter().find(|(id, _)| id == "tiny").unwrap();
-        let (fast, _) = run(&board, Policy::FAST, STATES);
-        let (mut restarted, mut spare) = (0, 0);
-        for max_states in 1..=fast.generated() as usize + 2 {
-            let context = format!("{id} at {max_states} states");
-            let sliced = check_restart(&context, &board, max_states);
-            let mut bulk = Engine::new(
-                board.clone(),
-                board.initial(),
-                Policy::FAST_THEN_QUALITY_RESTART,
-                max_states,
-                16,
-            )
-            .unwrap();
-            while bulk.status() == Status::Running {
-                bulk.advance(1 << 20);
+        let mut seen = Vec::new();
+        let boards = catalog().into_iter();
+        for (id, board) in boards.filter(|(id, _)| id == "ultra-tiny" || id == "tiny") {
+            let (fast, _) = run(&board, Policy::FAST, STATES);
+            for max_states in 1..=fast.generated() as usize + 2 {
+                let context = format!("{id} at {max_states} states");
+                let (sliced, both, how) = check_restart(&context, &board, max_states);
+                let mut bulk = Engine::new(
+                    board.clone(),
+                    board.initial(),
+                    Policy::FAST_THEN_QUALITY_RESTART,
+                    max_states,
+                    16,
+                )
+                .unwrap();
+                while bulk.status() == Status::Running {
+                    bulk.advance(1 << 20);
+                }
+                assert_eq!(outcome(&bulk), outcome(&sliced), "{context}");
+                // Fast then Quality's route took the spare node.
+                let spare =
+                    both.best_moves().is_some() && both.generated() as usize == max_states + 1;
+                seen.push((how, spare));
             }
-            assert_eq!(outcome(&bulk), outcome(&sliced), "{context}");
-            let generated = sliced.generated() as usize;
-            restarted += usize::from(generated > max_states + 1);
-            spare += usize::from(sliced.best_moves().is_some() && generated == max_states + 1);
         }
-        assert!(restarted > 0 && spare > 0, "{restarted} {spare}");
+        for wanted in [
+            (Restart::Fresh, false),
+            (Restart::Carrying, true),
+            (Restart::Never, true),
+        ] {
+            assert!(seen.contains(&wanted), "{wanted:?} in {seen:?}");
+        }
     }
 
     /// One row per detector: its name, every detector on but that one, and

@@ -103,8 +103,12 @@ pub enum Mode {
     /// Weighted A* (weight 5) that ends at its first route, however long.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening
-    /// the route until the queue empties or a limit hits. When Fast fills the
-    /// arena without a route, the search starts over at weight 3.
+    /// the route until the queue empties or a limit hits. The first time the
+    /// arena fills, in either phase and with a route or without, the search
+    /// empties it but for its route, if any, which stays the bound to beat,
+    /// and starts over at weight 3. Its route never ends longer than it
+    /// would without the restart, and only a route that alone fills the
+    /// arena stops it there instead.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes.
@@ -267,8 +271,9 @@ impl std::error::Error for SolutionError {}
 
 /// Counters from the current search. Generated records include immutable
 /// improved versions of existing states; unique states count table entries.
-/// A Quality search that restarts counts both runs, so its generated records
-/// may exceed the state limit by up to one full arena.
+/// A Quality search that restarts counts both runs, and the route it keeps
+/// once, so its generated records may exceed the state limit by up to one
+/// full arena.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
     /// Distinct canonical box positions AND exact player positions indexed,

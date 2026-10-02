@@ -172,11 +172,15 @@ All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
 route and never re-expands a closed node. Quality starts as Fast; from Fast's
 first route it continues in the same arena at `g + 3h` with reopenings, keeping
-the shortest verified incumbent until its queue empties or a limit hits. If Fast
-fills the arena without a route, Quality empties it in place and starts over at
-`g + 3h`, generating up to about twice the state limit in the same memory. Only
-a full arena restarts it: a time limit that hits first ends Quality in its Fast
-phase. Neither mode ever proves anything. Optimal wraps the same engine in
+the shortest verified incumbent until its queue empties or a limit hits. The
+first time the arena fills, in either phase and with a route or without,
+Quality empties it in place, keeping its route, if it has one, as the bound to
+beat, and starts over at `g + 3h` in the freed arena, generating up to about
+twice the state limit in the same memory. So the second phase never runs short
+of memory just because Fast used most of it, and the route never ends longer
+than it would have at that fill. Only a full arena restarts it, and at most
+once: a time limit that hits first ends Quality in whichever phase it is in.
+Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
 `optimal` when a goal pops or the frontier empties with a verified route, and
