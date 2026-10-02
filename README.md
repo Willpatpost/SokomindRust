@@ -228,6 +228,14 @@ rejected, for soundness or by measurement:
   entries) fits 11 capped boards, beat the assignment estimate by 2 at the
   start of only one, and gained under 0.5 moves on average along random walks
   on every board.
+- The reference's wall-side region check: floods of up to nine cells along the
+  walls, each holding two or three boxes and solved on its own, drop a push
+  into a region that can no longer fill its goals. It is sound and pruned on
+  49 of the 171 catalog runs, yet its capped Optimal lower bounds summed 0
+  moves higher over 36 catalog and observed runs and 2 higher over 32
+  production runs, with no new proof or route, while its scan on every push
+  cost 8 to 13% more time in production and about 15% on the observed boards,
+  mostly the huge and large ones where it never prunes.
 - Tunnel macros, forced-push macros and the goal-commitment skip: the
   reference measured tunnel macros slower and ships them off, and none of the
   three prunes anything or tightens a bound under push A* with an exact
