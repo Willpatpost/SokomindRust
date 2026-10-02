@@ -110,7 +110,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free push A*: one policy-driven engine over a reserved arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs |
+| `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs |
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX, bounded and rate-limited native CPU jobs, replay-verified best routes in SQLx/PostgreSQL |
@@ -239,15 +239,22 @@ web app sends the full state cap and the budget its memory select names (16 to
 bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
 memory budget always binds before the state cap: on the catalog's boards 64 MiB
 holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 256 MiB 3.67-8.39M, and a
-run that fills its arena reports a memory limit. The arena reserves the smaller
-of the state cap and what the budget holds when the search starts, so a request
-at the default cap reserves nearly its whole budget up front, even on a small
-board: the memory budget is the bound a caller declares, and one that wants a
-smaller footprint asks for less memory or fewer states. The search memory metric
-is computed from reserved buffer sizes (arena, queue, table, and per-cell flood,
-deadlock, corral, dead-cell, and distance buffers) plus a fixed allowance for the
-longest route and scratch buffers, not process RSS, allocator overhead, WASM
-runtime, or frontend memory.
+run that fills its arena reports a memory limit. The arena holds at most the
+smaller of the state cap and what the budget holds. Its queue, 8 bytes per state
+and at most about a quarter of the budget, is reserved for that many states when
+the search starts: a native process touches only the part it uses, but in WASM
+the whole reservation is linear memory. Records grow in blocks as the search
+fills them, and the index table has two sizes: it starts at 2^16 slots
+(256 KiB), or its full size when that is smaller, and grows straight to its full
+size once more than half full. Neither passes the budget, so a small board
+allocates little beyond the queue. WASM linear memory never shrinks and keeps
+the freed first table, so a run that grows its table can end up to 256 KiB past
+the budget. An allocation refused below the budget also ends the run with a
+memory limit. The search memory metric is that ceiling, computed from buffer
+sizes at the arena's full limit (arena, queue, table, and per-cell flood,
+deadlock, corral, dead-cell, and distance buffers) plus a fixed allowance for
+the longest route and scratch buffers, not the bytes allocated so far, process
+RSS, allocator overhead, WASM runtime, or frontend memory.
 Deadline checks occur between bounded expansion batches; setup/reconstruction can
 add latency.
 
@@ -474,7 +481,9 @@ timings; `npm run bench:update` rewrites the baseline after review.
 catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each
 native run (status, counters, bounds, proof, diagnostics, and route) and replays
-each route.
+each route. Two last cases, each in a fresh WASM instance, check that a
+search's memory grows with its use, not its budget, and that one that fills its
+arena grows by at most its memory ceiling plus 2 MiB.
 `bench:observe` runs four hard catalog boards in every mode at a fixed 1,000,000
 states and 64 MiB, three times each: an observation size, recorded in
 `benchmarks/observe-reference.json` and far below the state cap so a run stays

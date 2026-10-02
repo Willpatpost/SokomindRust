@@ -40,6 +40,28 @@ pub(crate) const MAX_QUEUED_H: u32 = ((MAX_BOXES + 1) * MAX_CELLS) as u32;
 /// fixed-size scratch buffers.
 const FIXED_SCRATCH: usize = 2 * MAX_ROUTE + 64 * 1024;
 
+/// Log2 of the records in a full [`Chunk`]. Unit tests use four-record
+/// chunks, so that small searches cross many chunk boundaries.
+const CHUNK_SHIFT: u32 = if cfg!(test) { 2 } else { 16 };
+/// Records in a full [`Chunk`].
+const CHUNK: usize = 1 << CHUNK_SHIFT;
+/// Table slots a new arena starts with, or fewer when its final table is
+/// smaller: 2^16 slots, 256 KiB, so the one table the arena ever frees is
+/// at most that. Unit tests start at 64, so that a search of a few dozen
+/// states grows it after crossing several chunks.
+const INITIAL_TABLE: usize = if cfg!(test) { 64 } else { 1 << 16 };
+// A new arena's first insert, the start's, binds one slot of at least four
+// and leaves len + 1 = 2, short of the four or more records of a full chunk,
+// so it neither grows the table nor adds a chunk.
+const _: () = assert!(CHUNK_SHIFT >= 2 && INITIAL_TABLE >= 4 && INITIAL_TABLE.is_power_of_two());
+
+/// Slots in the final table of an arena of at most `records` records, the
+/// size [`Arena::reserved_bytes`] charges, which that many ids never fill
+/// past half.
+const fn final_table(records: usize) -> usize {
+    (records * 2).next_power_of_two()
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     pub state: State,
@@ -91,10 +113,11 @@ fn known(h: u16) -> Option<u32> {
     (h < u16::MAX).then_some(u32::from(h))
 }
 
-/// Metadata is fixed-size; box cells live in an active-prefix column. Parent
-/// indices always refer to immutable appended versions, never overwritten
-/// states. Only the two flags ever change after the append, except when
-/// [`Arena::clear_keeping`] moves a path down and renumbers its parents.
+/// Metadata is fixed-size; box cells live in a parallel column of their
+/// [`Chunk`]. Parent indices always refer to immutable appended versions,
+/// never overwritten states. Only the two flags ever change after the
+/// append, except when [`Arena::clear_keeping`] moves a path down and
+/// renumbers its parents.
 #[derive(Clone, Copy)]
 struct Record {
     g: u32,
@@ -204,23 +227,91 @@ pub(crate) struct TableCounters {
     pub peak_queue: u32,
 }
 
-/// Node arena, priority queue, and open-addressed index table, reserved once.
-/// The table stores arena indices, never duplicated box arrays.
-pub(crate) struct Arena {
-    nodes: Vec<Record>,
+/// Consecutive records and their box cells, reserved exactly when the arena
+/// first needs them and never reallocated, so an appended record never
+/// moves; only [`Arena::clear_keeping`] copies a path down. Id `id` lives in
+/// chunk `id >> CHUNK_SHIFT` at offset `id & (CHUNK - 1)`: a shift and a
+/// mask, since every chunk but the last holds exactly [`CHUNK`] records.
+struct Chunk {
+    records: Vec<Record>,
+    /// The boxes of each record in order, `boxes` cells apiece.
     box_cells: Vec<Cell>,
+}
+impl Chunk {
+    /// An empty chunk with room for `records` records of `boxes` boxes, or
+    /// the name of the buffer the allocator refused.
+    fn new(records: usize, boxes: usize) -> Result<Self, &'static str> {
+        let mut chunk = Self {
+            records: Vec::new(),
+            box_cells: Vec::new(),
+        };
+        chunk
+            .records
+            .try_reserve_exact(records)
+            .map_err(|_| "node arena")?;
+        chunk
+            .box_cells
+            .try_reserve_exact(records * boxes)
+            .map_err(|_| "box arena")?;
+        Ok(chunk)
+    }
+    /// The box cells of the record at `offset`.
+    fn cells(&self, offset: usize, boxes: usize) -> &[Cell] {
+        &self.box_cells[offset * boxes..(offset + 1) * boxes]
+    }
+}
+
+/// Node arena, priority queue, and open-addressed index table, all within
+/// the budget that sized them ([`Arena::reserved_bytes`]). Only the queue
+/// is reserved whole up front. Records grow a [`Chunk`] at a time, and the
+/// table has two sizes and grows once, from the first to the final, each
+/// allocated one insert ahead of need. The spare's insert therefore never
+/// allocates, and a search whose table binds at most `INITIAL_TABLE / 2`
+/// states allocates only the queue, its chunks and that first table. The
+/// table stores arena indices, never duplicated box arrays.
+pub(crate) struct Arena {
+    /// Room for every record so far and, while there are at most
+    /// `node_limit`, one more, unless a growth allocation was refused; never
+    /// more than `node_limit + 1` records in all. Both clears keep every
+    /// chunk, so afterwards the room can far exceed the records.
+    chunks: Vec<Chunk>,
+    /// Records appended since the last clear: the next node's id.
+    len: usize,
     counters: TableCounters,
     heap: BinaryHeap<Entry>,
     /// Open-addressed slots, each a node id or [`NIL`] when empty. Ids stay
     /// below [`ID_MASK`], so a slot's top 32 - `ID_BITS` = 6 bits are spare:
     /// too few for a 12-bit hash tag, which is therefore not implemented. A
     /// 6-bit tag is worth trying only if profiling shows table finds dominate.
+    ///
+    /// A power of two of one of two sizes. It starts at [`INITIAL_TABLE`]
+    /// slots, or at its final size when that is smaller, and once more than
+    /// half of it is bound it grows straight to the final size,
+    /// [`final_table`] of `node_limit + 1`, which it then keeps. Empty only
+    /// after a failed growth.
     table: Vec<u32>,
+    /// Ids the table binds: the records not superseded.
+    resident: usize,
     /// Boxes per state, the prefix of `State::boxes` that is hashed.
     boxes: usize,
     node_limit: usize,
     reserved_bytes: usize,
     scaled_down: bool,
+    /// A growth allocation failed below the limit; see [`Arena::starved`].
+    starved: bool,
+    /// Unit tests only: every growth allocation fails, as if the allocator
+    /// refused it, so the starved path runs without exhausting memory.
+    #[cfg(test)]
+    refusing: bool,
+    /// Bumped by every insert and clear, from 1. Debug builds only, like
+    /// `found`.
+    #[cfg(debug_assertions)]
+    generation: u32,
+    /// The generation of the last [`Arena::find`], 0 before any, which
+    /// [`Arena::insert`] checks is current: no slot outlives an insert. An
+    /// atomic, not a `Cell`, so a debug arena is `Sync` like a release one.
+    #[cfg(debug_assertions)]
+    found: std::sync::atomic::AtomicU32,
 }
 impl Arena {
     pub(crate) fn new(
@@ -249,12 +340,14 @@ impl Arena {
         let per_state =
             (size_of::<Record>() + boxes * size_of::<Cell>() + size_of::<Entry>()) as u64;
         // One spare node keeps a solution found at the exact limit reachable.
-        // count is at most MAX_STATES, so only the sum with the fixed bytes
-        // can overflow.
+        // count is at most MAX_STATES, so the table's final size fits a
+        // usize on wasm32 and only the sum with the fixed bytes can
+        // overflow. These are the full-size buffers, the most the arena ever
+        // grows to.
         let bytes_for = |count: usize| {
-            let records = count as u64 + 1;
+            let records = count + 1;
             fixed_bytes.saturating_add(
-                records * per_state + (records * 2).next_power_of_two() * size_of::<u32>() as u64,
+                records as u64 * per_state + final_table(records) as u64 * size_of::<u32>() as u64,
             )
         };
         // Exact largest limit that fits the budget, instead of stepping down 10%.
@@ -272,23 +365,27 @@ impl Arena {
             return Err(SearchError::BudgetTooSmall);
         }
         let limit = low;
-        // At most the budget, so it and every count reserved below fit a
-        // usize on wasm32 too.
+        // At most the budget, so it and every count allocated below or by
+        // later growth fit a usize on wasm32 too.
         let reserved_bytes = bytes_for(limit) as usize;
-        let mut nodes = Vec::new();
-        nodes
-            .try_reserve_exact(limit + 1)
+        let records = limit + 1;
+        // The chunk list, one entry per CHUNK records, is the one buffer the
+        // budget does not charge: no budget holds more than 2^23 records, so
+        // it is at most 128 entries, 6 KiB, though the four-record chunks of
+        // unit tests make it far longer.
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(records.div_ceil(CHUNK))
             .map_err(|_| SearchError::Allocation("node arena"))?;
-        let mut box_cells = Vec::new();
-        box_cells
-            .try_reserve_exact((limit + 1) * boxes)
-            .map_err(|_| SearchError::Allocation("box arena"))?;
-        // Every enqueue follows an insert, so heap.len() <= nodes.len() <=
-        // limit + 1 and this never grows.
+        chunks.push(Chunk::new(records.min(CHUNK), boxes).map_err(SearchError::Allocation)?);
+        // Every enqueue follows an insert, so heap.len() <= len <= limit + 1
+        // and this never grows. It is reserved whole because a doubling
+        // queue would briefly hold its old and new buffers at once, past the
+        // budget near the limit.
         let mut heap = BinaryHeap::new();
-        heap.try_reserve_exact(limit + 1)
+        heap.try_reserve_exact(records)
             .map_err(|_| SearchError::Allocation("search queue"))?;
-        let table_size = ((limit + 1) * 2).next_power_of_two();
+        let table_size = final_table(records).min(INITIAL_TABLE);
         let mut table = Vec::new();
         table
             .try_reserve_exact(table_size)
@@ -299,43 +396,86 @@ impl Arena {
             reserved_bytes,
             scaled_down: limit < max_states,
             node_limit: limit,
-            nodes,
-            box_cells,
+            chunks,
+            len: 0,
             counters: TableCounters::default(),
             heap,
             table,
+            resident: 0,
+            starved: false,
+            #[cfg(test)]
+            refusing: false,
+            #[cfg(debug_assertions)]
+            generation: 1,
+            #[cfg(debug_assertions)]
+            found: std::sync::atomic::AtomicU32::new(0),
         })
     }
+    /// The status of a search the full arena stops: [`Status::MemoryLimit`]
+    /// when the budget scaled the limit down or a growth allocation failed
+    /// below it, [`Status::StateLimit`] otherwise.
     pub(crate) fn limit_status(&self) -> Status {
-        if self.scaled_down {
+        if self.scaled_down || self.starved {
             Status::MemoryLimit
         } else {
             Status::StateLimit
         }
     }
+    /// Bytes the budget charges: the fixed buffers and the arena at its full
+    /// limit. The arena grows toward this but never past it, so it is a
+    /// ceiling on the search's buffers, the chunk list's few KiB aside, not
+    /// the amount allocated.
     pub(crate) fn reserved_bytes(&self) -> usize {
         self.reserved_bytes
     }
     pub(crate) fn len(&self) -> usize {
-        self.nodes.len()
+        self.len
     }
+    /// Whether only the spare insert may follow: the arena holds its limit,
+    /// or a growth allocation failed ([`Arena::starved`]).
     pub(crate) fn is_full(&self) -> bool {
-        self.nodes.len() >= self.node_limit
+        self.len >= self.node_limit || self.starved
+    }
+    /// Whether a growth allocation failed below the limit. The arena is
+    /// then full, and the table may be gone, so the caller must stop before
+    /// its next [`Arena::find`]. Records and queue are intact, so every
+    /// bound and route read from them still holds.
+    pub(crate) fn starved(&self) -> bool {
+        self.starved
+    }
+    /// The chunk holding `id`, and `id`'s offset in it.
+    #[inline]
+    fn chunk(&self, id: u32) -> (&Chunk, usize) {
+        let id = id as usize;
+        (&self.chunks[id >> CHUNK_SHIFT], id & (CHUNK - 1))
+    }
+    #[inline]
+    fn record(&self, id: u32) -> Record {
+        let (chunk, offset) = self.chunk(id);
+        chunk.records[offset]
+    }
+    #[inline]
+    fn record_mut(&mut self, id: u32) -> &mut Record {
+        let id = id as usize;
+        &mut self.chunks[id >> CHUNK_SHIFT].records[id & (CHUNK - 1)]
     }
     /// The state's node, if any, and the table slot that holds it or would
-    /// hold a new node for it.
+    /// hold a new node for it. The slot is valid until the next insert.
     pub(crate) fn find(&self, state: &State) -> (usize, Option<u32>) {
+        #[cfg(debug_assertions)]
+        self.found
+            .store(self.generation, std::sync::atomic::Ordering::Relaxed);
+        let boxes = &state.boxes[..self.boxes];
         let mask = self.table.len() - 1;
-        let mut slot = hash(state.player, &state.boxes[..self.boxes]) & mask;
+        let mut slot = hash(state.player, boxes) & mask;
         loop {
             let id = self.table[slot];
             if id == NIL {
                 return (slot, None);
             }
-            let record = self.nodes[id as usize];
-            let begin = id as usize * self.boxes;
-            if record.player == state.player
-                && self.box_cells[begin..begin + self.boxes] == state.boxes[..self.boxes]
+            let (chunk, offset) = self.chunk(id);
+            if chunk.records[offset].player == state.player
+                && chunk.cells(offset, self.boxes) == boxes
             {
                 return (slot, Some(id));
             }
@@ -343,39 +483,133 @@ impl Arena {
         }
     }
     /// Appends `node` and binds `slot`, which [`Arena::find`] returned for its
-    /// state with no insert since, replacing any older node there, which
-    /// becomes superseded. Only one node may go past the limit, into the
-    /// spare slot: a solution discovered at the exact moment the arena
-    /// filled.
+    /// state with no insert since (debug builds check), replacing any older
+    /// node there, which becomes superseded. Only one node may go past the
+    /// limit, into the spare slot: a solution discovered at the exact moment
+    /// the arena filled. Below the limit it then allocates what the next
+    /// insert needs ([`Arena::grow`]), so the spare's insert never does.
     pub(crate) fn insert(&mut self, node: Node, slot: usize) -> u32 {
-        debug_assert!(self.nodes.len() <= self.node_limit);
-        let id = self.nodes.len() as u32;
+        debug_assert!(self.len <= self.node_limit);
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                *self.found.get_mut(),
+                self.generation,
+                "a slot outlived an insert or a clear"
+            );
+            self.generation = self.generation.wrapping_add(1);
+        }
+        let id = self.len as u32;
         let previous = self.table[slot];
         if previous == NIL {
             self.counters.unique_states += 1;
+            self.resident += 1;
         } else {
             self.counters.duplicate_improvements += 1;
-            let previous = &mut self.nodes[previous as usize];
-            if previous.has(Record::CLOSED) {
-                self.counters.reopened_states += 1;
-            }
+            let previous = self.record_mut(previous);
+            let reopened = previous.has(Record::CLOSED);
             // Its queued entry, if any, now pops as stale.
             previous.link |= Record::SUPERSEDED;
+            if reopened {
+                self.counters.reopened_states += 1;
+            }
         }
-        self.box_cells
+        let chunk = &mut self.chunks[self.len >> CHUNK_SHIFT];
+        debug_assert!(chunk.records.len() < chunk.records.capacity());
+        chunk
+            .box_cells
             .extend_from_slice(&node.state.boxes[..self.boxes]);
-        self.nodes.push(Record::new(&node));
+        chunk.records.push(Record::new(&node));
         self.table[slot] = id;
+        self.len += 1;
+        // Nearly every insert stops at these checks, so the growth itself
+        // stays out of line.
+        if self.len <= self.node_limit
+            && !self.starved
+            && (self.resident * 2 > self.table.len()
+                || self.len + 1 == (self.chunks.len() << CHUNK_SHIFT))
+        {
+            self.grow();
+        }
         id
     }
+    /// Allocates ahead what the next insert needs: the final table once more
+    /// than half of the first is bound, and the next chunk once the last has
+    /// one record left, never more than the `node_limit + 1` records in all.
+    /// Growth therefore stops at exactly the buffers
+    /// [`Arena::reserved_bytes`] charges, and a full arena still has room
+    /// for the spare without allocating. A refused allocation sets
+    /// [`Arena::starved`] and grows nothing more.
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        if self.resident * 2 > self.table.len() {
+            // The table's one growth, straight to its final size: the
+            // node_limit + 1 ids at most never bind more than half of that,
+            // so this branch never runs again.
+            let size = final_table(self.node_limit + 1);
+            debug_assert!(self.table.len() < size);
+            // Free the first table before the final one is allocated, so the
+            // two never coexist; the records rebuild it. On wasm32 linear
+            // memory never shrinks, so this freed table, at most
+            // INITIAL_TABLE slots (256 KiB), can stay allocated past the
+            // budget.
+            self.table = Vec::new();
+            if self.refusing() || self.table.try_reserve_exact(size).is_err() {
+                self.starved = true;
+                return;
+            }
+            self.table.resize(size, NIL);
+            self.rebind();
+        }
+        let reserved = self.chunks.len() << CHUNK_SHIFT;
+        if self.len + 1 == reserved && reserved <= self.node_limit {
+            match Chunk::new((self.node_limit + 1 - reserved).min(CHUNK), self.boxes) {
+                Ok(chunk) if !self.refusing() => self.chunks.push(chunk),
+                _ => self.starved = true,
+            }
+        }
+    }
+    /// Whether growth allocations fail without asking the allocator: never,
+    /// outside unit tests.
+    #[cfg(not(test))]
+    fn refusing(&self) -> bool {
+        false
+    }
+    /// Whether a unit test made growth allocations fail; see
+    /// `Arena::refuse_growth`.
+    #[cfg(test)]
+    fn refusing(&self) -> bool {
+        self.refusing
+    }
+    /// Binds every record not superseded in an empty table, in id order.
+    fn rebind(&mut self) {
+        let mask = self.table.len() - 1;
+        let mut bound = 0;
+        for (k, chunk) in self.chunks.iter().enumerate() {
+            let first = k << CHUNK_SHIFT;
+            for (offset, record) in chunk.records.iter().enumerate() {
+                if record.has(Record::SUPERSEDED) {
+                    continue;
+                }
+                let mut slot = hash(record.player, chunk.cells(offset, self.boxes)) & mask;
+                while self.table[slot] != NIL {
+                    slot = (slot + 1) & mask;
+                }
+                self.table[slot] = (first + offset) as u32;
+                bound += 1;
+            }
+        }
+        debug_assert_eq!(bound, self.resident);
+    }
     pub(crate) fn node(&self, id: u32) -> Node {
-        let record = self.nodes[id as usize];
+        let (chunk, offset) = self.chunk(id);
+        let record = chunk.records[offset];
         let mut state = State {
             player: record.player,
             boxes: [NONE; MAX_BOXES],
         };
-        let begin = id as usize * self.boxes;
-        state.boxes[..self.boxes].copy_from_slice(&self.box_cells[begin..begin + self.boxes]);
+        state.boxes[..self.boxes].copy_from_slice(chunk.cells(offset, self.boxes));
         Node {
             state,
             g: record.g,
@@ -386,7 +620,7 @@ impl Arena {
     }
     /// The node's g, stored h and closed flag, without decoding its state.
     pub(crate) fn meta(&self, id: u32) -> Meta {
-        let record = self.nodes[id as usize];
+        let record = self.record(id);
         Meta {
             g: record.g,
             h: record.h,
@@ -397,14 +631,14 @@ impl Arena {
     /// [`Arena::clear_keeping`] detached it: exactly when [`Arena::find`] on
     /// its state would not return this id.
     pub(crate) fn is_superseded(&self, id: u32) -> bool {
-        self.nodes[id as usize].has(Record::SUPERSEDED)
+        self.record(id).has(Record::SUPERSEDED)
     }
     pub(crate) fn counters(&self) -> &TableCounters {
         &self.counters
     }
     /// Marks the node expanded.
     pub(crate) fn close(&mut self, id: u32) {
-        self.nodes[id as usize].link |= Record::CLOSED;
+        self.record_mut(id).link |= Record::CLOSED;
     }
     /// Queues `id` at `f`, with `h` as the tie-break; see [`Key`].
     ///
@@ -425,13 +659,25 @@ impl Arena {
     pub(crate) fn min_f(&self) -> Option<u64> {
         self.heap.peek().map(|Reverse(key)| key.f())
     }
-    /// Forgets every node and queued entry in place. The reservation, limit
-    /// and counters are kept.
+    /// Forgets every node and queued entry in place. Every chunk, the queue
+    /// and the table keep their allocations, so refilling to the size
+    /// already reached allocates nothing; the limit and counters are kept,
+    /// and so is a starved arena's flag when its failed growth left no
+    /// table to search.
     pub(crate) fn clear(&mut self) {
-        self.nodes.clear();
-        self.box_cells.clear();
+        for chunk in &mut self.chunks {
+            chunk.records.clear();
+            chunk.box_cells.clear();
+        }
+        self.len = 0;
+        self.resident = 0;
         self.heap.clear();
         self.table.fill(NIL);
+        self.starved = self.table.is_empty();
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
     }
     /// Empties the arena like [`Arena::clear`], except that the path from
     /// the root to `id` stays at the front, root first, as detached records:
@@ -443,43 +689,60 @@ impl Arena {
     /// counted when it was inserted. Returns `id`'s new id, one below the
     /// path's length, so the next insert gets the path's length. Returns
     /// `None`, with nothing changed, when the path would leave no room below
-    /// the limit for one more record, the start a fresh search needs.
+    /// the limit for one more record, the start a fresh search needs, or is
+    /// longer than the table that serves as scratch.
     pub(crate) fn clear_keeping(&mut self, id: u32) -> Option<u32> {
         // Count the path first, so a refusal changes nothing. A parent is
         // always older than its child, since records are only ever appended.
         let mut len = 1;
-        let mut link = self.nodes[id as usize].parent();
+        let mut link = self.record(id).parent();
         while link != NIL {
             len += 1;
-            link = self.nodes[link as usize].parent();
-        }
-        if len >= self.node_limit {
-            return None;
+            link = self.record(link).parent();
         }
         // The table, refilled below, is the scratch for the path's old ids,
-        // root first: it has a slot for every record twice over, so nothing
-        // outside the reservation is allocated.
+        // root first, so nothing is allocated. It never shrinks, and the
+        // path fits it unless a failed growth freed it: a path in this
+        // search visits distinct states, every one bound in the table now,
+        // and a path an earlier restart kept fit the table then.
+        if len >= self.node_limit || len > self.table.len() {
+            return None;
+        }
         let mut old = id;
         for new in (0..len).rev() {
             self.table[new] = old;
-            old = self.nodes[old as usize].parent();
+            old = self.record(old).parent();
         }
         // Root first: the record at old id `old` moves down to `new` <= `old`,
-        // over a record already moved or not kept, never one still to move.
+        // possibly into an earlier chunk, over a record already moved or not
+        // kept, never one still to move.
+        let boxes = self.boxes;
+        let mut cells = [NONE; MAX_BOXES];
         for new in 0..len {
-            let old = self.table[new] as usize;
+            let (chunk, offset) = self.chunk(self.table[new]);
             let parent = if new == 0 { ID_MASK } else { new as u32 - 1 };
-            let mut record = self.nodes[old];
+            let mut record = chunk.records[offset];
             record.link = (record.link & !ID_MASK) | parent | Record::SUPERSEDED;
-            self.nodes[new] = record;
-            let begin = old * self.boxes;
-            self.box_cells
-                .copy_within(begin..begin + self.boxes, new * self.boxes);
+            cells[..boxes].copy_from_slice(chunk.cells(offset, boxes));
+            let (chunk, offset) = (&mut self.chunks[new >> CHUNK_SHIFT], new & (CHUNK - 1));
+            chunk.records[offset] = record;
+            chunk.box_cells[offset * boxes..(offset + 1) * boxes].copy_from_slice(&cells[..boxes]);
         }
-        self.nodes.truncate(len);
-        self.box_cells.truncate(len * self.boxes);
+        for (k, chunk) in self.chunks.iter_mut().enumerate() {
+            let kept = len.saturating_sub(k << CHUNK_SHIFT).min(CHUNK);
+            chunk.records.truncate(kept);
+            chunk.box_cells.truncate(kept * boxes);
+        }
+        self.len = len;
+        self.resident = 0;
         self.heap.clear();
         self.table.fill(NIL);
+        // The table is whole, so even a starved arena may refill.
+        self.starved = false;
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
         Some(len as u32 - 1)
     }
     /// Re-keys every entry queued at `g + from * h` as `g + to * h`, in the
@@ -490,7 +753,7 @@ impl Arena {
     pub(crate) fn reweight(&mut self, from: u32, to: u32) {
         let mut entries = std::mem::take(&mut self.heap).into_vec();
         for Reverse(key) in &mut entries {
-            let (g, h) = (u64::from(self.nodes[key.id() as usize].g), key.h());
+            let (g, h) = (u64::from(self.record(key.id()).g), key.h());
             debug_assert_eq!(
                 key.f(),
                 (g + u64::from(from) * u64::from(h)).min(Key::F_SAT)
@@ -502,8 +765,19 @@ impl Arena {
 }
 
 #[cfg(test)]
+impl Arena {
+    /// Makes every later growth allocation fail, as an allocator out of
+    /// memory would refuse it, or lets them reach the allocator again.
+    pub(crate) fn refuse_growth(&mut self, refuse: bool) {
+        self.refusing = refuse;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::Lcg;
+    use std::collections::HashMap;
 
     #[test]
     fn compact_versions_preserve_parents_and_exact_keeper_identity() {
@@ -631,42 +905,219 @@ mod tests {
         assert_eq!(arena.counters.peak_queue, queued.len() as u32);
     }
 
+    /// Clearing keeps every allocation the arena has grown, the queue's
+    /// included, so refilling to the size it reached grows nothing.
     #[test]
-    fn clear_forgets_every_state_and_keeps_the_reservation() {
-        let mut arena = Arena::new(100, 1, 10, 4).unwrap();
-        let mut state = State {
-            player: 1,
-            boxes: [NONE; MAX_BOXES],
+    fn clear_forgets_every_state_and_keeps_the_capacity() {
+        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        let at = |cell: usize| {
+            let mut state = State {
+                player: 1,
+                boxes: [NONE; MAX_BOXES],
+            };
+            state.boxes[0] = 10 + cell as Cell;
+            Node {
+                state,
+                g: 0,
+                parent: NIL,
+                direction: 0,
+                h: 1,
+            }
         };
-        state.boxes[0] = 10;
-        let node = Node {
-            state,
-            g: 0,
-            parent: NIL,
-            direction: 0,
-            h: 1,
+        let fill = |arena: &mut Arena, cells: std::ops::Range<usize>| {
+            for cell in cells {
+                let node = at(cell);
+                let (slot, found) = arena.find(&node.state);
+                assert_eq!(found, None);
+                let id = arena.insert(node, slot);
+                arena.enqueue(1, 1, id);
+            }
         };
-        let (slot, _) = arena.find(&state);
-        let id = arena.insert(node, slot);
-        arena.enqueue(1, 1, id);
-        let reserved = |arena: &Arena| {
+        let capacity = |arena: &Arena| {
+            let chunks: Vec<_> = arena
+                .chunks
+                .iter()
+                .map(|chunk| (chunk.records.capacity(), chunk.box_cells.capacity()))
+                .collect();
             (
-                arena.nodes.capacity(),
-                arena.box_cells.capacity(),
+                chunks,
                 arena.heap.capacity(),
                 arena.table.len(),
                 arena.reserved_bytes(),
             )
         };
-        let before = reserved(&arena);
+        // Past several chunks and the table's growth, at the 33rd state.
+        fill(&mut arena, 0..36);
+        let before = capacity(&arena);
+        assert!(before.0.len() > 2 && before.2 == final_table(arena.node_limit + 1));
         arena.clear();
-        assert_eq!(reserved(&arena), before);
+        assert_eq!(capacity(&arena), before);
         assert_eq!((arena.len(), arena.dequeue()), (0, None));
+        // Ids restart at 0; the counters keep counting.
+        let (slot, found) = arena.find(&at(0).state);
+        assert_eq!(found, None);
+        assert_eq!(arena.insert(at(0), slot), 0);
+        assert_eq!(arena.counters.unique_states, 37);
+        fill(&mut arena, 1..36);
+        assert_eq!(capacity(&arena), before);
+    }
+
+    /// Records grow a chunk at a time, one ahead of need, and the table
+    /// grows once, straight to its final size, when more than half of it is
+    /// bound, and neither changes an id, a lookup or the queue: after every
+    /// insert each id resolves to its node, each state finds its current
+    /// id, and the queue's minimum matches a plain list of keys. The growth
+    /// rebinds records from several chunks and skips superseded ones. The
+    /// full arena then takes the spare without growing, and a path kept
+    /// from it moves down across chunks.
+    #[test]
+    fn growth_keeps_ids_and_duplicates() {
+        const LIMIT: usize = 150;
+        const FINAL: usize = final_table(LIMIT + 1);
+        type Current = HashMap<(Cell, [Cell; MAX_BOXES]), u32>;
+        let mut arena = Arena::new(100, 2, LIMIT, 4).unwrap();
+        let mut rng = Lcg(0xa4e7a);
+        let key = |state: &State| (state.player, state.boxes);
+        // Every node inserted, by id, each state's current id, and every key
+        // queued and not yet dequeued.
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut current = Current::new();
+        let mut queued: Vec<Key> = Vec::new();
+        let mut table = INITIAL_TABLE;
+        let check = |arena: &Arena, nodes: &[Node], current: &Current| {
+            for (id, node) in nodes.iter().enumerate() {
+                let id = id as u32;
+                let stored = arena.node(id);
+                assert_eq!(stored.state, node.state);
+                assert_eq!(
+                    (stored.g, stored.parent, stored.direction, stored.h),
+                    (node.g, node.parent, node.direction, node.h)
+                );
+                assert_eq!(arena.is_superseded(id), current[&key(&node.state)] != id);
+            }
+            for &id in current.values() {
+                assert_eq!(arena.find(&nodes[id as usize].state).1, Some(id));
+            }
+        };
+        while !arena.is_full() {
+            // Four keepers by 40 box pairs: 160 states, so draws repeat.
+            let mut state = State {
+                player: rng.below(4) as Cell,
+                boxes: [NONE; MAX_BOXES],
+            };
+            let cell = 10 + rng.below(40) as Cell;
+            state.boxes[..2].copy_from_slice(&[cell, cell + 50]);
+            let (slot, found) = arena.find(&state);
+            assert_eq!(found, current.get(&key(&state)).copied());
+            let g = rng.below(1000) as u32;
+            // As in the engine, only a cheaper duplicate is stored.
+            if found.is_some_and(|id| nodes[id as usize].g <= g) {
+                continue;
+            }
+            let node = Node {
+                state,
+                g,
+                parent: if nodes.is_empty() {
+                    NIL
+                } else {
+                    rng.below(nodes.len()) as u32
+                },
+                direction: rng.below(4) as u8,
+                h: rng.below(100) as u16,
+            };
+            let id = arena.insert(node, slot);
+            assert_eq!(id as usize, nodes.len());
+            nodes.push(node);
+            current.insert(key(&state), id);
+            if rng.below(3) > 0 {
+                let queue = Key::new(u64::from(g + u32::from(node.h)), u32::from(node.h), id);
+                arena.enqueue(queue.f(), queue.h(), id);
+                queued.push(queue);
+            }
+            if rng.below(4) == 0 {
+                let lowest = queued.iter().copied().min();
+                queued.retain(|&queue| Some(queue) != lowest);
+                assert_eq!(arena.dequeue(), lowest);
+            }
+            assert_eq!(arena.min_f(), queued.iter().map(|queue| queue.f()).min());
+            if current.len() * 2 > table {
+                // From this seed the growth comes at the 35th insert, with
+                // ten chunks allocated and two records superseded.
+                assert_eq!(table, INITIAL_TABLE);
+                assert!(arena.chunks.len() > 2 && nodes.len() > current.len());
+                table = FINAL;
+            }
+            assert_eq!(arena.table.len(), table);
+            assert_eq!(
+                arena.chunks.len(),
+                (arena.len() + 2).min(LIMIT + 1).div_ceil(CHUNK)
+            );
+            check(&arena, &nodes, &current);
+        }
+        assert_eq!((arena.len(), table), (LIMIT, FINAL));
+        // Every chunk is allocated, exactly LIMIT + 1 records in all, and the
+        // spare's insert grows nothing.
+        let capacity = |arena: &Arena| {
+            let chunks: Vec<_> = arena
+                .chunks
+                .iter()
+                .map(|chunk| (chunk.records.capacity(), chunk.box_cells.capacity()))
+                .collect();
+            (chunks, arena.table.len())
+        };
+        let full = capacity(&arena);
+        let records: usize = full.0.iter().map(|&(records, _)| records).sum();
+        let cells: usize = full.0.iter().map(|&(_, cells)| cells).sum();
+        assert_eq!((records, cells), (LIMIT + 1, (LIMIT + 1) * 2));
+        let mut state = nodes[0].state;
+        state.player = 9;
         let (slot, found) = arena.find(&state);
         assert_eq!(found, None);
-        // Ids restart at 0; the counters keep counting.
-        assert_eq!(arena.insert(node, slot), 0);
-        assert_eq!(arena.counters.unique_states, 2);
+        let spare = Node {
+            state,
+            g: 7,
+            parent: LIMIT as u32 - 1,
+            direction: 2,
+            h: 0,
+        };
+        assert_eq!(arena.insert(spare, slot), LIMIT as u32);
+        nodes.push(spare);
+        current.insert(key(&state), LIMIT as u32);
+        assert_eq!(capacity(&arena), full);
+        check(&arena, &nodes, &current);
+        // The spare's path, root first, moves down from the last chunks.
+        let mut path = vec![LIMIT as u32];
+        let mut parent = spare.parent;
+        while parent != NIL {
+            path.push(parent);
+            parent = nodes[parent as usize].parent;
+        }
+        path.reverse();
+        assert!(path.len() >= 3);
+        assert_eq!(
+            arena.clear_keeping(LIMIT as u32),
+            Some(path.len() as u32 - 1)
+        );
+        assert_eq!((arena.len(), arena.dequeue()), (path.len(), None));
+        for (new, &old) in path.iter().enumerate() {
+            let (id, node) = (new as u32, nodes[old as usize]);
+            let stored = arena.node(id);
+            assert_eq!(stored.state, node.state);
+            assert_eq!(
+                (stored.g, stored.parent, stored.direction, stored.h),
+                (
+                    node.g,
+                    id.checked_sub(1).unwrap_or(NIL),
+                    node.direction,
+                    node.h
+                )
+            );
+            assert!(arena.is_superseded(id));
+            assert_eq!(arena.find(&node.state).1, None);
+        }
+        let kept: usize = arena.chunks.iter().map(|chunk| chunk.records.len()).sum();
+        assert_eq!(kept, path.len());
+        assert_eq!(capacity(&arena), full);
     }
 
     /// A kept path stays at the front as detached records: root first,
@@ -760,6 +1211,89 @@ mod tests {
         assert_eq!(full.clear_keeping(2), None);
         assert_eq!((full.len(), full.find(&at(30)).1), (3, Some(2)));
         assert_eq!(full.clear_keeping(1), Some(1));
+    }
+
+    /// A refused growth allocation starves the arena: it is full, at
+    /// [`Status::MemoryLimit`], with every record kept. A refused chunk
+    /// leaves the table whole, so a kept path or a clear lets the arena
+    /// fill and grow again. A refused final table is gone, so the arena
+    /// keeps no path and stays starved through a clear.
+    #[test]
+    fn a_refused_growth_starves_the_arena() {
+        let at = |cell: usize| {
+            let mut state = State {
+                player: 1,
+                boxes: [NONE; MAX_BOXES],
+            };
+            state.boxes[0] = 10 + cell as Cell;
+            Node {
+                state,
+                g: 0,
+                parent: NIL,
+                direction: 0,
+                h: 1,
+            }
+        };
+        let fill = |arena: &mut Arena, cells: std::ops::Range<usize>| {
+            for cell in cells {
+                let node = at(cell);
+                let (slot, found) = arena.find(&node.state);
+                assert_eq!(found, None);
+                let id = arena.insert(node, slot);
+                arena.enqueue(1, 1, id);
+            }
+        };
+        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        assert_eq!(arena.limit_status(), Status::StateLimit);
+        // The four-record first chunk of unit tests asks for the next at the
+        // third insert.
+        arena.refuse_growth(true);
+        fill(&mut arena, 0..3);
+        assert!(arena.starved() && arena.is_full());
+        assert_eq!(arena.limit_status(), Status::MemoryLimit);
+        assert_eq!(
+            (arena.len(), arena.chunks.len(), arena.table.len()),
+            (3, 1, INITIAL_TABLE)
+        );
+        assert_eq!(arena.find(&at(2).state).1, Some(2));
+        // Once allocations succeed again, the kept path refills, past
+        // several chunks and the table's growth.
+        arena.refuse_growth(false);
+        assert_eq!(arena.clear_keeping(2), Some(0));
+        assert!(!arena.starved() && !arena.is_full());
+        fill(&mut arena, 0..36);
+        assert_eq!(
+            (arena.len(), arena.chunks.len(), arena.table.len()),
+            (37, 10, final_table(arena.node_limit + 1))
+        );
+        // The 39th insert asks for the last chunk; a clear lets the arena
+        // refill to its limit, which it then reaches as a state limit.
+        arena.refuse_growth(true);
+        fill(&mut arena, 36..38);
+        assert!(arena.starved() && arena.len() == 39);
+        arena.refuse_growth(false);
+        arena.clear();
+        assert!(!arena.starved() && !arena.is_full());
+        fill(&mut arena, 0..40);
+        assert!(!arena.starved() && arena.is_full());
+        assert_eq!((arena.len(), arena.chunks.len()), (40, 11));
+        assert_eq!(arena.limit_status(), Status::StateLimit);
+
+        // The table grows at the 33rd insert, when more than half of its
+        // first 64 slots would be bound, and frees the first one before it
+        // asks for the final one.
+        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        fill(&mut arena, 0..32);
+        arena.refuse_growth(true);
+        fill(&mut arena, 32..33);
+        assert!(arena.starved() && arena.is_full() && arena.table.is_empty());
+        assert_eq!(arena.limit_status(), Status::MemoryLimit);
+        assert_eq!(arena.node(32).state, at(32).state);
+        arena.refuse_growth(false);
+        assert_eq!(arena.clear_keeping(32), None);
+        assert_eq!(arena.len(), 33);
+        arena.clear();
+        assert!(arena.starved() && arena.is_full() && arena.len() == 0);
     }
 
     /// Every record field at its extremes, with every flag combination.

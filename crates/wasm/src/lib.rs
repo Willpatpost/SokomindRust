@@ -160,7 +160,8 @@ impl WasmSearch {
     ///
     /// - `[0]` states expanded.
     /// - `[1]` states generated.
-    /// - `[2]` accounted reserved bytes.
+    /// - `[2]` the memory ceiling, [`Search::reserved_bytes`]: the most the
+    ///   search's buffers can reach, not the bytes allocated so far.
     /// - `[3]` moves in the best route found, or `u32::MAX` before the first.
     ///   The count saturates at `u32::MAX - 1` (see [`Search::best_moves`]),
     ///   so `u32::MAX` always means no route.

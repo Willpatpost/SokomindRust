@@ -687,6 +687,28 @@ test("the README quotes arena.rs's ID_BITS and its record and queue entry sizes"
   assert.equal(read('README.md', /an (\d+)-byte queue entry/), entry);
 });
 
+test("the README, reserved_bytes' doc, parity.mjs and the arena's own comments quote INITIAL_TABLE in slots and KiB", () => {
+  const shift = read('crates/search/src/arena.rs', /const INITIAL_TABLE: usize = if cfg!\(test\) \{ \d+ \} else \{ 1 << (\d+) \};/);
+  // Each slot is a u32 node id.
+  const kib = (2 ** shift * 4) / 1024;
+  assert.equal(read('README.md', /it starts at 2\^(\d+) slots/), shift);
+  assert.equal(read('README.md', /slots \((\d+) KiB\)/), kib);
+  assert.equal(read('README.md', /up to (\d+) KiB past the budget/), kib);
+  assert.equal(read('crates/search/src/lib.rs', /at most 2\^(\d+) slots/), shift);
+  assert.equal(read('crates/search/src/lib.rs', /\((\d+) KiB\) at first/), kib);
+  assert.equal(read('crates/search/src/lib.rs', /freed first table,\s+\/\/\/ (\d+) KiB/), kib);
+  assert.equal(read('crates/search/src/arena.rs', /smaller: 2\^(\d+) slots/), shift);
+  assert.equal(read('crates/search/src/arena.rs', /slots, (\d+) KiB, so/), kib);
+  assert.equal(read('crates/search/src/arena.rs', /INITIAL_TABLE slots \((\d+) KiB\)/), kib);
+  assert.equal(read('scripts/parity.mjs', /at most (\d+) KiB, which/), kib);
+});
+
+test("the README and parity.mjs's comment quote the memory-fill case's allowance past reserved_bytes", () => {
+  const allowance = read('scripts/parity.mjs', /const fillCap = fill\.metrics\.reservedBytes \+ (\d+) \* MIB;/);
+  assert.equal(read('README.md', /memory ceiling plus (\d+) MiB/), allowance);
+  assert.equal(read('scripts/parity.mjs', /most reserved_bytes plus (\d+) MiB/), allowance);
+});
+
 test("the README quotes the benchmark baseline's, catalog example's and observe run's limits", () => {
   assert.equal(read('README.md', /baseline's ([\d,]+) states/), read('benchmarks/catalog-baseline.json', /"maxStates": (\d+),/));
   assert.equal(

@@ -276,7 +276,7 @@ impl Prunes {
     };
 }
 
-/// Push search over one reserved arena. Only [`crate::ExactSearch`] turns its
+/// Push search over one budgeted arena. Only [`crate::ExactSearch`] turns its
 /// state into bounds or a proof; with a weighted policy results are always
 /// optimality unknown.
 pub(crate) struct Engine {
@@ -408,6 +408,9 @@ impl Engine {
             },
             slot,
         );
+        // An empty arena, or one cleared at its limit, has room for the
+        // start and the next insert already.
+        debug_assert!(!self.arena.starved());
         if let Some(h) = h {
             let total_h = self.root_estimate(&self.start, h);
             self.arena
@@ -521,7 +524,8 @@ impl Engine {
         self.seed();
         true
     }
-    /// The arena is full while expanding a node whose g + queued h is `f`.
+    /// The arena is full, or could not grow, while expanding a node whose
+    /// g + queued h is `f`.
     fn stop_at_limit(&mut self, f: u64) {
         self.interrupted_f = Some(f);
         self.status = self.arena.limit_status();
@@ -789,7 +793,8 @@ impl Engine {
     /// Stores and queues an admitted child, recording it when it is solved.
     /// At a full arena a solved child is kept as the incumbent, in the spare
     /// slot, and then the search starts over or ends. Below the limit a
-    /// solved child may end it.
+    /// solved child may end it, and so does a failed growth allocation,
+    /// with [`Status::MemoryLimit`].
     #[inline]
     fn insert(&mut self, parent: &Parent, child: Child) -> Inserted {
         let Child { node, h, slot } = child;
@@ -821,6 +826,14 @@ impl Engine {
                 self.status = Status::Solved;
                 return Inserted::Stopped;
             }
+        }
+        // The arena could not grow for the next insert, and its table may be
+        // gone, so the search ends here, before another find, as at a full
+        // arena but with no restart: a fresh search would need the same
+        // allocation.
+        if self.arena.starved() {
+            self.stop_at_limit(parent.node.g as u64 + parent.queued_h.max(1) as u64);
+            return Inserted::Stopped;
         }
         Inserted::Queued
     }
@@ -1175,6 +1188,34 @@ mod tests {
             (Restart::Never, true),
         ] {
             assert!(seen.contains(&wanted), "{wanted:?} in {seen:?}");
+        }
+    }
+
+    /// An arena that cannot grow ends the search at once with
+    /// `MemoryLimit` and the f of the expansion it cut short, and never
+    /// restarts, even under a restart policy: a fresh search would need the
+    /// same allocation. Growth is refused from the start, so the search
+    /// stops at its third record, when the four-record first chunk of unit
+    /// tests asks for the next. The board is the one of
+    /// `corral_check_prunes_a_goal_sealed_too_early`, whose route needs 18
+    /// moves.
+    #[test]
+    fn a_refused_growth_stops_with_memory_limit() {
+        let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
+        for policy in [
+            Policy::EXACT,
+            Policy::FAST,
+            Policy::FAST_THEN_QUALITY_RESTART,
+        ] {
+            let mut engine =
+                Engine::new(board.clone(), board.initial(), policy, STATES, 16).unwrap();
+            engine.arena.refuse_growth(true);
+            drive(&mut engine);
+            assert_eq!(
+                (engine.status(), engine.generated(), engine.discarded),
+                (Status::MemoryLimit, 3, 0)
+            );
+            assert!(engine.interrupted_f.is_some() && engine.best_moves().is_none());
         }
     }
 

@@ -11,7 +11,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    // parity.mjs imports web/src/transport.ts and bench-gate.mjs web/src/protocol.ts.
+    // parity.mjs imports web/src/transport.ts and web/src/protocol.ts, and bench-gate.mjs web/src/protocol.ts.
     "allowImportingTsExtensions": true
   },
   "include": ["*.mjs"]

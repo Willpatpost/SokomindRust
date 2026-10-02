@@ -1,6 +1,8 @@
 //! Incremental, platform-independent push A* for Sokomind boards. A search
-//! reserves its arena, queue, state table and flood buffers once, within the
-//! caller's state limit and memory budget, and never grows them.
+//! sizes its arena, queue, state table and flood buffers once, within the
+//! caller's state limit and memory budget. The queue and flood buffers are
+//! reserved up front; the arena and table grow as the search fills them,
+//! never past that size.
 //!
 //! A [`Search`] runs one of three [`Mode`]s over the same engine. It expands
 //! pushes rather than single steps, its costs count every move, the walks
@@ -76,12 +78,13 @@ use std::ops::RangeInclusive;
 /// queue entry and 8 to 16 bytes of index table, so no budget in
 /// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,788,993 states at
 /// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
-/// test `memory_binds_a_full_limit_at_every_budget`). A request at this
-/// limit therefore reserves nearly its whole memory budget up front, even on
-/// a small board, and a search that fills it ends with
-/// [`Status::MemoryLimit`], never [`Status::StateLimit`]. That eager
-/// reservation is accepted: a caller that wants a smaller footprint asks for
-/// fewer states or less memory.
+/// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
+/// request at this limit therefore ends with [`Status::MemoryLimit`], never
+/// [`Status::StateLimit`]. The queue is reserved for the whole scaled limit
+/// up front, 8 bytes per state, whose unused part a native process never
+/// touches but wasm32 commits as linear memory. Records and the table are
+/// allocated only as the search fills them, so one that ends early, as on a
+/// small board, allocates little of its budget beyond the queue.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
@@ -171,8 +174,9 @@ pub enum Status {
     Exhausted,
     /// The arena filled at the caller's `max_states`.
     StateLimit,
-    /// The arena filled at the smaller state limit that `memory_mib` allows;
-    /// see [`Search::new`].
+    /// The arena filled at the smaller state limit that `memory_mib` allows,
+    /// or the allocator refused its growth below that limit; see
+    /// [`Search::new`].
     MemoryLimit,
     /// Stopped by [`Search::stop`] with [`StopReason::TimeLimit`].
     TimeLimit,
@@ -388,10 +392,13 @@ enum Kind {
 impl Search {
     /// Checks `start` against `board` and the limits against
     /// [`MAX_STATES_RANGE`] and [`MEMORY_MIB_RANGE`], then builds the
-    /// distance tables and reserves every buffer the search will use: room
-    /// for `max_states` records, or for as many as `memory_mib` MiB holds
-    /// when that is fewer, in which case filling it ends the search with
-    /// [`Status::MemoryLimit`] instead of [`Status::StateLimit`].
+    /// distance tables and sizes the search's buffers: room for `max_states`
+    /// records, or for as many as `memory_mib` MiB holds when that is fewer,
+    /// in which case filling it ends the search with [`Status::MemoryLimit`]
+    /// instead of [`Status::StateLimit`]. The queue and the fixed buffers are
+    /// reserved now. Records and the state table grow as the search fills
+    /// them, never past that size, and a growth the allocator refuses also
+    /// ends the search with [`Status::MemoryLimit`], even below `max_states`.
     ///
     /// `start` may be any valid position on `board`, such as a live game's;
     /// equal-label boxes may come in any order. No state is expanded until
@@ -405,8 +412,8 @@ impl Search {
     /// - [`SearchError::Limits`] when either limit is outside its range.
     /// - [`SearchError::BudgetTooSmall`] when `memory_mib` cannot hold the
     ///   board's fixed buffers and one state.
-    /// - [`SearchError::Allocation`] when the allocator refuses a buffer the
-    ///   budget allows.
+    /// - [`SearchError::Allocation`] when the allocator refuses a buffer
+    ///   reserved up front, the arena's first chunk and first table included.
     pub fn new(
         board: Board,
         start: State,
@@ -493,8 +500,14 @@ impl Search {
     pub fn generated(&self) -> u32 {
         self.engine().generated()
     }
-    /// Bytes charged against the memory budget: the fixed buffers and the
-    /// whole arena, reserved when the search was built.
+    /// Bytes charged against the memory budget, fixed when the search was
+    /// built: the fixed buffers and the whole arena at its full state limit.
+    /// The arena grows toward this as the search fills it but never past it,
+    /// so it is a ceiling, not the bytes allocated so far. Its state table
+    /// has two sizes: at most 2^16 slots (256 KiB) at first, then the full
+    /// size. On wasm32 linear memory never shrinks, so a search that grows
+    /// its table can leave linear memory up to that freed first table,
+    /// 256 KiB, past this ceiling.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }
