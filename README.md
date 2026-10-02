@@ -179,7 +179,8 @@ beat, and starts over at `g + 3h` in the freed arena, generating up to about
 twice the state limit in the same memory. So the second phase never runs short
 of memory just because Fast used most of it, and the route never ends longer
 than it would have at that fill. Only a full arena restarts it, and at most
-once: a time limit that hits first ends Quality in whichever phase it is in.
+once: a route that alone fills the arena ends it there instead, and a time
+limit that hits first ends Quality in whichever phase it is in.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -194,16 +195,20 @@ either neighbor is a wall or frozen box or both are dead cells for its label.
 On every expanded state it covers the reference's fully blocked 2x2 wall/box
 squares and frozen-component fixpoints, and it only removes states from which
 no solution exists. Every mode also skips the children of an expanded state
-with a sealed corral: a region the robot cannot reach that holds a box off its
-goal or an empty goal, where every push of one of the region's boxes from a
-cell the robot reaches is dead under the same rule over the region's boxes
-alone (a region with more than six such pushes is not checked). Boxes outside
-the region count as floor, since they may still move, so no solution leaves
+with a sealed corral: an area the robot cannot reach that holds a box off its
+goal or an empty goal, where every push of one of the corral's boxes from a
+cell the robot reaches is dead under the same rule over the corral's boxes
+alone (a corral with more than six such pushes is not checked). Boxes outside
+the corral count as floor, since they may still move, so no solution leaves
 through such a state.
-The objective is total remaining moves, not pushes. These are baseline algorithms:
-the reference's advanced portfolio, PDB machinery and fuller corral search,
-generators, and route-repair strategies are not yet ported; Grand Hall
-performance parity is not claimed. Some techniques are rejected outright:
+The objective is total remaining moves, not pushes. Not ported from the
+reference: its advanced portfolio, its region pattern database with exit cap
+(the whole-board variant below was measured instead), its push-admissible
+restricted linear conflict and interaction boost (each would be a gated
+heuristic change), generators, and Quality route repair; Grand Hall
+performance parity is not claimed. The sealed-corral check covers the
+reference's corral deadlock check, at the same six-push cap. These were
+rejected, for soundness or by measurement:
 
 - PI-corral successor restriction and corral ordering: push-objective
   techniques that gave false proofs under the move objective in the sister

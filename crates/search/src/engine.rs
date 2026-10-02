@@ -1439,17 +1439,17 @@ mod tests {
     /// same order, since queue ties break by insertion order, which
     /// deleting records keeps. A push into E that reaches the freeze check
     /// counts one `pruned_deadlocks` instead of what the off run did with
-    /// that child. The freeze rule with its dead-pair case is
-    /// entry-complete in the admit chain. Its E holds the states with a box held off its goal,
-    /// a superset of what the rule without the case holds, and a held box
-    /// never moves: a wall or held box on its axis makes the push illegal,
-    /// and two dead neighbors make it land on a dead cell, which the
-    /// dead-cell check prunes first. If the held box's component after a
-    /// push from outside E did not contain the pushed box, none of its
-    /// boxes moved and they held it the same way before. The freeze check
-    /// takes the greatest fixpoint over the pushed box's whole component,
-    /// the same there as over the board, so it flags the push. A start with
-    /// a solution is outside any sound E, so the capped leg relies on every
+    /// that child. The freeze rule with its dead-pair case is entry-complete
+    /// in the admit chain. Its E holds the states with a box held off its
+    /// goal, a superset of what the rule without the case holds, and a held
+    /// box never moves: a wall or held box on its axis makes the push
+    /// illegal, and two dead neighbors make it land on a dead cell, which
+    /// the dead-cell check prunes first. If the held box's component after a
+    /// push from outside E did not contain the pushed box, none of its boxes
+    /// moved and they held it the same way before. The freeze check takes
+    /// the greatest fixpoint over the pushed box's whole component, the same
+    /// there as over the board, so it flags the push. A start with a
+    /// solution is outside any sound E, so the capped leg relies on every
     /// catalog board having one.
     ///
     /// The claims, and why they hold:

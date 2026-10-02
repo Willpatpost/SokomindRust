@@ -54,6 +54,12 @@ function items(path, block, item) {
   return [...text(path, block).matchAll(item)].map(match => match[1]);
 }
 
+/**
+ * The values of the number words the README spells limits with.
+ * @type {Record<string, number>}
+ */
+const WORDS = { two: 2, three: 3, six: 6, nine: 9 };
+
 test("nginx's client_max_body_size equals the server's BODY_LIMIT, so nginx passes every body the API accepts", () => {
   assert.equal(
     read('deploy/nginx.conf', /client_max_body_size (\d+)k;/),
@@ -647,6 +653,13 @@ test('decodeNativeReply handles exactly the names of Proof::kind', () => {
   );
 });
 
+test("corpus.mjs's diagnosticFields are SearchStats::FIELDS, in order", () => {
+  assert.deepEqual(
+    items('scripts/corpus.mjs', /export const diagnosticFields = \[([^\]]*)\];/, /'(\w+)'/g),
+    items('crates/search/src/lib.rs', /pub const FIELDS: \[&'static str; STAT_COUNT\] = \[([^\]]*)\];/, /"(\w+)"/g),
+  );
+});
+
 test("the #engine select offers solver-client.ts's ENGINES", () => {
   assert.deepEqual(
     items('web/index.html', /<select id="engine">([\s\S]*?)<\/select>/, /value="(\w+)"/g).toSorted(),
@@ -674,6 +687,13 @@ test("the README quotes heuristic.rs's REPAIR_CROSSOVER", () => {
   assert.equal(
     read('README.md', /for groups\s+of (\d+) or more/),
     read('crates/search/src/heuristic.rs', /const REPAIR_CROSSOVER: usize = (\d+);/),
+  );
+});
+
+test("the README quotes corral.rs's CAP on the pushes a sealed corral check tries", () => {
+  assert.equal(
+    WORDS[text('README.md', /corral with more than (\w+) such pushes/)],
+    read('crates/search/src/corral.rs', /const CAP: usize = (\d+);/),
   );
 });
 

@@ -48,8 +48,9 @@ export const catalog = JSON.parse(catalogText);
 // Windows checkouts hold CRLF working copies; hash normalized text so the
 // benchmark baseline is stable on every platform.
 export const catalogHash = createHash('sha256').update(catalogText.replace(/\r\n/g, '\n')).digest('hex');
-// sokomind_search::SearchStats::FIELDS, in order. parity.mjs catches drift: it
-// compares the WASM diagnostics with the native stats read in this order.
+// sokomind_search::SearchStats::FIELDS, in order (checked by mirrors.test.mjs).
+// parity.mjs compares the WASM diagnostics with the native stats read in this
+// order.
 export const diagnosticFields = [
   'unique_states',
   'duplicate_improvements',

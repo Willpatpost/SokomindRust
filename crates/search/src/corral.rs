@@ -211,10 +211,12 @@ impl Corral {
     /// either it is settled, and leaving it alone is no deadlock.
     fn goal_open(&self, board: &Board, boxes: &[Cell], reach: &Reach, members: u32) -> bool {
         bits(members).any(|j| !board.on_goal(j, boxes[j]))
-            || self.queue.iter().any(|&cell| {
-                let tile = board.tiles()[cell as usize];
-                tile != 0 && tile != WALL && !reach.blocked(cell)
-            })
+            // The flood queues no wall, since `Board::neighbors` lists none,
+            // so a tile other than plain floor, 0, is a goal.
+            || self
+                .queue
+                .iter()
+                .any(|&cell| board.tiles()[cell as usize] != 0 && !reach.blocked(cell))
     }
 }
 
