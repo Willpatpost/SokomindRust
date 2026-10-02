@@ -211,6 +211,11 @@ performance parity is not claimed. Some techniques are rejected outright:
 - Corral analysis that treats boxes outside the corral as permanent blockers,
   which reported a board solvable in 3 moves unsolvable (Sokomind2's audit,
   F-001).
+- Checking only the corrals of the boxes beside the robot after a push, or
+  each empty pocket's corral as well: both are sound, but the first skips the
+  costliest prunes, so for about 6% less time memory-bound runs generated up
+  to 3.6 times as many states and lost routes, a proof and lower bounds, and
+  the second was measured slower for little extra pruning.
 - Tunnel macros, forced-push macros and the goal-commitment skip: the
   reference measured tunnel macros slower and ships them off, and none of the
   three prunes anything or tightens a bound under push A* with an exact
