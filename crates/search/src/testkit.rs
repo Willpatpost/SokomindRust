@@ -1,9 +1,10 @@
 //! Test-only helpers shared by the unit tests: the catalog, a seeded random
-//! source and the rooms it generates, and two exhaustive oracles: the exact
-//! remaining moves from every primitive state of a small board, and whether
-//! each canonical state of one has a solution.
+//! source and the rooms it generates, floor component floods and the stage
+//! probe's box groups, and two exhaustive oracles: the exact remaining moves
+//! from every primitive state of a small board, and whether each canonical
+//! state of one has a solution.
 use crate::push::canonicalize;
-use sokomind_core::{Board, Cell, MAX_BOXES, State, Step};
+use sokomind_core::{Board, Cell, MAX_BOXES, State, Step, WALL};
 use std::{
     collections::{HashMap, VecDeque},
     sync::LazyLock,
@@ -101,6 +102,65 @@ pub(crate) fn random_room(rng: &mut Lcg) -> String {
     }
     rows.push("OOOOOO".to_string());
     rows.join("\n")
+}
+
+/// Floor component ids by plain breadth-first search over the tiles,
+/// apart from the board's neighbor table, numbered in scan order as the
+/// stage probe numbers them: `usize::MAX` for walls and the `removed` cell.
+pub(crate) fn components(board: &Board, removed: Option<usize>) -> Vec<usize> {
+    let tiles = board.tiles();
+    let mut component = vec![usize::MAX; tiles.len()];
+    let mut count = 0;
+    let mut queue = VecDeque::new();
+    for start in 0..tiles.len() {
+        let open = tiles[start] != WALL && Some(start) != removed;
+        if !open || component[start] != usize::MAX {
+            continue;
+        }
+        component[start] = count;
+        queue.push_back(start);
+        while let Some(cell) = queue.pop_front() {
+            for next in adjacent(board, cell).into_iter().flatten() {
+                if Some(next) != removed && component[next] == usize::MAX {
+                    component[next] = count;
+                    queue.push_back(next);
+                }
+            }
+        }
+        count += 1;
+    }
+    component
+}
+
+/// The floor cells next to `cell` in `U D L R` order, by index
+/// arithmetic: a cell on the board's edge has no neighbor past it.
+pub(crate) fn adjacent(board: &Board, cell: usize) -> [Option<usize>; 4] {
+    let (tiles, width) = (board.tiles(), board.width());
+    let x = cell % width;
+    let steps = [
+        cell.checked_sub(width),
+        Some(cell + width),
+        x.checked_sub(1).map(|_| cell - 1),
+        (x + 1 < width).then_some(cell + 1),
+    ];
+    let floor = |&next: &usize| next < tiles.len() && tiles[next] != WALL;
+    steps.map(|next| next.filter(floor))
+}
+
+/// The stage probe's group of each box slot, one per run of equal labels,
+/// and of each cell's goal, `usize::MAX` off goals.
+pub(crate) fn probe_groups(board: &Board) -> (Vec<usize>, Vec<usize>) {
+    let labels = board.labels();
+    let mut group = vec![0; labels.len()];
+    for i in 1..labels.len() {
+        group[i] = group[i - 1] + usize::from(labels[i] != labels[i - 1]);
+    }
+    let mut goal_group = vec![usize::MAX; board.tiles().len()];
+    for &(goal, label) in board.goals() {
+        let i = labels.iter().position(|&l| l == label).unwrap();
+        goal_group[usize::from(goal)] = group[i];
+    }
+    (group, goal_group)
 }
 
 /// Every primitive state reachable from the start, without expanding solved

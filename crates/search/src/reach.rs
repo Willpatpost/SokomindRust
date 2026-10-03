@@ -1,6 +1,11 @@
 //! Keeper reachability by breadth-first flood. Each fill bumps an epoch
 //! instead of clearing its buffers, so it costs only the cells it visits;
 //! the engine reads distances, blocked cells and walks from the last fill.
+//! The `blocks` submodule answers what a flood per blocked cell would:
+//! which floor cells stay connected once one cell is blocked.
+mod blocks;
+
+pub(crate) use blocks::Blocks;
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
 use std::mem::size_of;
 
@@ -91,6 +96,12 @@ impl Reach {
     /// never queued.
     pub(crate) fn reached(&self) -> usize {
         self.queue.len()
+    }
+    /// The cells the last fill reached, in discovery order from the
+    /// player's: the flood's queue, which holds each reached cell once and
+    /// no blocked cell.
+    pub(crate) fn reached_cells(&self) -> &[Cell] {
+        &self.queue
     }
     /// Appends a shortest walk from the player to `cell`, which the last
     /// fill reached, as direction indices from its last step back to its
