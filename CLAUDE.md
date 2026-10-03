@@ -16,9 +16,9 @@ The UI exists to expose and exercise the solver, but UI/UX refinement is not cur
 
 ---
 
-# The seven engineering priorities
+# The nine engineering priorities
 
-Every meaningful change should be evaluated against these seven traits.
+Every meaningful change should be evaluated against these nine traits.
 
 They are not superficial style preferences. They are core project goals.
 
@@ -82,7 +82,47 @@ Large files or subsystems are acceptable when cohesion and performance justify t
 
 ---
 
-## 3. Scalability
+## 3. Modularity
+
+Each part of the solver should be replaceable, measurable, and testable on its own.
+
+Maintainability names the boundaries. Modularity is how they are built and kept: which way dependencies point, how narrow each interface is, and what enforces both.
+
+Dependencies point one way, as described under Architectural direction. The same rule holds inside `search`. Reachability, the heuristic, deadlock and corral detection, and the arena do not depend on the engine that composes them, except in tests, and their imports of one another form no cycle. Shared public types, such as statuses, errors, statistics, limits, and proofs, are exported from the crate root for any module to use.
+
+Transports adapt; they do not decide. The WASM bindings, the server, and the web worker pass a mode and limits, capping the limits where they must, then drive the search and encode or decode its results. They never choose weights or phases, and never derive a bound or a proof.
+
+Place new code where its concept is owned:
+
+- heuristics, prunes, and tables in the `search` module that owns the concept, or in a new one;
+- mode differences in policy data, mapped from the mode once in the public search type, and proof logic only in the exact search;
+- each shared wire name once in the crate that owns its concept, such as statuses, modes, proof kinds, and counters in `search`, and each encoding in the transport or tool that emits it, so the `search` library needs no serialization.
+
+Let the compiler enforce the seams.
+
+Prefer:
+
+- private modules behind a small public facade, with the narrowest visibility that works;
+- types that make a forbidden call impossible, such as a public search type that hides its engine;
+- exhaustive matches and destructuring, so a new variant or counter breaks the build at every site that matches or destructures it;
+- a test or const assert for each hand-written list the compiler cannot check, such as an array of every mode, that fails when the list misses an entry;
+- doctests that must fail to compile, pinning what callers must never write.
+
+The compiler does not see copies outside Rust, such as those in `web`, the scripts, the docs, the migrations, and the deployment files. A clean build still needs the checks under Changes across mirrored layers and Native/WASM parity.
+
+Replaceable does not mean **dynamic**. Search composes concrete types and constant policy data. Add a trait, generic parameter, or `dyn` object at a component boundary only when a second real implementation exists and the seam's hot-path cost is measured.
+
+Tightly coupled structures, such as the node store, queue, and state table, may share one type or allocation when cohesion and performance justify it, as Maintainability allows. Keep each part's operations distinct, so one can change without rewriting the others.
+
+Avoid:
+
+- a dependency against the one-way direction, between crates, from a component to the engine, or in a cycle between components;
+- a component that reaches into a sibling's fields or layout when a narrow accessor would do;
+- a test or measurement switch stored in policy data, a public type, or a wire format.
+
+---
+
+## 4. Scalability
 
 Design for puzzles substantially larger and more difficult than the easy catalog cases.
 
@@ -109,7 +149,44 @@ Do not introduce an optimization whose hidden complexity becomes pathological on
 
 ---
 
-## 4. Efficiency
+## 5. Lightweight
+
+Keep the whole system small. That includes what it depends on, what it ships, what it reserves up front, and what it takes to build, run, and deploy.
+
+Efficiency is about the work a search performs. Lightweight is about the weight the system carries regardless of the search: the cost paid before the first state is expanded, and the cost every user, build, and deployment pays whether or not a feature is used.
+
+Pay attention to:
+
+- third-party dependencies (crates and npm packages), including their transitive trees;
+- WASM module size and web bundle size;
+- native binary and container image size;
+- startup and initialization cost;
+- memory reserved before or independently of search (tables, arenas, buffers);
+- per-solve setup cost on small boards;
+- build time and toolchain requirements;
+- services and moving parts required to run or deploy.
+
+Prefer:
+
+- the standard library or a small local implementation over a large dependency when the needed functionality is narrow;
+- dependencies with small transitive trees, with only the features actually used;
+- lazy allocation and precomputation sized to the board and the requested limits;
+- small boards that cost little: memory and setup time should scale with the puzzle, not with the maximum limit;
+- removing features, flags, tooling, and services that no longer earn their keep.
+
+A dependency or subsystem must justify its weight. Before adding one, ask:
+
+- What does it replace?
+- What does it add to the WASM bundle, binary, image, build time, and audit surface?
+- Would a small, well-tested local implementation do?
+
+Lightweight does not mean reinventing well-solved, security-sensitive, or correctness-critical machinery. A mature dependency is often lighter overall than an unproven local replacement. Weigh the full cost.
+
+When a change affects footprint, record it the same way as performance. Note WASM and bundle size, reserved and fixed memory, and dependency changes.
+
+---
+
+## 6. Efficiency
 
 Treat unnecessary work, allocation, copying, hashing, scanning, and memory movement as things to eliminate.
 
@@ -154,7 +231,7 @@ Measure both.
 
 ---
 
-## 5. Speed
+## 7. Speed
 
 Search speed and development-time execution speed both matter.
 
@@ -198,7 +275,7 @@ The repository already contains tooling intended to avoid redundant work. Preser
 
 ---
 
-## 6. Documentation
+## 8. Documentation
 
 Documentation is part of the implementation.
 
@@ -244,7 +321,7 @@ Rejected optimizations with meaningful experimental results are worth documentin
 
 ---
 
-## 7. Optimality of implementation
+## 9. Optimality of implementation
 
 Outside the specific meaning of the solver's `Optimal` mode, "optimality" in this document means:
 
@@ -1035,10 +1112,20 @@ Before accepting a meaningful solver change, be able to answer:
 - Does it improve allocation behavior or locality?
 - What is its fixed and per-state memory cost?
 
+### Lightweight
+- Does it add dependencies, and are they worth their transitive weight?
+- What does it do to WASM, bundle, and binary size?
+- Does it reserve memory or do setup work that small boards do not need?
+
 ### Maintainability
 - Is there now one clear implementation?
 - Are the invariants understandable?
 - Is the complexity localized?
+
+### Modularity
+- Do dependencies still point one way, with none of the parts the engine composes depending on it?
+- Does the change live in the modules that own its concepts, with each new item as private as it can be?
+- Can the component be tested and measured on its own, and its internals changed without editing its callers?
 
 ### Scalability
 - What happens on large boards and high state counts?
@@ -1066,8 +1153,10 @@ It should normally be:
 - documented where non-obvious;
 - benchmarked when performance-sensitive;
 - checked for memory impact;
+- checked for footprint impact (dependencies, WASM size) when it adds or removes code paths;
 - checked against Fast, Quality, and Optimal as relevant;
 - checked for native/WASM implications;
+- placed in the modules that own its concepts, with dependencies still pointing one way;
 - free of abandoned implementation paths;
 - reflected accurately in project documentation.
 
@@ -1077,7 +1166,7 @@ The final result should leave the solver not only more capable, but also easier 
 
 # Guiding principle
 
-When choosing between two correct designs, prefer the one that does less work, uses less unnecessary memory, exposes clearer invariants, scales better, and is easier to verify.
+When choosing between two correct designs, prefer the one that does less work, carries less weight, uses less unnecessary memory, exposes clearer invariants, scales better, and is easier to verify.
 
 When those goals conflict, measure the tradeoff.
 
