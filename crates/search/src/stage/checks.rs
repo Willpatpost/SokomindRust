@@ -237,10 +237,8 @@ pub(super) fn first_reject(
 mod tests {
     use super::{Check, Facts, Pockets, Tools, Verdict, first_reject, root_lanes, run};
     use crate::{
-        stage::reference::{
-            FAR, Geo, Owned, ROUTES, at, huge, macro_ends, random_state, route_pushes,
-        },
-        testkit::{Lcg, catalog},
+        stage::reference::{FAR, Geo, Owned, ROUTES, at, macro_ends, random_state, route_pushes},
+        testkit::{Lcg, catalog, huge},
     };
     use sokomind_core::{Cell, NONE, OPPOSITE, State, WALL};
 

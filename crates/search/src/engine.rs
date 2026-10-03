@@ -685,6 +685,34 @@ impl Engine {
         );
         self.prunes = prunes;
     }
+
+    /// Runs the stage ladder from the start of this fresh engine until it
+    /// solves, records its route as the incumbent and returns its tally.
+    /// Panics when the ladder gives up. Temporary: step 9 of the stage port
+    /// plan wires the ladder into the search and replaces this driver.
+    fn run_stage_ladder(&mut self, work: u32) -> crate::stage::Tally {
+        use crate::stage::{Done, Ladder};
+        let ladder = Ladder::new(
+            &self.board,
+            &self.heuristic,
+            &self.start,
+            work,
+            self.policy.weight,
+            self.policy.reopen_closed,
+        );
+        let mut ladder = ladder.expect("the ladder's buffers");
+        ladder.begin(&mut self.parts());
+        let id = loop {
+            match ladder.step(&mut self.parts()) {
+                Some(Done::Solved(id)) => break id,
+                Some(Done::GaveUp) => panic!("the stage ladder gave up"),
+                None => {}
+            }
+        };
+        self.incumbent = Some(id);
+        self.discarded += ladder.take_dropped();
+        ladder.tally()
+    }
 }
 
 #[cfg(test)]
@@ -695,7 +723,8 @@ mod tests {
         exact::ExactSearch,
         heuristic::Heuristic,
         push::Prunes,
-        testkit::{Lcg, catalog, explored_catalog, random_room},
+        stage::{self, Tally},
+        testkit::{Lcg, catalog, explored_catalog, huge, random_room},
     };
     use sokomind_core::{Board, Game};
 
@@ -1365,5 +1394,68 @@ mod tests {
             assert_eq!(on.route, off.route, "exact {exact}");
             compare(&format!("exact {exact}"), &off, &on);
         }
+    }
+
+    /// Runs the stage ladder on huge with `limit` states and `work` inserts,
+    /// replays its route, which must be the probe's 812 moves of 268 pushes,
+    /// and returns its tally. The checks budget must not have ended it.
+    fn stage_ladder_on_huge(limit: usize, work: u32) -> Tally {
+        let board = huge();
+        let mut engine =
+            Engine::new(board.clone(), board.initial(), Policy::FAST, limit, 64).unwrap();
+        let tally = engine.run_stage_ladder(work);
+        let route = engine.solution().unwrap().expect("a staged route");
+        let mut game = Game::new(board);
+        game.replay(&route).unwrap();
+        assert!(game.solved());
+        assert_eq!((game.moves(), game.pushes()), (812, 268));
+        assert!(!tally.checks_bound);
+        println!("checks {} for work {}", tally.checks, tally.work);
+        tally
+    }
+
+    /// The ladder at the probe's 64 MiB settings matches probe-46758.
+    #[test]
+    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
+    fn stage_ladder_routes_huge_at_64_mib() {
+        let Tally {
+            work,
+            commits,
+            failures,
+            backtracks,
+            deepest,
+            accepts,
+            rejects,
+            checks: _,
+            checks_bound: _,
+        } = stage_ladder_on_huge(60_000_000, 1 << 20);
+        assert_eq!(
+            (work, commits, failures, backtracks, deepest, accepts),
+            (617_192, 26, 10, 3, 22, 21_940)
+        );
+        assert_eq!(rejects, [187, 17_530, 0, 1_706, 2_487, 4]);
+    }
+
+    /// The ladder at the gate's limit of 20,000 states matches probe-46758.
+    #[test]
+    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
+    fn stage_ladder_routes_huge_at_the_gate() {
+        let Tally {
+            work,
+            commits,
+            failures,
+            backtracks,
+            deepest,
+            accepts,
+            rejects,
+            checks: _,
+            checks_bound: _,
+        } = stage_ladder_on_huge(20_000, stage::work(20_000));
+        println!("deepest {deepest}");
+        assert_eq!(
+            (work, commits, failures, backtracks, accepts),
+            (192_499, 26, 10, 3, 7_766)
+        );
+        assert_eq!(rejects, [187, 5_956, 0, 1_593, 0, 4]);
     }
 }

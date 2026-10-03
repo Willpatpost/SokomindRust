@@ -34,11 +34,19 @@ const _: () = assert!((MAX_ROUTE as u64) < Key::F_SAT && Key::F_SAT < G_SAT as u
 /// first push.
 pub(crate) const MAX_QUEUED_H: u32 = ((MAX_BOXES + 1) * MAX_CELLS) as u32;
 
+/// Budget bytes for the longest route and its letter string, `MAX_ROUTE`
+/// bytes each, which `solution` allocates on demand. Part of
+/// [`FIXED_SCRATCH`], and the most the stage ladder (stage.rs) may hold.
+pub(crate) const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
+
 /// Budget bytes charged to every search whatever the board: room for the
 /// longest route and its letter string, which `solution` allocates on
 /// demand, `MAX_ROUTE` bytes each, plus a 64 KiB allowance for the
-/// fixed-size scratch buffers.
-const FIXED_SCRATCH: usize = 2 * MAX_ROUTE + 64 * 1024;
+/// fixed-size scratch buffers. The stage ladder (stage.rs) reuses the route
+/// allowance: it exists only while the search has no route and is freed
+/// before one is recorded, and `Ladder::bytes_for(MAX_CELLS)` is asserted
+/// to fit.
+const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
 
 /// Log2 of the records in a full [`Chunk`]. Unit tests use four-record
 /// chunks, so that small searches cross many chunk boundaries.
@@ -691,6 +699,12 @@ impl Arena {
     /// `None`, with nothing changed, when the path would leave no room below
     /// the limit for one more record, the start a fresh search needs, or is
     /// longer than the table that serves as scratch.
+    ///
+    /// Afterwards the kept path's records are detached from the table, so a
+    /// caller may insert a live copy of a kept state: [`Arena::find`] on it
+    /// returns no previous record. The stage ladder's reseed (stage/ladder.rs)
+    /// relies on that. Costs `O(table slots)`, for the table's refill with
+    /// [`NIL`], plus the path's length.
     pub(crate) fn clear_keeping(&mut self, id: u32) -> Option<u32> {
         // Count the path first, so a refusal changes nothing. A parent is
         // always older than its child, since records are only ever appended.

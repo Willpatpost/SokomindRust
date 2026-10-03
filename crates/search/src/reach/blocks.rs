@@ -73,9 +73,13 @@ pub(crate) struct Blocks {
 
 impl Blocks {
     /// Heap bytes `build` reserves for a board of `cells` cells.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const fn bytes_for(cells: usize) -> usize {
         cells * size_of::<Vertex>()
+    }
+    /// Heap bytes this build holds, which tests compare with [`Self::bytes_for`].
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.vertices.capacity() * size_of::<Vertex>()
     }
     /// Searches every floor component, the keeper's at `player` first. The
     /// records are the only allocation, reserved once at their final size;
@@ -313,8 +317,7 @@ mod tests {
             let (tiles, player) = (board.tiles(), board.initial().player);
             let built = Blocks::build(board, player, &mut stack, &mut low, &mut next);
             let blocks = built.unwrap();
-            let bytes = blocks.vertices.capacity() * size_of::<Vertex>();
-            assert_eq!(bytes, Blocks::bytes_for(tiles.len()), "{id}");
+            assert_eq!(blocks.heap_bytes(), Blocks::bytes_for(tiles.len()), "{id}");
             let tin = |c: usize| blocks.span(c as Cell).start;
             let floor: Vec<usize> = (0..tiles.len()).filter(|&c| tiles[c] != WALL).collect();
             let mut tins: Vec<u16> = floor.iter().map(|&c| tin(c)).collect();

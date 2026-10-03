@@ -1,10 +1,10 @@
-//! The Stage Ladder's parts, ported from the P4b stage probe
-//! (slurm/probes/p4b.rs, not tracked): the rooms and levels that define a
-//! rise, the accept checks a rise must pass, the ranked candidate moves of
-//! a frame root, and the boxes a stage may move. This is step 7 of
-//! slurm/reports/stage-port-plan.md (not tracked). The ladder that drives
-//! these parts comes in step 8. Until step 9 wires it into the engine, only
-//! tests reach this module.
+//! The Stage Ladder, ported from the P4b stage probe (slurm/probes/p4b.rs,
+//! not tracked): the rooms and levels that define a rise, the accept checks
+//! a rise must pass, the ranked candidate moves of a frame root, the boxes
+//! a stage may move, and the ladder that drives them. Steps 7 and 8 of
+//! slurm/reports/stage-port-plan.md (not tracked) landed the parts and the
+//! ladder. Until step 9 wires the ladder into the engine, only tests reach
+//! this module.
 //!
 //! Accept is a heuristic filter, not a necessary condition. Sink, Matched
 //! and the pocket check only reject states with no solution, as the module
@@ -27,6 +27,8 @@
 //! - `checks`: the accept checks, one unit each.
 //! - `rank`: a frame root's candidate moves, ranked and filtered.
 //! - `movers`: the boxes a stage may move and the cells its plan needs.
+//! - `ladder`: the frames, stages and backjumps that run the units above
+//!   inside the search's arena.
 //!
 //! Three structs carry what the units share:
 //! - [`Tools`] borrows the search components the units run on.
@@ -38,11 +40,15 @@
 //! They are read from Deadlock's occupancy, which each unit first refreshes
 //! to the state it checks.
 mod checks;
+mod ladder;
 mod movers;
 mod rank;
 #[cfg(test)]
 mod reference;
 mod rooms;
+
+#[cfg(test)]
+pub(crate) use ladder::{Done, Ladder, Tally};
 
 use crate::{
     corral::{Corral, Pockets},
@@ -67,6 +73,18 @@ const FRAMES: usize = 2 * MAX_BOXES + 1;
 const MAX_CANDIDATES: usize = 3 * MAX_BOXES;
 // A room's sort key packs its gate cell into 12 bits (see `rooms`).
 const _: () = assert!(MAX_CELLS <= 1 << 12);
+
+/// The fewest states a search's limit allows for the ladder to run. Below
+/// it the ladder declines, so a small limit keeps the plain search's
+/// behavior; at it the work is [`work`]`(MIN_STATES)`, 131,072 inserts.
+pub(crate) const MIN_STATES: usize = 4096;
+
+/// The ladder's work budget, the inserts it may make, for a search limited
+/// to `node_limit` states: 32 per state, at most `2^20`. The product
+/// saturates, so no limit overflows it, and the cap makes the cast exact.
+pub(crate) fn work(node_limit: usize) -> u32 {
+    node_limit.saturating_mul(32).min(1 << 20) as u32
+}
 
 /// A candidate move of a frame root: push the box in `slot` along one
 /// shortest path to `target`. Ranking sorts by (cost, kind, the box's cell,
@@ -120,9 +138,14 @@ struct Facts {
 }
 
 impl Facts {
-    /// Builds every fact from `board.initial()`. The builds borrow their
-    /// scratch from `scratch`, whose regions the units use only after the
-    /// builds end:
+    /// Builds every fact. Blocks, and GoalReach from it, take the floor
+    /// component of `player`, the keeper's cell in any state the search
+    /// reaches. The keeper's floor component is fixed under play: walls
+    /// never move and a push leaves the keeper on the box's old cell, a
+    /// floor neighbor of its own. So every search state gives the same
+    /// Blocks. The rooms come from `board.initial()`, as in the probe. The
+    /// builds borrow their scratch from `scratch`, whose regions the units
+    /// use only after the builds end:
     /// - Blocks: its DFS stack and low-links from the pool, and its
     ///   direction cursors from `via`.
     /// - GoalReach: its queue from the pool.
@@ -132,10 +155,10 @@ impl Facts {
     fn build(
         board: &Board,
         heuristic: &Heuristic,
+        player: Cell,
         scratch: &mut Scratch,
     ) -> Result<Self, TryReserveError> {
         let cells = board.tiles().len();
-        let player = board.initial().player;
         let (stack, low) = scratch.pool.split_at_mut(cells);
         let blocks = Blocks::build(board, player, stack, low, &mut scratch.via)?;
         let queue = &mut scratch.pool[..2 * cells];
@@ -207,7 +230,7 @@ fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, TryReserveError> {
 }
 
 /// The number of `u32` words a bitset over `cells` cells takes.
-fn words(cells: usize) -> usize {
+const fn words(cells: usize) -> usize {
     cells.div_ceil(32)
 }
 
@@ -244,4 +267,17 @@ fn split(pool: &mut [u16], cells: usize) -> (&mut [u16], &mut [u16], &mut [u16],
 /// refresh of `deadlock`.
 fn settled(board: &Board, deadlock: &Deadlock, c: Cell) -> bool {
     deadlock.at(c).is_some_and(|i| board.on_goal(i, c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MIN_STATES, work};
+
+    #[test]
+    fn work_scales_then_caps() {
+        assert_eq!(work(MIN_STATES), 131_072);
+        assert_eq!(work(60_000_000), 1 << 20);
+        assert_eq!(work(usize::MAX), 1 << 20);
+        assert_eq!(work(0), 0);
+    }
 }

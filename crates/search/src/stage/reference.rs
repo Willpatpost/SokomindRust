@@ -278,14 +278,6 @@ impl<'a> Geo<'a> {
     }
 }
 
-/// The catalog's huge board.
-pub(super) fn huge() -> Board {
-    testkit::catalog()
-        .into_iter()
-        .find_map(|(id, board)| (id == "huge").then_some(board))
-        .expect("the catalog has huge")
-}
-
 /// The cell in row `r` and column `c` of `board`.
 pub(super) fn at(board: &Board, r: usize, c: usize) -> Cell {
     (r * board.width() + c) as Cell
@@ -402,7 +394,8 @@ impl Owned {
         let cells = board.tiles().len();
         let heuristic = Heuristic::new(board);
         let mut scratch = Scratch::new(cells).expect("stage scratch");
-        let facts = Facts::build(board, &heuristic, &mut scratch).expect("stage facts");
+        let player = board.initial().player;
+        let facts = Facts::build(board, &heuristic, player, &mut scratch).expect("stage facts");
         Self {
             heuristic,
             reach: Reach::new(cells),

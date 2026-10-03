@@ -235,8 +235,12 @@ pub(crate) struct Pockets {
 
 impl Pockets {
     /// Heap bytes `new` reserves: the FIFO and the table, 12,288 bytes.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const BYTES: usize = POCKET_NODES * size_of::<Entry>() + TABLE * size_of::<u16>();
+    /// Heap bytes these buffers hold, which tests compare with [`Self::BYTES`].
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.fifo.capacity() * size_of::<Entry>() + self.table.capacity() * size_of::<u16>()
+    }
     /// The FIFO and the table, reserved once at their final sizes, whatever
     /// the board.
     pub(crate) fn new() -> Result<Self, TryReserveError> {
@@ -625,7 +629,7 @@ impl Corral {
 
 #[cfg(test)]
 mod tests {
-    use super::{Corral, Entry, POCKET_BOXES, POCKET_NODES, PocketStep, Pockets, bits, pushes};
+    use super::{Corral, POCKET_BOXES, POCKET_NODES, PocketStep, Pockets, bits, pushes};
     use crate::{
         Status,
         deadlock::{ALL_BOXES, Deadlock, frozen_off_goal},
@@ -1273,9 +1277,7 @@ mod tests {
     #[test]
     fn pockets_bytes_match_capacity() {
         let pockets = Pockets::new().unwrap();
-        let reserved = pockets.fifo.capacity() * size_of::<Entry>()
-            + pockets.table.capacity() * size_of::<u16>();
-        assert_eq!(reserved, Pockets::BYTES);
+        assert_eq!(pockets.heap_bytes(), Pockets::BYTES);
         assert_eq!(Pockets::BYTES, 12_288);
     }
 }

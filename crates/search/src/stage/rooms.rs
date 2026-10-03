@@ -17,7 +17,7 @@
 //! from Blocks' DFS spans, so no cell is flooded.
 use crate::{heuristic::Heuristic, reach::Blocks};
 use sokomind_core::{Board, Cell, MAX_CELLS, State, WALL};
-use std::{collections::TryReserveError, ops::Range};
+use std::{collections::TryReserveError, mem::size_of, ops::Range};
 
 /// The fewest cells a candidate side has, its gate not counted.
 const MIN_SIZE: usize = 4;
@@ -39,6 +39,18 @@ pub(super) struct Rooms {
 }
 
 impl Rooms {
+    /// Heap bytes `build` reserves on a board of `cells` cells: a room per
+    /// cell and a surplus mask per possible room.
+    pub(super) const fn bytes_for(cells: usize) -> usize {
+        // A u8 widens to usize; `usize::from` is not const.
+        cells + MAX_ROOMS as usize * size_of::<u32>()
+    }
+    /// Heap bytes these vectors hold, which tests compare with
+    /// [`Self::bytes_for`].
+    #[cfg(test)]
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.room_of.capacity() + self.surplus.capacity() * size_of::<u32>()
+    }
     /// Finds the rooms of `board.initial()`. Each candidate side gets the
     /// sort key `((MAX_CELLS - size) << 14) | (gate << 2) | label`. A cell
     /// has as many sides as blocks it lies in, so the keys number below
@@ -56,8 +68,8 @@ impl Rooms {
     ///   time's component root.
     /// - `taken`: at least `cells + 1` entries.
     ///
-    /// The two vectors are the only allocations. Each is reserved once, at
-    /// a size that never grows.
+    /// The two vectors are the only allocations, [`Self::bytes_for`] bytes
+    /// in all. Each is reserved once, at a size that never grows.
     pub(super) fn build(
         board: &Board,
         heuristic: &Heuristic,
@@ -146,7 +158,11 @@ impl Rooms {
                 taken[t + 1] = taken[t] + u16::from(room_of[usize::from(order[t])] != 0);
             }
         }
-        let mut surplus = super::filled(usize::from(rooms), 0u32)?;
+        // Reserved at the most rooms a board has, so the bytes do not depend
+        // on the board (see `bytes_for`).
+        let mut surplus = Vec::new();
+        surplus.try_reserve_exact(usize::from(MAX_ROOMS))?;
+        surplus.resize(usize::from(rooms), 0u32);
         let goal_cells = heuristic.goal_cells();
         let mut i = 0;
         while i < boxes.len() {

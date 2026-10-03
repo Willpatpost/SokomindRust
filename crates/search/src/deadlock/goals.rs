@@ -82,9 +82,15 @@ pub(crate) struct GoalReach {
 
 impl GoalReach {
     /// Heap bytes `build` reserves for a board of `cells` cells.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const fn bytes_for(cells: usize) -> usize {
         cells * size_of::<u16>() + 2 * cells * size_of::<u32>() + cells * size_of::<u8>()
+    }
+    /// Heap bytes this table holds, which tests compare with [`Self::bytes_for`].
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.base.capacity() * size_of::<u16>()
+            + self.masks.capacity() * size_of::<u32>()
+            + self.goal_of.capacity() * size_of::<u8>()
     }
     /// Numbers the states of the keeper's component from `blocks`, then
     /// searches back from each goal in it. Goal columns are `heuristic`'s.
@@ -264,9 +270,13 @@ pub(crate) struct SinkLines {
 impl SinkLines {
     /// Heap bytes `build` reserves for a board of `cells` cells: at most a
     /// head per cell and one bit per cell.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const fn bytes_for(cells: usize) -> usize {
         cells * size_of::<u16>() + cells.div_ceil(32) * size_of::<u32>()
+    }
+    /// Heap bytes these lines hold, which tests compare with [`Self::bytes_for`].
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.heads.capacity() * size_of::<u16>() + self.covered.capacity() * size_of::<u32>()
     }
     /// Finds every line, rows then columns, in one pass over the cells per
     /// axis: a line starts at a cell with a wall behind it and floor ahead,
@@ -350,7 +360,6 @@ mod tests {
     use crate::reach::Blocks;
     use crate::testkit::{Lcg, catalog, components, probe_groups, random_room};
     use sokomind_core::{Board, Cell, MAX_CELLS, NONE, OPPOSITE, State, WALL};
-    use std::mem::size_of;
 
     /// The keeper's row holds the `A` box, a `b` goal and the `a` goal.
     /// Below a wall row, where the keeper never goes, lie both `B` boxes
@@ -586,10 +595,11 @@ mod tests {
         for (id, board) in boards(&mut rng) {
             let heuristic = Heuristic::new(&board);
             let (blocks, table) = build(&board, &heuristic);
-            let bytes = table.base.capacity() * size_of::<u16>()
-                + table.masks.capacity() * size_of::<u32>()
-                + table.goal_of.capacity() * size_of::<u8>();
-            assert_eq!(bytes, GoalReach::bytes_for(board.tiles().len()), "{id}");
+            assert_eq!(
+                table.heap_bytes(),
+                GoalReach::bytes_for(board.tiles().len()),
+                "{id}"
+            );
             let probe = Probe::new(&board, &heuristic);
             let player = board.initial().player;
             let floor = floor_cells(&board);
@@ -669,9 +679,11 @@ mod tests {
             let lines = probe_lines(&board);
             let (group, goal_group) = probe_groups(&board);
             let sink = SinkLines::build(&board).unwrap();
-            let bytes = sink.heads.capacity() * size_of::<u16>()
-                + sink.covered.capacity() * size_of::<u32>();
-            assert_eq!(bytes, SinkLines::bytes_for(board.tiles().len()), "{id}");
+            assert_eq!(
+                sink.heap_bytes(),
+                SinkLines::bytes_for(board.tiles().len()),
+                "{id}"
+            );
             assert_eq!(sink.heads.len(), lines.len(), "{id}");
             let line_cells: Vec<Cell> = lines.concat();
             for c in 0..board.tiles().len() as Cell {

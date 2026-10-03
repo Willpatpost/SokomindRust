@@ -59,6 +59,14 @@ pub(crate) fn catalog() -> Vec<(String, Board)> {
         .collect()
 }
 
+/// The catalog's huge board.
+pub(crate) fn huge() -> Board {
+    catalog()
+        .into_iter()
+        .find_map(|(id, board)| (id == "huge").then_some(board))
+        .expect("the catalog has huge")
+}
+
 /// The catalog boards that fit under `CAP`, explored once per test binary.
 pub(crate) fn explored_catalog() -> &'static [Explored] {
     &EXPLORED
