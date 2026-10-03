@@ -34,6 +34,8 @@ pub(crate) struct Heuristic {
     /// distance from `cell` to goal column `goal`, `NONE` when unreachable.
     distances: Vec<u16>,
     goals: usize,
+    /// Each goal column's cell, `NONE` past the last column.
+    goal_cells: [Cell; MAX_BOXES],
     /// Boxes are grouped by label into contiguous index ranges.
     groups: Vec<Group>,
     /// The index into `groups` of each box's label group.
@@ -158,6 +160,10 @@ impl Heuristic {
         let mut columns = board.goals().to_vec();
         columns.sort_by_key(|&(_, label)| label);
         let goals = columns.len();
+        let mut goal_cells = [NONE; MAX_BOXES];
+        for (slot, &(cell, _)) in goal_cells.iter_mut().zip(&columns) {
+            *slot = cell;
+        }
         let distances = push_distances(board, &columns);
         let dead = (0..board.tiles().len())
             .map(|cell| {
@@ -174,6 +180,7 @@ impl Heuristic {
         Self {
             distances,
             goals,
+            goal_cells,
             groups,
             group_of,
             dead,
@@ -192,6 +199,13 @@ impl Heuristic {
     /// [`canonicalize`](crate::push::canonicalize) sorts.
     pub(crate) fn group(&self, i: usize) -> Range<usize> {
         self.groups[self.group_of[i] as usize].range()
+    }
+
+    /// Each goal column's cell, in column order. Goal columns follow the box
+    /// slots, so column `t` is a goal of box `t`'s label, and `group(i)` is
+    /// also the range of columns holding box `i`'s goals.
+    pub(crate) fn goal_cells(&self) -> &[Cell] {
+        &self.goal_cells[..self.goals]
     }
 
     /// Distances from `cell` to each of `group`'s goals, in column order.
@@ -371,9 +385,9 @@ fn cost(distance: u16) -> i32 {
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use crate::push::canonicalize;
-    use crate::testkit::{Lcg, explored_catalog, remaining};
-    use sokomind_core::{Board, Cell, NONE};
-    use std::mem::size_of;
+    use crate::testkit::{Lcg, catalog, explored_catalog, remaining};
+    use sokomind_core::{Board, Cell, NONE, WALL};
+    use std::{collections::VecDeque, mem::size_of};
 
     /// Nine interchangeable X boxes and a lone A: the widest group here.
     const WIDE: &str = concat!(
@@ -466,6 +480,27 @@ mod tests {
         }
     }
 
+    /// The stage probe's `pull` (slurm/probes/p4b.rs, not tracked) with
+    /// nothing blocked: the cells from which one box reaches `goal` by
+    /// pushes, the keeper ignored. A cell joins when the cell beyond it,
+    /// where the keeper stands to push it toward `goal`'s side, is floor.
+    fn pull(board: &Board, goal: Cell) -> Vec<bool> {
+        let neighbors = board.neighbors();
+        let mut seen = vec![false; neighbors.len()];
+        seen[goal as usize] = true;
+        let mut queue = VecDeque::from([goal]);
+        while let Some(x) = queue.pop_front() {
+            for (d, &p) in neighbors[x as usize].iter().enumerate() {
+                if p == NONE || seen[p as usize] || neighbors[p as usize][d] == NONE {
+                    continue;
+                }
+                seen[p as usize] = true;
+                queue.push_back(p);
+            }
+        }
+        seen
+    }
+
     /// A box on the top or bottom row can only slide along it, and one in a
     /// corner cannot move at all, so which cells are dead depends on where
     /// each label's goals are.
@@ -492,6 +527,45 @@ mod tests {
         assert!(!heuristic.dead(a, at(3, 2)) && !heuristic.dead(b, at(3, 2)));
         // Nothing pushes a box up off the bottom row, which holds no goal.
         assert!(heuristic.dead(a, at(3, 4)) && heuristic.dead(b, at(3, 4)));
+    }
+
+    /// On every catalog board and for every label group, `dead` holds on
+    /// exactly the floor cells the probe's `pull` from no goal of the label
+    /// reaches, so the stage ladder's dead cells and these are one table.
+    /// Walls differ only in representation: their distances are all `NONE`,
+    /// so `dead` marks them dead for every group where the probe leaves them
+    /// out, and no caller asks about a wall. `goal_cells` lists, per column
+    /// `t`, a goal of box `t`'s label, each goal once.
+    #[test]
+    fn dead_matches_pull() {
+        for (id, board) in catalog() {
+            let heuristic = Heuristic::new(&board);
+            let labels = board.labels();
+            let goal_cells = heuristic.goal_cells();
+            assert_eq!(goal_cells.len(), labels.len(), "{id}");
+            for (t, &cell) in goal_cells.iter().enumerate() {
+                assert!(board.on_goal(t, cell), "{id}: column {t} on {cell}");
+                assert!(!goal_cells[..t].contains(&cell), "{id}: {cell} twice");
+            }
+            for start in (0..labels.len()).filter(|&i| heuristic.group(i).start == i) {
+                let mut live = vec![false; board.tiles().len()];
+                for &(goal, label) in board.goals() {
+                    if label == labels[start] {
+                        for (alive, reached) in live.iter_mut().zip(pull(&board, goal)) {
+                            *alive |= reached;
+                        }
+                    }
+                }
+                for (cell, &tile) in board.tiles().iter().enumerate() {
+                    let dead = heuristic.dead(start, cell as Cell);
+                    if tile == WALL {
+                        assert!(dead, "{id}: wall {cell} live for box {start}");
+                    } else {
+                        assert_eq!(dead, !live[cell], "{id}: box {start} on {cell}");
+                    }
+                }
+            }
+        }
     }
 
     /// The arena accounts exactly the distance table and dead mask.

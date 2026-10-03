@@ -3,8 +3,14 @@
 //! of its axes has a wall or another frozen box on one side, or a cell dead
 //! for its label on both sides, and a push that leaves one frozen off its
 //! goal leaves no solution. The corral detector asks the same question of
-//! a subset of the boxes, so a members mask leaves every other box out.
+//! a subset of the boxes, so a members mask leaves every other box out, and
+//! `frozen_off_goal` asks it of a plain list of boxes, with no occupancy map.
+//! The `goals` submodule holds the stage ladder's goal-placement prunes.
+mod goals;
+
 use crate::heuristic::Heuristic;
+#[cfg_attr(not(test), expect(unused_imports))]
+pub(crate) use goals::{GoalReach, SinkLines};
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
 use std::mem::size_of;
 
@@ -34,6 +40,71 @@ fn held(
             || dead_pair.is_some_and(|heuristic| heuristic.dead(i, a) && heuristic.dead(i, b))
     };
     axis(neighbors[0], neighbors[1]) && axis(neighbors[2], neighbors[3])
+}
+
+/// Whether the greatest freeze fixpoint over `members`, (box, cell) pairs,
+/// leaves one off its goal: start with every member frozen and release any
+/// box with an axis whose two sides are both free of walls and frozen boxes
+/// and, with `dead_pair`, are not both dead cells for its label. A wall on
+/// either side blocks its axis, because pushing toward the wall is illegal
+/// and pushing away needs the player standing on the wall cell. Two dead
+/// sides hold it too: a push either way leaves the box where it never
+/// reaches a goal of its label. `occupant` names the box on a cell, and
+/// must name each member on its own cell; a box it names outside `members`
+/// is never frozen, so it counts as floor.
+fn frozen_off_goal_among(
+    board: &Board,
+    dead_pair: Option<&Heuristic>,
+    members: &[(usize, Cell)],
+    occupant: impl Fn(Cell) -> Option<usize>,
+) -> bool {
+    let mut frozen = [false; MAX_BOXES];
+    for &(i, _) in members {
+        frozen[i] = true;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &(i, cell) in members {
+            if !frozen[i] {
+                continue;
+            }
+            let neighbors = board.neighbors()[cell as usize];
+            let frozen_box = |cell: Cell| occupant(cell).is_some_and(|j| frozen[j]);
+            if !held(neighbors, i, dead_pair, frozen_box) {
+                frozen[i] = false;
+                changed = true;
+            }
+        }
+    }
+    // No solution moves a box still frozen: the first such push would
+    // need both sides of one axis free, but each axis keeps a wall or a
+    // frozen box that has not moved either, or has two dead sides, so
+    // the push would strand the box on a dead cell. Off its goal, a
+    // frozen box leaves no solution.
+    members
+        .iter()
+        .any(|&(i, cell)| frozen[i] && !board.on_goal(i, cell))
+}
+
+/// Whether the freeze fixpoint over the boxes in `members` alone, with every
+/// other box taken off the board and two dead sides holding an axis, leaves
+/// one off its goal. Taking boxes away only removes blockers, so a flag
+/// holds wherever the other boxes stand, as for the corral detector's
+/// members mask. `members` lists distinct box slots on distinct cells; a
+/// slot stands only for its label, its dead cells and goals. With no
+/// occupancy map, each lookup scans the list, which a pocket's few boxes
+/// keep short.
+pub(crate) fn frozen_off_goal(
+    board: &Board,
+    heuristic: &Heuristic,
+    members: &[(usize, Cell)],
+) -> bool {
+    for (k, &(i, cell)) in members.iter().enumerate() {
+        debug_assert!(members[..k].iter().all(|&(j, c)| j != i && c != cell));
+    }
+    let occupant = |cell: Cell| members.iter().find_map(|&(j, c)| (c == cell).then_some(j));
+    frozen_off_goal_among(board, Some(heuristic), members, occupant)
 }
 
 /// Sound post-push deadlock detection: one greatest freeze fixpoint over the
@@ -78,7 +149,7 @@ impl Deadlock {
     }
     /// Index of the box on `cell` as of the last refresh; `None` for no box
     /// or for `NONE`, the missing neighbor past an edge.
-    fn at(&self, cell: Cell) -> Option<usize> {
+    pub(crate) fn at(&self, cell: Cell) -> Option<usize> {
         if cell == NONE {
             return None;
         }
@@ -159,14 +230,10 @@ impl Deadlock {
             None => held(neighbors, index, None, |_| false) && !board.on_goal(index, to),
         })
     }
-    /// Greatest freeze fixpoint over the moved box's box-adjacency component:
-    /// start with every component box frozen and release any box with an axis
-    /// whose two sides are both free of walls and frozen boxes and, with
-    /// `dead_pair`, are not both dead cells for its label. A wall on either
-    /// side blocks its axis, because pushing toward the wall is illegal and
-    /// pushing away needs the player standing on the wall cell. Two dead
-    /// sides hold it too: a push either way leaves the box where it never
-    /// reaches a goal of its label.
+    /// Greatest freeze fixpoint over the moved box's box-adjacency component,
+    /// the moved box and every box of `members` joined to it through
+    /// side-by-side boxes, run by `frozen_off_goal_among`. A box outside the
+    /// component borders none in it, so it could hold none of their axes.
     fn frozen_component(
         &self,
         board: &Board,
@@ -198,49 +265,20 @@ impl Deadlock {
                 }
             }
         }
-        let component = &component[..size];
-        let mut frozen = [false; MAX_BOXES];
-        for &(i, _) in component {
-            frozen[i] = true;
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &(i, cell) in component {
-                if !frozen[i] {
-                    continue;
-                }
-                let neighbors = board.neighbors()[cell as usize];
-                let frozen_box = |cell: Cell| {
-                    self.box_at(members, from, to, index, cell)
-                        .is_some_and(|j| frozen[j])
-                };
-                if !held(neighbors, i, dead_pair, frozen_box) {
-                    frozen[i] = false;
-                    changed = true;
-                }
-            }
-        }
-        // No solution moves a box still frozen: the first such push would
-        // need both sides of one axis free, but each axis keeps a wall or a
-        // frozen box that has not moved either, or has two dead sides, so
-        // the push would strand the box on a dead cell. Off its goal, a
-        // frozen box leaves no solution.
-        component
-            .iter()
-            .any(|&(i, cell)| frozen[i] && !board.on_goal(i, cell))
+        let occupant = |cell: Cell| self.box_at(members, from, to, index, cell);
+        frozen_off_goal_among(board, dead_pair, &component[..size], occupant)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL_BOXES, Deadlock, EMPTY};
+    use super::{ALL_BOXES, Deadlock, EMPTY, frozen_off_goal, frozen_off_goal_among};
     use crate::{
         heuristic::Heuristic,
         push::canonicalize,
-        testkit::{Lcg, explored_catalog, random_room, remaining, solvable_states},
+        testkit::{Lcg, catalog, explored_catalog, random_room, remaining, solvable_states},
     };
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
+    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State, Step, WALL};
 
     /// D is frozen on its goal once pushed down; pushing A left then freezes A
     /// against it, while pushing A right puts it on its goal.
@@ -606,5 +644,133 @@ mod tests {
             lone >= 3_900 && lone_flags[0] >= 900 && lone_flags[1] >= 1_450 && grouped >= 800,
             "{lone} {lone_flags:?} {grouped}"
         );
+    }
+
+    /// The probe's geometry for its `frozen_off_goal` (slurm/probes/p4b.rs,
+    /// not tracked): floor, neighbors, each slot's group, each goal cell's
+    /// group, and per group the floor cells from which no push sequence
+    /// takes a box to one of its goals. The probe pulls those from the
+    /// goals; `Heuristic::dead` marks the same cells, as `dead_matches_pull`
+    /// checks on every catalog board.
+    #[derive(Clone)]
+    struct Geo {
+        floor: Vec<bool>,
+        nb: Vec<[Cell; 4]>,
+        group: Vec<usize>,
+        goal_group: Vec<usize>,
+        dead: Vec<Vec<bool>>,
+    }
+
+    impl Geo {
+        fn new(board: &Board, heuristic: &Heuristic) -> Self {
+            let (group, goal_group) = crate::testkit::probe_groups(board);
+            let floor: Vec<bool> = board.tiles().iter().map(|&tile| tile != WALL).collect();
+            let mut dead: Vec<Vec<bool>> = Vec::new();
+            for i in (0..group.len()).filter(|&i| heuristic.group(i).start == i) {
+                let cells = (0..floor.len()).map(|c| floor[c] && heuristic.dead(i, c as Cell));
+                dead.push(cells.collect());
+            }
+            Self {
+                floor,
+                nb: board.neighbors().to_vec(),
+                group,
+                goal_group,
+                dead,
+            }
+        }
+
+        /// The probe's `frozen_off_goal`: box `j` of group `group[j]` on
+        /// `cells[j]`, no other box on the board.
+        fn frozen_off_goal(&self, cells: &[Cell], group: &[usize]) -> bool {
+            let wall = |c: Cell| c == NONE || !self.floor[c as usize];
+            let mut frozen = vec![true; cells.len()];
+            loop {
+                let mut changed = false;
+                for (j, (&x, &g)) in cells.iter().zip(group).enumerate() {
+                    if !frozen[j] {
+                        continue;
+                    }
+                    let (nb, dead) = (self.nb[x as usize], &self.dead[g]);
+                    let held = (0..4).all(|d| {
+                        let (a, b) = (nb[d], nb[OPPOSITE[d]]);
+                        let blocker = |c: Cell| {
+                            wall(c) || cells.iter().zip(&frozen).any(|(&y, &f)| f && y == c)
+                        };
+                        blocker(a) || blocker(b) || (dead[a as usize] && dead[b as usize])
+                    });
+                    if !held {
+                        frozen[j] = false;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            cells
+                .iter()
+                .zip(group)
+                .zip(&frozen)
+                .any(|((&c, &g), &f)| f && self.goal_group[c as usize] != g)
+        }
+    }
+
+    /// `frozen_off_goal` answers as the probe's does on random sets of up to
+    /// 8 boxes on every catalog board, and the shared fixpoint without the
+    /// dead-pair case as the probe's with no dead cells. Most boxes land
+    /// beside an earlier one, so they group and hold one another.
+    #[test]
+    fn frozen_off_goal_matches_probe() {
+        let mut rng = Lcg(0xf20e);
+        // Flagged, passed, flagged with no box flagged alone, and flagged
+        // only through the dead-pair case.
+        let mut seen = [0; 4];
+        for (id, board) in catalog() {
+            let heuristic = Heuristic::new(&board);
+            let geo = Geo::new(&board, &heuristic);
+            let blind_geo = Geo {
+                dead: vec![vec![false; geo.floor.len()]; geo.dead.len()],
+                ..geo.clone()
+            };
+            let floor: Vec<Cell> = (0..board.tiles().len() as Cell)
+                .filter(|&cell| geo.floor[cell as usize])
+                .collect();
+            let boxes = board.labels().len();
+            for _ in 0..200 {
+                let mut slots: Vec<usize> = (0..boxes).collect();
+                let mut members: Vec<(usize, Cell)> = Vec::new();
+                let count = 1 + rng.below(boxes.min(8));
+                for _ in 0..count {
+                    let i = slots.swap_remove(rng.below(slots.len()));
+                    let mut cell = NONE;
+                    if !members.is_empty() && rng.below(4) != 0 {
+                        let (_, beside) = members[rng.below(members.len())];
+                        cell = board.neighbors()[beside as usize][rng.below(4)];
+                    }
+                    while cell == NONE || members.iter().any(|&(_, c)| c == cell) {
+                        cell = floor[rng.below(floor.len())];
+                    }
+                    members.push((i, cell));
+                }
+                let (cells, group): (Vec<Cell>, Vec<usize>) =
+                    members.iter().map(|&(i, c)| (c, geo.group[i])).unzip();
+                let flagged = frozen_off_goal(&board, &heuristic, &members);
+                let probe = geo.frozen_off_goal(&cells, &group);
+                assert_eq!(flagged, probe, "{id}: {members:?}");
+                let blind = frozen_off_goal_among(&board, None, &members, |cell| {
+                    members.iter().find_map(|&(j, c)| (c == cell).then_some(j))
+                });
+                let blind_probe = blind_geo.frozen_off_goal(&cells, &group);
+                assert_eq!(blind, blind_probe, "{id}: {members:?}");
+                let alone = members
+                    .iter()
+                    .any(|&member| frozen_off_goal(&board, &heuristic, &[member]));
+                seen[0] += usize::from(flagged);
+                seen[1] += usize::from(!flagged);
+                seen[2] += usize::from(flagged && !alone);
+                seen[3] += usize::from(flagged && !blind);
+            }
+        }
+        assert!(seen.iter().all(|&count| count > 0), "{seen:?}");
     }
 }
