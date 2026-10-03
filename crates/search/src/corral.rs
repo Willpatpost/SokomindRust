@@ -239,7 +239,6 @@ impl Pockets {
     pub(crate) const BYTES: usize = POCKET_NODES * size_of::<Entry>() + TABLE * size_of::<u16>();
     /// The FIFO and the table, reserved once at their final sizes, whatever
     /// the board.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn new() -> Result<Self, TryReserveError> {
         let mut fifo = Vec::new();
         fifo.try_reserve_exact(POCKET_NODES)?;
@@ -445,7 +444,6 @@ impl Corral {
     /// state's refresh and nothing else may use this `Corral` or `reach`:
     /// the scan reads the fill between units, and stamps at or above the
     /// check's first epoch mark the cells its pockets cover.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn pockets_begin(
         &mut self,
         pockets: &mut Pockets,
@@ -470,7 +468,6 @@ impl Corral {
     /// and, with one to [`POCKET_BOXES`] members, starts searching. A
     /// pocket with no member borders only walls; every member on a goal
     /// holds vacuously there, so it is alive and never searched.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn pockets_step(
         &mut self,
         pockets: &mut Pockets,

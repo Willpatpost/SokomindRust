@@ -9,7 +9,6 @@
 mod goals;
 
 use crate::heuristic::Heuristic;
-#[cfg_attr(not(test), expect(unused_imports))]
 pub(crate) use goals::{GoalReach, SinkLines};
 use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
 use std::mem::size_of;

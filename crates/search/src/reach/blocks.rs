@@ -81,7 +81,6 @@ impl Blocks {
     /// records are the only allocation, reserved once at their final size;
     /// `stack`, `low` and `next` are scratch of at least one entry per cell,
     /// left holding garbage.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn build(
         board: &Board,
         player: Cell,

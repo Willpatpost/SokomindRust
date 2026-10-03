@@ -63,6 +63,8 @@ mod heuristic;
 mod proof;
 mod push;
 mod reach;
+#[cfg_attr(not(test), expect(dead_code))]
+mod stage;
 #[cfg(test)]
 mod testkit;
 

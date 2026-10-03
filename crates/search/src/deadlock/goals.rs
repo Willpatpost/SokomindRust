@@ -91,7 +91,6 @@ impl GoalReach {
     /// The three vectors are the only allocations, reserved once at their
     /// bounds; `queue` is scratch of at least `2 * cells` entries, left
     /// holding garbage.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn build(
         board: &Board,
         heuristic: &Heuristic,
@@ -201,7 +200,6 @@ impl GoalReach {
     /// each cut to the goal columns of the box's group. `false` proves the
     /// state has no solution. No allocation: the masks and owners are
     /// arrays on the stack.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn matched(&self, blocks: &Blocks, heuristic: &Heuristic, state: &State) -> bool {
         let boxes = heuristic.goal_cells().len();
         let mut masks = [0u32; MAX_BOXES];
@@ -275,7 +273,6 @@ impl SinkLines {
     /// and each start walks its run once to test it and, when every cell
     /// has a wall across, once more to cover it. The two vectors are the
     /// only allocations, reserved once at their bounds.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn build(board: &Board) -> Result<Self, TryReserveError> {
         let neighbors = board.neighbors();
         let cells = neighbors.len();
@@ -311,7 +308,6 @@ impl SinkLines {
     /// each box takes the first goal of its own label past the previous
     /// box's. `false` proves the state has no solution. `O(cells)` per
     /// call, each line walked twice, with no allocation.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn sink_ok(&self, board: &Board, deadlock: &Deadlock) -> bool {
         let neighbors = board.neighbors();
         for &head in &self.heads {
@@ -328,7 +324,6 @@ impl SinkLines {
         true
     }
     /// Whether cell `c` lies on some line.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn on_line(&self, c: Cell) -> bool {
         (self.covered[usize::from(c) / 32] >> (c % 32)) & 1 != 0
     }
