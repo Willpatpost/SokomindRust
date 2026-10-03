@@ -1,6 +1,6 @@
 //! Keeper reachability by breadth-first flood. Each fill bumps an epoch
 //! instead of clearing its buffers, so it costs only the cells it visits;
-//! the engine reads distances, box cells and walks from the last fill.
+//! the engine reads distances, blocked cells and walks from the last fill.
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
 use std::mem::size_of;
 
@@ -26,27 +26,38 @@ impl Reach {
         }
     }
     /// Starts a flood: bumps the epoch so every stamp is stale, zeroing the
-    /// stamps when it wraps, then stamps the boxes and queues the keeper.
-    fn begin(&mut self, board: &Board, state: &State) {
+    /// stamps when it wraps, then stamps the blocked cells and queues the
+    /// keeper.
+    fn begin(&mut self, player: Cell, blocked: &[Cell]) {
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
             self.stamps.fill(0);
             self.epoch = 1;
         }
         self.queue.clear();
-        // Boxes are stamped without a distance, which blocks the flood and
-        // marks the cell occupied for push generation.
-        for &cell in &state.boxes[..board.labels().len()] {
+        // Blocked cells are stamped without a distance, which blocks the
+        // flood and, in a fill of a state, marks its box cells occupied for
+        // push generation.
+        for &cell in blocked {
             self.stamps[cell as usize] = self.epoch;
             self.distances[cell as usize] = NONE;
         }
-        self.stamps[state.player as usize] = self.epoch;
-        self.distances[state.player as usize] = 0;
-        self.queue.push(state.player);
+        self.stamps[player as usize] = self.epoch;
+        self.distances[player as usize] = 0;
+        self.queue.push(player);
     }
-    /// Floods every cell the player reaches in `state`, marking box cells.
+    /// Floods every cell the player reaches in `state`, its boxes blocked.
     pub(crate) fn fill(&mut self, board: &Board, state: &State) {
-        self.begin(board, state);
+        self.fill_from(board, state.player, &state.boxes[..board.labels().len()]);
+    }
+    /// Floods every cell `player` reaches with the `blocked` cells as walls
+    /// for this flood alone, such as a state's boxes or only some of them.
+    /// The player is stamped after the blocked cells, so it must not be one;
+    /// afterwards [`Self::blocked`] reads exactly those cells and
+    /// [`Self::distance`] gives `NONE` for each.
+    pub(crate) fn fill_from(&mut self, board: &Board, player: Cell, blocked: &[Cell]) {
+        debug_assert!(!blocked.contains(&player));
+        self.begin(player, blocked);
         let mut head = 0;
         while head < self.queue.len() {
             let cell = self.queue[head];
@@ -62,7 +73,7 @@ impl Reach {
         }
     }
     /// Walking distance from the player to `cell` in the last fill, `NONE`
-    /// for a box cell or one the player cannot reach.
+    /// for a blocked cell or one the player cannot reach.
     pub(crate) fn distance(&self, cell: Cell) -> u16 {
         if self.stamps[cell as usize] == self.epoch {
             self.distances[cell as usize]
@@ -70,20 +81,21 @@ impl Reach {
             NONE
         }
     }
-    /// Whether `cell` held a box in the last fill.
+    /// Whether `cell` was blocked in the last fill, which in a fill of a
+    /// state means it held a box.
     pub(crate) fn blocked(&self, cell: Cell) -> bool {
         self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
     }
     /// How many cells the last fill reached, the player's included. The
-    /// queue holds each reached cell once, and box cells are stamped but
+    /// queue holds each reached cell once, and blocked cells are stamped but
     /// never queued.
     pub(crate) fn reached(&self) -> usize {
         self.queue.len()
     }
     /// Appends a shortest walk from the player to `cell`, which the last
-    /// `fill` reached, as direction indices from its last step back to its
+    /// fill reached, as direction indices from its last step back to its
     /// first. Each step takes the first direction, in `U D L R` order, whose
-    /// predecessor is one step closer to the player; box cells carry no
+    /// predecessor is one step closer to the player; blocked cells carry no
     /// distance, so the walk never enters one.
     pub(crate) fn append_walk_reversed(&self, board: &Board, mut cell: Cell, route: &mut Vec<u8>) {
         let mut distance = self.distance(cell);
@@ -107,7 +119,9 @@ impl Reach {
 #[cfg(test)]
 mod tests {
     use super::Reach;
-    use sokomind_core::{Board, Cell, NONE, Step};
+    use crate::testkit::{Lcg, catalog, random_room};
+    use sokomind_core::{Board, Cell, NONE, Step, WALL};
+    use std::collections::VecDeque;
 
     /// Walls and two boxes split the floor into branching corridors.
     const ROOM: &str = "OOOOOOOO\nOR  O  O\nO AOO  O\nO  B   O\nOa b   O\nOOOOOOOO";
@@ -179,5 +193,95 @@ mod tests {
                 assert_eq!(walk, fresh_walk, "cell {cell}");
             }
         }
+    }
+
+    /// `fill_from` against a plain breadth-first search on every catalog
+    /// board and 200 random rooms, with one flood reused across each board's
+    /// trials so stale stamps would show: from the start with nothing
+    /// blocked, from the start with its boxes blocked (through `fill`), then
+    /// from random floor cells with random other floor cells blocked, from
+    /// all of them down to about one in six. Every cell's distance and
+    /// blocked flag, and the reached count, must match.
+    #[test]
+    fn fill_from_matches_a_reference_search() {
+        let mut rng = Lcg(0xf111);
+        let mut boards = catalog();
+        for n in 0..200 {
+            let board = Board::parse(&random_room(&mut rng)).unwrap();
+            boards.push((format!("room {n}"), board));
+        }
+        for (id, board) in &boards {
+            let (start, tiles) = (board.initial(), board.tiles());
+            let floor: Vec<Cell> = (0..tiles.len() as Cell)
+                .filter(|&cell| tiles[cell as usize] != WALL)
+                .collect();
+            let mut reach = Reach::new(tiles.len());
+            for trial in 0..8 {
+                let (player, blocked): (Cell, Vec<Cell>) = match trial {
+                    0 => (start.player, Vec::new()),
+                    1 => (start.player, start.boxes[..board.labels().len()].to_vec()),
+                    _ => {
+                        let player = floor[rng.below(floor.len())];
+                        let blocked = floor
+                            .iter()
+                            .copied()
+                            .filter(|&cell| cell != player && rng.below(trial - 1) == 0)
+                            .collect();
+                        (player, blocked)
+                    }
+                };
+                if trial == 1 {
+                    reach.fill(board, &start);
+                } else {
+                    reach.fill_from(board, player, &blocked);
+                }
+                let mut is_blocked = vec![false; tiles.len()];
+                for &cell in &blocked {
+                    is_blocked[cell as usize] = true;
+                }
+                let reference = reference_distances(board, player, &is_blocked);
+                let mut reached = 0;
+                for (cell, &distance) in reference.iter().enumerate() {
+                    reached += usize::from(distance != NONE);
+                    let expected = (distance, is_blocked[cell]);
+                    let cell = cell as Cell;
+                    assert_eq!(
+                        (reach.distance(cell), reach.blocked(cell)),
+                        expected,
+                        "{id} trial {trial} cell {cell}"
+                    );
+                }
+                assert_eq!(reach.reached(), reached, "{id} trial {trial}");
+            }
+        }
+    }
+
+    /// Walking distances from `player` by a plain breadth-first search over
+    /// the tiles, apart from the board's neighbor table, with the `blocked`
+    /// cells as walls: `NONE` for a wall, a blocked cell or one out of reach.
+    fn reference_distances(board: &Board, player: Cell, blocked: &[bool]) -> Vec<u16> {
+        let (tiles, width) = (board.tiles(), board.width());
+        let mut distances = vec![NONE; tiles.len()];
+        distances[player as usize] = 0;
+        let mut queue = VecDeque::from([player as usize]);
+        while let Some(cell) = queue.pop_front() {
+            let x = cell % width;
+            let steps = [
+                cell.checked_sub(width),
+                Some(cell + width),
+                x.checked_sub(1).map(|_| cell - 1),
+                (x + 1 < width).then_some(cell + 1),
+            ];
+            for next in steps.into_iter().flatten() {
+                if tiles.get(next).is_some_and(|&tile| tile != WALL)
+                    && !blocked[next]
+                    && distances[next] == NONE
+                {
+                    distances[next] = distances[cell] + 1;
+                    queue.push_back(next);
+                }
+            }
+        }
+        distances
     }
 }

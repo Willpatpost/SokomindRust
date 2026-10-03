@@ -231,7 +231,7 @@ mod tests {
         reach::Reach,
         testkit::{Lcg, catalog, explored_catalog, random_room, remaining, solvable_states},
     };
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State};
+    use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
     use std::mem::size_of;
 
     /// Two X boxes stacked in a one-cell door and the room below it, both
@@ -280,12 +280,7 @@ mod tests {
         /// Fills and refreshes for the state, then runs the detector with
         /// the dead-pair case, as the engine does.
         fn dead(&mut self, player: Cell, boxes: &[Cell]) -> bool {
-            let mut state = State {
-                player,
-                boxes: [NONE; MAX_BOXES],
-            };
-            state.boxes[..boxes.len()].copy_from_slice(boxes);
-            self.reach.fill(&self.board, &state);
+            self.reach.fill_from(&self.board, player, boxes);
             self.deadlock.refresh(boxes);
             self.corral.is_dead(
                 &self.board,
