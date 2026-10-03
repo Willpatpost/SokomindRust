@@ -1,21 +1,24 @@
 //! Child building: what turns a popped parent and one push of one of its
 //! boxes into a child or a counted prune. This module owns the canonical
-//! box order ([`canonicalize`], [`settle`]), the static legality check
-//! ([`legal`]), the admit chain in its prune order ([`admit`]), the bound
-//! on the keeper's walk to a state's first push ([`stand_walk`],
-//! [`root_estimate`]), and the [`SkipCounters`] its prunes share with the
-//! engine's own skips.
+//! box order ([`canonicalize`], [`settle`]), the stale-entry check
+//! ([`Parent::of`]), the expand prologue ([`Parts::open`]), the static
+//! legality check ([`legal`]), the admit chain in its prune order
+//! ([`admit`]), the queue key's f ([`key`]), the bound on the keeper's
+//! walk to a state's first push ([`stand_walk`], [`root_estimate`]), and
+//! the [`SkipCounters`] its prunes share with the engine's own skips.
 //!
-//! It is separate from the engine so that the planned stage search can run
-//! each push through [`legal`] and [`admit`], over a [`Kernel`] of its own
-//! parts, as the engine does, prune for prune and counter for counter,
-//! without importing the engine. Checks on a whole parent, such as the
-//! sealed-corral check, stay with the search that expands it. The engine's
-//! expansion runs this same code, so the exact search proves with it:
-//! nothing here sees the policy, the queue or the incumbent, only the bound
-//! and the reopen flag each call passes in.
+//! It is separate from the engine so that the planned stage search can
+//! expand a node through the same [`Parts`], lent to it, as the engine
+//! does, prune for prune and counter for counter, without importing the
+//! engine. The expand prologue, including the sealed-corral check on the
+//! whole parent, is [`Parts::open`], which every search runs before its
+//! pushes; each push then goes through [`legal`] and [`admit`]. The
+//! engine's expansion runs this same code, so the exact search proves with
+//! it: nothing here reads the policy or the incumbent or touches the queue,
+//! only the bound, the reopen flag and the weight each call passes in.
 use crate::{
-    arena::{Arena, Node},
+    arena::{Arena, Key, Node},
+    corral::Corral,
     deadlock::{ALL_BOXES, Deadlock},
     heuristic::{Heuristic, ParentGroup},
     reach::Reach,
@@ -70,8 +73,8 @@ fn settle(state: &mut State, group: Range<usize>, i: usize) {
 /// node was replaced, not rejected. Each field is the
 /// [`SearchStats`](crate::SearchStats) counter of the same name; the
 /// arena's [`TableCounters`](crate::arena::TableCounters) holds the rest.
-/// [`admit`] raises the child counters through its [`Kernel`]; the engine
-/// raises the pop and expansion ones itself.
+/// [`admit`] raises the child counters through its [`Kernel`] and
+/// [`Parts::open`] the expansion's; the engine raises the pop ones itself.
 #[derive(Default)]
 pub(crate) struct SkipCounters {
     pub(crate) stale_pops: u32,
@@ -87,7 +90,7 @@ pub(crate) struct SkipCounters {
 /// sealed-corral check at expansion. A flag turns one rule off wherever it
 /// applies, so `dead_pair` also reaches the corral check's own freeze.
 /// Production always uses [`Prunes::ALL`]. The value lives only on the
-/// engine and the [`Kernel`] it lends, never in the policy, the public mode
+/// engine and the [`Parts`] it lends, never in the policy, the public mode
 /// or anything else a caller sees, so no caller can turn a detector off and
 /// none of this is an API or ABI change. Only the test-only
 /// `Engine::set_prunes` installs another value, for the differential test
@@ -124,6 +127,29 @@ pub(crate) struct Parent {
     pub(crate) queued_h: u32,
 }
 
+impl Parent {
+    /// The node a dequeued `key` names, or `None` when the entry is stale:
+    /// a cheaper duplicate has since taken over its state's slot. The
+    /// caller counts a stale entry (`stale_pops`).
+    #[inline]
+    pub(crate) fn of(arena: &Arena, key: Key) -> Option<Self> {
+        let (index, queued_h) = (key.id(), key.h());
+        let superseded = arena.is_superseded(index);
+        debug_assert_eq!(
+            superseded,
+            arena.find(&arena.node(index).state).1 != Some(index)
+        );
+        if superseded {
+            return None;
+        }
+        Some(Self {
+            index,
+            node: arena.node(index),
+            queued_h,
+        })
+    }
+}
+
 /// A push of the parent's box `i` in direction `d`, from `from` to `to`,
 /// with the keeper on `stand`, that passed the static check in [`legal`].
 /// Only [`legal`] builds one and only [`admit`] reads it, so a caller can
@@ -145,23 +171,108 @@ pub(crate) struct Child {
     pub(crate) slot: usize,
 }
 
-/// What [`admit`] reads and counts, borrowed from the search that owns it.
-/// Every borrow but the counters is shared, so admit can prune and probe
-/// the table but never store. The bound and the reopen flag come in with
-/// each call instead, since the search may change them between two pushes
-/// of one parent.
-pub(crate) struct Kernel<'a> {
+impl Child {
+    /// Whether the child is solved. A solved state's estimate is 0, so any
+    /// other `h` answers without reading the board.
+    #[inline]
+    pub(crate) fn is_goal(&self, board: &Board) -> bool {
+        self.h == 0 && board.solved(&self.node.state)
+    }
+}
+
+/// The f [`Arena::enqueue`] takes for a node at `g` with estimate `h`:
+/// `g + weight * h` at the current weight, which the queue key saturates.
+/// Exact, since even `u32::MAX` for all three fits a u64.
+#[inline]
+pub(crate) fn key(g: u32, h: u32, weight: u32) -> u64 {
+    u64::from(g) + u64::from(weight) * u64::from(h)
+}
+
+/// What expanding one node borrows from the search that owns it: the
+/// prologue in [`Parts::open`], then each push's [`Kernel`]. Each field is
+/// a separate part of that search, so building one costs a few references.
+pub(crate) struct Parts<'a> {
     pub(crate) board: &'a Board,
     pub(crate) heuristic: &'a Heuristic,
-    /// The parent's flood: walks to the stands, and the cells its boxes
-    /// block. Filled for the parent before its first push.
-    pub(crate) reach: &'a Reach,
-    /// The freeze check, its occupancy refreshed to the parent's boxes
-    /// before its first push.
-    pub(crate) deadlock: &'a Deadlock,
-    pub(crate) arena: &'a Arena,
+    pub(crate) reach: &'a mut Reach,
+    pub(crate) deadlock: &'a mut Deadlock,
+    pub(crate) corral: &'a mut Corral,
+    pub(crate) arena: &'a mut Arena,
     pub(crate) prunes: Prunes,
     pub(crate) skipped: &'a mut SkipCounters,
+    /// The search's count of expanded nodes, which [`Parts::open`] raises.
+    pub(crate) expanded: &'a mut u32,
+}
+
+impl Parts<'_> {
+    /// The expand prologue, which every search runs on a popped node before
+    /// its pushes: counts and closes the node, floods its keeper into
+    /// `reach` and refreshes `deadlock` to its boxes, as each [`Kernel`]
+    /// expects, then returns the node's estimate. Returns `None` instead,
+    /// counted in `pruned_corrals`, when the sealed-corral check finds no
+    /// solution from the node, which then gets no children.
+    #[inline]
+    pub(crate) fn open(&mut self, parent: &Parent) -> Option<u32> {
+        *self.expanded += 1;
+        self.arena.close(parent.index);
+        self.reach.fill(self.board, &parent.node.state);
+        let boxes = &parent.node.state.boxes[..self.board.labels().len()];
+        self.deadlock.refresh(boxes);
+        if self.prunes.corral
+            && self.corral.is_dead(
+                self.board,
+                boxes,
+                self.reach,
+                self.deadlock,
+                self.heuristic,
+                self.prunes.dead_pair.then_some(self.heuristic),
+            )
+        {
+            // No child of a state without a solution has one; the node
+            // stays expanded and closed, so it counts as before.
+            self.skipped.pruned_corrals += 1;
+            return None;
+        }
+        let parent_h = parent.node.known_h().unwrap_or_else(|| {
+            self.heuristic
+                .estimate(&parent.node.state)
+                .expect("queued state has an assignment")
+        });
+        Some(parent_h)
+    }
+    /// The [`Kernel`] for one push after [`Parts::open`], reborrowed from
+    /// these parts: the one place a kernel is built.
+    #[inline]
+    pub(crate) fn kernel(&mut self) -> Kernel<'_> {
+        Kernel {
+            board: self.board,
+            heuristic: self.heuristic,
+            reach: self.reach,
+            deadlock: self.deadlock,
+            arena: self.arena,
+            prunes: self.prunes,
+            skipped: self.skipped,
+        }
+    }
+}
+
+/// What [`admit`] reads and counts, lent by [`Parts::kernel`]. Every borrow
+/// but the counters is shared, so admit can prune and probe the table but
+/// never store. The bound and the reopen flag come in with each call
+/// instead, since the search may change them between two pushes of one
+/// parent.
+pub(crate) struct Kernel<'a> {
+    board: &'a Board,
+    heuristic: &'a Heuristic,
+    /// The parent's flood: walks to the stands, and the cells its boxes
+    /// block. Filled for the parent before its first push.
+    reach: &'a Reach,
+    /// The freeze check, its occupancy refreshed to the parent's boxes
+    /// before its first push.
+    deadlock: &'a Deadlock,
+    arena: &'a Arena,
+    prunes: Prunes,
+    skipped: &'a mut SkipCounters,
 }
 
 /// The static check on pushing box `i`, on `from`, in direction `d`: the

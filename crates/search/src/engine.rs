@@ -4,7 +4,7 @@ use crate::{
     corral::Corral,
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
-    push::{self, Child, Kernel, Parent, Prunes, Push, SkipCounters, canonicalize},
+    push::{self, Child, Parent, Parts, Prunes, Push, SkipCounters, canonicalize},
     reach::Reach,
 };
 use sokomind_core::{ACTIONS, Board, MAX_ROUTE, OPPOSITE, State};
@@ -297,7 +297,7 @@ impl Engine {
         if let Some(h) = h {
             let total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
             self.arena
-                .enqueue(total_h as u64 * self.policy.weight as u64, total_h, root);
+                .enqueue(push::key(0, total_h, self.policy.weight), total_h, root);
         } else {
             self.status = Status::Exhausted;
         }
@@ -463,21 +463,14 @@ impl Engine {
             };
             return Popped::Stop;
         };
-        let (index, queued_h) = (key.id(), key.h());
-        // A cheaper duplicate has since taken over this state's slot.
-        let superseded = self.arena.is_superseded(index);
-        debug_assert_eq!(
-            superseded,
-            self.arena.find(&self.arena.node(index).state).1 != Some(index)
-        );
-        if superseded {
+        let Some(parent) = Parent::of(&self.arena, key) else {
             self.skipped.stale_pops += 1;
             return Popped::Skip;
-        }
-        let node = self.arena.node(index);
+        };
+        let node = &parent.node;
         if self.board.solved(&node.state) {
             if self.best_moves().is_none_or(|best| node.g < best) {
-                self.incumbent = Some(index);
+                self.incumbent = Some(parent.index);
             }
             if self.policy.stop_on_goal_pop && !self.next_phase() {
                 self.status = Status::Solved;
@@ -488,49 +481,41 @@ impl Engine {
         if self.best_moves().is_some_and(|best| {
             node.g >= best
                 || (self.policy.prune_popped_estimate
-                    && node.g as u64 + queued_h as u64 >= best as u64)
+                    && node.g as u64 + parent.queued_h as u64 >= best as u64)
         }) {
             self.skipped.pruned_bound += 1;
             return Popped::Skip;
         }
-        Popped::Expand(Parent {
-            index,
-            node,
-            queued_h,
-        })
+        Popped::Expand(parent)
     }
-    /// Expands a popped node: each push the static check ([`push::legal`])
-    /// passes goes to [`Self::admit`], and each child it admits to
-    /// [`Self::insert`], unless the sealed-corral check finds no solution
-    /// from the node, which then gets no children. Breaks when the search
-    /// ended during the expansion.
+    /// This engine's [`Parts`], borrowed field by field: lent once to open
+    /// each expansion and once per push for its kernel, since each insert
+    /// needs the whole engine.
+    #[inline]
+    fn parts(&mut self) -> Parts<'_> {
+        Parts {
+            board: &self.board,
+            heuristic: &self.heuristic,
+            reach: &mut self.reach,
+            deadlock: &mut self.deadlock,
+            corral: &mut self.corral,
+            arena: &mut self.arena,
+            prunes: self.prunes,
+            skipped: &mut self.skipped,
+            expanded: &mut self.expanded,
+        }
+    }
+    /// Expands a popped node: [`Parts::open`] runs the prologue, then each
+    /// push the static check ([`push::legal`]) passes goes to
+    /// [`Self::admit`], and each child it admits to [`Self::insert`], unless
+    /// the prologue's sealed-corral check finds no solution from the node,
+    /// which then gets no children. Breaks when the search ended during the
+    /// expansion.
     #[inline]
     fn expand(&mut self, parent: Parent) -> ControlFlow<()> {
-        self.expanded += 1;
-        self.arena.close(parent.index);
-        self.reach.fill(&self.board, &parent.node.state);
-        let boxes = &parent.node.state.boxes[..self.board.labels().len()];
-        self.deadlock.refresh(boxes);
-        if self.prunes.corral
-            && self.corral.is_dead(
-                &self.board,
-                boxes,
-                &self.reach,
-                &self.deadlock,
-                &self.heuristic,
-                self.prunes.dead_pair.then_some(&self.heuristic),
-            )
-        {
-            // No child of a state without a solution has one; the node
-            // stays expanded and closed, so it counts as before.
-            self.skipped.pruned_corrals += 1;
+        let Some(parent_h) = self.parts().open(&parent) else {
             return ControlFlow::Continue(());
-        }
-        let parent_h = parent.node.known_h().unwrap_or_else(|| {
-            self.heuristic
-                .estimate(&parent.node.state)
-                .expect("queued state has an assignment")
-        });
+        };
         let mut parent_group = ParentGroup::EMPTY;
         // The bound and the reopen flag, read again after each insert, the
         // only call here that changes the incumbent or the policy: it can
@@ -568,10 +553,10 @@ impl Engine {
         }
         ControlFlow::Continue(())
     }
-    /// Runs one push through [`push::admit`] with a [`Kernel`] of this
-    /// engine's parts, lent per push because each insert needs the whole
-    /// engine. `reopen_closed` and `best` are the values [`Self::expand`]
-    /// keeps current across its inserts.
+    /// Runs one push through [`push::admit`] with the kernel of this
+    /// engine's [`Parts`], lent per push because each insert needs the
+    /// whole engine. `reopen_closed` and `best` are the values
+    /// [`Self::expand`] keeps current across its inserts.
     #[inline]
     fn admit(
         &mut self,
@@ -586,17 +571,8 @@ impl Engine {
             (reopen_closed, best),
             (self.policy.reopen_closed, self.best_moves())
         );
-        let mut kernel = Kernel {
-            board: &self.board,
-            heuristic: &self.heuristic,
-            reach: &self.reach,
-            deadlock: &self.deadlock,
-            arena: &self.arena,
-            prunes: self.prunes,
-            skipped: &mut self.skipped,
-        };
         push::admit(
-            &mut kernel,
+            &mut self.parts().kernel(),
             parent,
             parent_h,
             parent_group,
@@ -612,10 +588,10 @@ impl Engine {
     /// with [`Status::MemoryLimit`].
     #[inline]
     fn insert(&mut self, parent: &Parent, child: Child) -> Inserted {
-        let Child { node, h, slot } = child;
         // admit's g + h prune left g + h < best, so a solved child always
         // improves the incumbent.
-        let goal = h == 0 && self.board.solved(&node.state);
+        let goal = child.is_goal(&self.board);
+        let Child { node, h, slot } = child;
         if self.arena.is_full() {
             // Keep a solution discovered at the exact limit, for the restart
             // to carry or the stop to report.
@@ -632,7 +608,7 @@ impl Engine {
         }
         let id = self.arena.insert(node, slot);
         self.arena
-            .enqueue(node.g as u64 + self.policy.weight as u64 * h as u64, h, id);
+            .enqueue(push::key(node.g, h, self.policy.weight), h, id);
         // Keep a solution even if a limit occurs before its pop.
         if goal {
             self.incumbent = Some(id);
