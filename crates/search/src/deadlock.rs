@@ -236,8 +236,8 @@ impl Deadlock {
 mod tests {
     use super::{ALL_BOXES, Deadlock, EMPTY};
     use crate::{
-        engine::canonicalize,
         heuristic::Heuristic,
+        push::canonicalize,
         testkit::{Lcg, explored_catalog, random_room, remaining, solvable_states},
     };
     use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};

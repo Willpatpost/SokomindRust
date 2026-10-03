@@ -2,12 +2,13 @@ use crate::{
     SearchError, SearchStats, SolutionError, Status, StopReason,
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node, TableCounters},
     corral::Corral,
-    deadlock::{ALL_BOXES, Deadlock},
+    deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
+    push::{self, Child, Kernel, Parent, Prunes, Push, SkipCounters, canonicalize},
     reach::Reach,
 };
-use sokomind_core::{ACTIONS, Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State};
-use std::ops::{ControlFlow, Range};
+use sokomind_core::{ACTIONS, Board, MAX_ROUTE, OPPOSITE, State};
+use std::ops::ControlFlow;
 
 /// What separates the modes. Everything else, from child order to pruning
 /// and limit handling, is shared.
@@ -187,95 +188,6 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
     }
 }
 
-/// Sorts interchangeable same-label boxes so states compare canonically.
-/// Labels are grouped in slot order (see [`State`]), so sorting each run of
-/// equal labels keeps every box on a slot of its own label. Only call this
-/// on search-owned state copies: a live `Game` must keep its box order,
-/// because undo records box indices. The engine sorts only its start this
-/// way; after each push [`settle`] restores the order.
-pub(crate) fn canonicalize(board: &Board, state: &mut State) {
-    let labels = board.labels();
-    let mut begin = 0;
-    while begin < labels.len() {
-        let mut end = begin + 1;
-        while end < labels.len() && labels[end] == labels[begin] {
-            end += 1;
-        }
-        state.boxes[begin..end].sort_unstable();
-        begin = end;
-    }
-}
-
-/// Restores [`canonicalize`]'s order in a state that had it until box `i`
-/// alone moved. `group` is the box's label group ([`Heuristic::group`]):
-/// the box shifts left or right within it, one neighbor at a time, until
-/// the group is sorted again. The other boxes kept their sorted order and
-/// no two boxes share a cell, so the result is exactly the full sort's, at
-/// the cost of the boxes it passes instead of a sort of every group.
-pub(crate) fn settle(state: &mut State, group: Range<usize>, i: usize) {
-    let cell = state.boxes[i];
-    let mut slot = i;
-    while slot > group.start && state.boxes[slot - 1] > cell {
-        state.boxes[slot] = state.boxes[slot - 1];
-        slot -= 1;
-    }
-    // After a shift left the right neighbor is a box just passed, above
-    // `cell`, so this shifts only a box that did not move left.
-    while slot + 1 < group.end && state.boxes[slot + 1] < cell {
-        state.boxes[slot] = state.boxes[slot + 1];
-        slot += 1;
-    }
-    state.boxes[slot] = cell;
-}
-
-/// What the engine counts as it skips pops and children: pops whose node a
-/// cheaper duplicate superseded, and pops and children a prune rejected.
-/// Named for skips rather than prunes because a stale pop is no prune: its
-/// node was replaced, not rejected. Each field is the [`SearchStats`]
-/// counter of the same name; the arena's [`TableCounters`] holds the rest.
-#[derive(Default)]
-struct SkipCounters {
-    stale_pops: u32,
-    pruned_dead_cells: u64,
-    pruned_deadlocks: u64,
-    pruned_duplicates: u64,
-    pruned_assignment: u64,
-    pruned_bound: u64,
-    pruned_corrals: u64,
-}
-
-/// Which dead-state detectors run: those in the admit chain and the
-/// sealed-corral check at expansion. A flag turns one rule off wherever it
-/// applies, so `dead_pair` also reaches the corral check's own freeze.
-/// Production always uses [`Prunes::ALL`]. The value lives only on
-/// [`Engine`], never in [`Policy`], the public mode or anything else a
-/// caller sees, so no caller can turn a detector off and none of this is an
-/// API or ABI change. Only the test-only `Engine::set_prunes` installs
-/// another value, for the differential test in this module that checks a
-/// detector never changes a live run; each new detector adds a flag here
-/// and a row to that test's `TOGGLES`.
-///
-/// A flag no detector reads yet carries `#[expect(dead_code)]` rather than
-/// `allow`: the first read leaves the expectation unfulfilled, which fails
-/// the clippy gate until the attribute goes.
-#[derive(Clone, Copy)]
-struct Prunes {
-    /// The freeze rule's dead-pair axis case: an axis also holds a box when
-    /// both its neighbors on it are dead cells for the box's label.
-    dead_pair: bool,
-    /// The sealed-corral check in [`Engine::expand`]: a state with a corral
-    /// that can never move again, and must, gets no children.
-    corral: bool,
-}
-
-impl Prunes {
-    /// Every detector on, the only value outside tests.
-    const ALL: Self = Self {
-        dead_pair: true,
-        corral: true,
-    };
-}
-
 /// Push search over one budgeted arena. Only [`crate::ExactSearch`] turns its
 /// state into bounds or a proof; with a weighted policy results are always
 /// optimality unknown.
@@ -301,35 +213,6 @@ pub(crate) struct Engine {
     /// Under an admissible h, no route through its unpushed successors along
     /// this path is shorter, so the exact frontier must include it.
     interrupted_f: Option<u64>,
-}
-
-/// A popped node that [`Engine::expand`] is about to expand.
-struct Parent {
-    /// Its arena id, which each child records as its parent.
-    index: u32,
-    node: Node,
-    /// The h it was queued with.
-    queued_h: u32,
-}
-
-/// A push of the parent's box `i` in direction `d`, from `from` to `to`,
-/// with the keeper on `stand`, that passed the static check in
-/// [`Engine::expand`].
-struct Push {
-    i: usize,
-    d: usize,
-    from: Cell,
-    to: Cell,
-    stand: Cell,
-}
-
-/// A child that passed every prune in [`Engine::admit`].
-struct Child {
-    node: Node,
-    /// Its estimate in full; `node.h` holds it only while it fits.
-    h: u32,
-    /// The table slot [`Arena::find`] returned for its state.
-    slot: usize,
 }
 
 /// What [`Engine::pop`] made of one queue entry.
@@ -412,7 +295,7 @@ impl Engine {
         // start and the next insert already.
         debug_assert!(!self.arena.starved());
         if let Some(h) = h {
-            let total_h = self.root_estimate(&self.start, h);
+            let total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
             self.arena
                 .enqueue(total_h as u64 * self.policy.weight as u64, total_h, root);
         } else {
@@ -616,10 +499,11 @@ impl Engine {
             queued_h,
         })
     }
-    /// Expands a popped node: each push the static check passes goes to
-    /// [`Self::admit`], and each child it admits to [`Self::insert`], unless
-    /// the sealed-corral check finds no solution from the node, which then
-    /// gets no children. Breaks when the search ended during the expansion.
+    /// Expands a popped node: each push the static check ([`push::legal`])
+    /// passes goes to [`Self::admit`], and each child it admits to
+    /// [`Self::insert`], unless the sealed-corral check finds no solution
+    /// from the node, which then gets no children. Breaks when the search
+    /// ended during the expansion.
     #[inline]
     fn expand(&mut self, parent: Parent) -> ControlFlow<()> {
         self.expanded += 1;
@@ -648,34 +532,33 @@ impl Engine {
                 .expect("queued state has an assignment")
         });
         let mut parent_group = ParentGroup::EMPTY;
+        // The bound and the reopen flag, read again after each insert, the
+        // only call here that changes the incumbent or the policy: it can
+        // record a shorter route, or hand a solved push to a next phase and
+        // still queue it.
+        let mut best = self.best_moves();
+        let mut reopen_closed = self.policy.reopen_closed;
         for i in 0..self.board.labels().len() {
             let from = parent.node.state.boxes[i];
-            for (d, &opposite) in OPPOSITE.iter().enumerate() {
-                let to = self.board.neighbors()[from as usize][d];
-                let stand = self.board.neighbors()[from as usize][opposite];
-                if to == NONE
-                    || stand == NONE
-                    || self.reach.blocked(to)
-                    || self.reach.distance(stand) == NONE
-                {
-                    // Illegal: a wall or a box ahead, no cell to stand
-                    // on, or a stand the keeper cannot reach. Such a push
-                    // is no move, so it counts as nothing; dead cells are
-                    // a counted prune in admit.
+            for d in 0..4 {
+                let Some(push) = push::legal(&self.board, &self.reach, i, from, d) else {
                     continue;
-                }
-                let push = Push {
-                    i,
-                    d,
-                    from,
-                    to,
-                    stand,
                 };
-                let Some(child) = self.admit(&parent, parent_h, &mut parent_group, push) else {
+                let Some(child) = self.admit(
+                    &parent,
+                    parent_h,
+                    &mut parent_group,
+                    push,
+                    reopen_closed,
+                    best,
+                ) else {
                     continue;
                 };
                 match self.insert(&parent, child) {
-                    Inserted::Queued => {}
+                    Inserted::Queued => {
+                        best = self.best_moves();
+                        reopen_closed = self.policy.reopen_closed;
+                    }
                     // The arena was emptied but for the incumbent's path;
                     // the next pop takes the re-seeded start.
                     Inserted::Restarted => return ControlFlow::Continue(()),
@@ -685,10 +568,10 @@ impl Engine {
         }
         ControlFlow::Continue(())
     }
-    /// Runs one push through every prune after the static check, counting
-    /// the first that rejects it, and builds the child when none does.
-    /// `parent_h` is the parent's estimate and `parent_group` its lazily
-    /// solved label group, shared by all of its children.
+    /// Runs one push through [`push::admit`] with a [`Kernel`] of this
+    /// engine's parts, lent per push because each insert needs the whole
+    /// engine. `reopen_closed` and `best` are the values [`Self::expand`]
+    /// keeps current across its inserts.
     #[inline]
     fn admit(
         &mut self,
@@ -696,99 +579,31 @@ impl Engine {
         parent_h: u32,
         parent_group: &mut ParentGroup,
         push: Push,
+        reopen_closed: bool,
+        best: Option<u32>,
     ) -> Option<Child> {
-        let Push {
-            i,
-            d,
-            from,
-            to,
-            stand,
-        } = push;
-        if self.heuristic.dead(i, to) {
-            self.skipped.pruned_dead_cells += 1;
-            return None;
-        }
-        let g = Node::push_g(parent.node.g, self.reach.distance(stand));
-        if self.best_moves().is_some_and(|best| g >= best) {
-            self.skipped.pruned_bound += 1;
-            return None;
-        }
-        let dead_pair = self.prunes.dead_pair.then_some(&self.heuristic);
-        if self
-            .deadlock
-            .is_dead_after_push(&self.board, dead_pair, ALL_BOXES, from, to)
-        {
-            self.skipped.pruned_deadlocks += 1;
-            return None;
-        }
-        // Every stored state is canonical, the parent too, so settling the
-        // pushed box canonicalizes the child.
-        let mut next = parent.node.state;
-        next.player = from;
-        next.boxes[i] = to;
-        settle(&mut next, self.heuristic.group(i), i);
-        debug_assert_eq!(next, {
-            let mut sorted = next;
-            canonicalize(&self.board, &mut sorted);
-            sorted
-        });
-        let (slot, previous) = self.arena.find(&next);
-        let previous = previous.map(|previous| self.arena.meta(previous));
-        if previous.is_some_and(|previous| {
-            previous.g <= g || (!self.policy.reopen_closed && previous.closed)
-        }) {
-            self.skipped.pruned_duplicates += 1;
-            return None;
-        }
-        // A cheaper duplicate reuses the stored estimate; otherwise the
-        // parent's group is solved lazily, only once a child gets this far.
-        let known = previous.and_then(|previous| previous.known_h());
-        let Some(h) = known.or_else(|| {
-            self.heuristic
-                .child_estimate(parent_h, parent_group, &parent.node.state, i, to)
-        }) else {
-            self.skipped.pruned_assignment += 1;
-            return None;
+        debug_assert_eq!(
+            (reopen_closed, best),
+            (self.policy.reopen_closed, self.best_moves())
+        );
+        let mut kernel = Kernel {
+            board: &self.board,
+            heuristic: &self.heuristic,
+            reach: &self.reach,
+            deadlock: &self.deadlock,
+            arena: &self.arena,
+            prunes: self.prunes,
+            skipped: &mut self.skipped,
         };
-        if self
-            .best_moves()
-            .is_some_and(|best| g as u64 + h as u64 >= best as u64)
-        {
-            self.skipped.pruned_bound += 1;
-            return None;
-        }
-        // Before its first push the child's keeper walks to the stand of a
-        // statically legal push, so g + h + that walk still bounds every
-        // route through the child. A prune only: queue keys and stored
-        // estimates stay push-only.
-        if h > 0
-            && let Some(best) = self.best_moves()
-        {
-            // At least 1, since the prune above failed.
-            let need = best - g - h;
-            let boxes = &next.boxes[..self.board.labels().len()];
-            // The parent's flood marks its boxes, and the pushed box left
-            // `from` for `to`.
-            let occupied = |cell: Cell| cell == to || (cell != from && self.reach.blocked(cell));
-            // Pushing the same box on again starts from `from`.
-            let ahead = self.board.neighbors()[to as usize][d];
-            let onward = ahead != NONE && !occupied(ahead) && !self.heuristic.dead(i, ahead);
-            if !onward && self.stand_walk(from, boxes, occupied, need) >= need {
-                self.skipped.pruned_bound += 1;
-                return None;
-            }
-        }
-        Some(Child {
-            node: Node {
-                state: next,
-                g,
-                parent: parent.index,
-                direction: d as u8,
-                h: Node::store_h(h),
-            },
-            h,
-            slot,
-        })
+        push::admit(
+            &mut kernel,
+            parent,
+            parent_h,
+            parent_group,
+            push,
+            reopen_closed,
+            best,
+        )
     }
     /// Stores and queues an admitted child, recording it when it is solved.
     /// At a full arena a solved child is kept as the incumbent, in the spare
@@ -836,71 +651,6 @@ impl Engine {
             return Inserted::Stopped;
         }
         Inserted::Queued
-    }
-    /// The root's estimate: its assignment's pushes plus the keeper's walk
-    /// to its first push, bounded by [`Self::stand_walk`], the Manhattan
-    /// distance to the nearest stand of a statically legal push. Those
-    /// walking moves are disjoint from the counted pushes, so the sum stays
-    /// admissible. A root with no statically legal push has no route and
-    /// adds no walk. Only the root queues this walk: `admit` uses the stand
-    /// walk on children only as a prune, which keeps queue keys and stored
-    /// estimates push-only.
-    fn root_estimate(&self, state: &State, pushes: u32) -> u32 {
-        if pushes == 0 && self.board.solved(state) {
-            return 0;
-        }
-        let boxes = &state.boxes[..self.board.labels().len()];
-        pushes + self.stand_walk(state.player, boxes, |cell| boxes.contains(&cell), 1)
-    }
-    /// The Manhattan distance from `player` to the nearest stand of a
-    /// statically legal push, or 0 when there is none. Pushing box `j` in
-    /// direction `e` is statically legal when the cell ahead of it and the
-    /// stand behind it are floor that `occupied` leaves free, and the cell
-    /// ahead is not dead for the box. The first push of every route from an
-    /// unsolved state is one of these, made with exactly these boxes, so the
-    /// walk to its stand bounds the route's walking moves, which the
-    /// assignment's pushes do not count. Callers skip solved states.
-    ///
-    /// Stops early once the answer is known to be below `enough` (0 asks for
-    /// the exact walk): the result is below `enough` exactly when the exact
-    /// walk is, and equals the exact walk otherwise. O(boxes * 4).
-    fn stand_walk(
-        &self,
-        player: Cell,
-        boxes: &[Cell],
-        occupied: impl Fn(Cell) -> bool,
-        enough: u32,
-    ) -> u32 {
-        let width = self.board.width();
-        let (x, y) = (player as usize % width, player as usize / width);
-        let walk = |cell: Cell| {
-            (x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width)) as u32
-        };
-        let neighbors = self.board.neighbors();
-        let mut best = u32::MAX;
-        for (j, &cell) in boxes.iter().enumerate() {
-            // A stand is next to its box, so at most one step closer.
-            if walk(cell) > best {
-                continue;
-            }
-            for (e, &opposite) in OPPOSITE.iter().enumerate() {
-                let ahead = neighbors[cell as usize][e];
-                let stand = neighbors[cell as usize][opposite];
-                if ahead == NONE
-                    || stand == NONE
-                    || occupied(ahead)
-                    || occupied(stand)
-                    || self.heuristic.dead(j, ahead)
-                {
-                    continue;
-                }
-                best = best.min(walk(stand));
-                if best < enough {
-                    return best;
-                }
-            }
-        }
-        if best == u32::MAX { 0 } else { best }
     }
     /// Rebuilds the incumbent's full route and replays it from the start.
     /// Costs O(route) plus one flood per push, so call it once per improved
@@ -963,14 +713,15 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Policy, Prunes, canonicalize, settle};
+    use super::{Engine, Policy};
     use crate::{
         SearchStats, Status,
         exact::ExactSearch,
         heuristic::Heuristic,
-        testkit::{Lcg, catalog, explored_catalog, random_room, remaining},
+        push::Prunes,
+        testkit::{Lcg, catalog, explored_catalog, random_room},
     };
-    use sokomind_core::{Board, Cell, Game, NONE, State};
+    use sokomind_core::{Board, Game};
 
     /// Small enough for debug builds. At this limit Fast finds 30 catalog
     /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
@@ -1638,209 +1389,5 @@ mod tests {
             assert_eq!(on.route, off.route, "exact {exact}");
             compare(&format!("exact {exact}"), &off, &on);
         }
-    }
-
-    /// Sorting stays inside each label group: a global sort would interleave
-    /// the A and B boxes, and inactive slots keep `NONE`.
-    #[test]
-    fn canonicalize_sorts_each_label_group() {
-        let board = Board::parse("OOOOOOO\nOR    O\nOABAB O\nOaabb O\nOOOOOOO").unwrap();
-        assert_eq!(board.labels(), b"AABB");
-        let start = board.initial();
-        let [a1, a2, b1, b2] = [0, 1, 2, 3].map(|i| start.boxes[i]);
-        assert!(a1 < b1 && b1 < a2 && a2 < b2);
-        let mut state = start;
-        state.boxes[..4].copy_from_slice(&[a2, a1, b2, b1]);
-        canonicalize(&board, &mut state);
-        assert_eq!(state, start);
-    }
-
-    /// After any one-box move from a canonical state, settling the moved box
-    /// gives exactly canonicalize's order. Random moves on every catalog
-    /// board, which ignore the keeper since neither order reads it, reach
-    /// one-box groups, boxes that keep their slot, and boxes that pass two
-    /// or more others to either end of their group.
-    #[test]
-    fn settle_matches_canonicalize_after_every_move() {
-        let mut rng = Lcg(1);
-        // One-box group, same slot, to the group's start past at least two
-        // boxes, to its end past at least two.
-        let mut seen = [0; 4];
-        for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board);
-            let n = board.labels().len();
-            let mut state = board.initial();
-            for _ in 0..1_000 {
-                let i = rng.below(n);
-                let to = board.neighbors()[state.boxes[i] as usize][rng.below(4)];
-                if to == NONE || state.boxes[..n].contains(&to) {
-                    continue;
-                }
-                let mut moved = state;
-                moved.boxes[i] = to;
-                let mut sorted = moved;
-                canonicalize(&board, &mut sorted);
-                let group = heuristic.group(i);
-                settle(&mut moved, group.clone(), i);
-                assert_eq!(moved, sorted, "{id}: box {i} to {to} in {state:?}");
-                let slot = moved.boxes[..n]
-                    .iter()
-                    .position(|&cell| cell == to)
-                    .unwrap();
-                if group.len() == 1 {
-                    seen[0] += 1;
-                } else if slot == i {
-                    seen[1] += 1;
-                } else if slot == group.start && i >= slot + 2 {
-                    seen[2] += 1;
-                } else if slot + 1 == group.end && slot >= i + 2 {
-                    seen[3] += 1;
-                }
-                state = moved;
-            }
-        }
-        assert!(seen.iter().all(|&count| count > 0), "{seen:?}");
-    }
-
-    /// The exact walk over `boxes`, occupancy read from the boxes.
-    fn walk(engine: &Engine, player: Cell, boxes: &[Cell]) -> u32 {
-        engine.stand_walk(player, boxes, |cell| boxes.contains(&cell), 0)
-    }
-
-    /// (h, h') with h' = h + walk, and 0 when solved; `None` without an
-    /// assignment.
-    fn estimates(engine: &Engine, state: &State) -> Option<(u32, u32)> {
-        let h = engine.heuristic.estimate(state)?;
-        if h == 0 {
-            return Some((0, 0));
-        }
-        let boxes = &state.boxes[..engine.board.labels().len()];
-        Some((h, h + walk(engine, state.player, boxes)))
-    }
-
-    /// Admissible: never above the exact remaining moves. Consistent: a
-    /// move lowers h' by at most 1 wherever it lowers h by at most 1,
-    /// which is every move, since the push-distance estimate is consistent.
-    /// On every catalog board whose primitive state space fits the
-    /// testkit's exploration cap.
-    #[test]
-    fn stand_walk_is_admissible_and_consistent() {
-        for (id, board, states, edges) in explored_catalog() {
-            let engine =
-                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-            let exact = remaining(board, states, edges);
-            let values: Vec<_> = states
-                .iter()
-                .map(|state| estimates(&engine, state))
-                .collect();
-            for (from, state) in states.iter().enumerate() {
-                let Some((h, value)) = values[from] else {
-                    assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
-                    continue;
-                };
-                assert!(
-                    value <= exact[from],
-                    "{id}: {value} > {} at {state:?}",
-                    exact[from]
-                );
-                for &(to, _) in &edges[from] {
-                    if let Some((next_h, next)) = values[to]
-                        && h <= next_h + 1
-                    {
-                        assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
-                    }
-                }
-            }
-        }
-    }
-
-    /// The child prune's inputs: occupancy from the parent's flood plus
-    /// the pushed box gives the child's own walk, an early stop only
-    /// answers "below enough", and the onward exit only skips a walk
-    /// of 0.
-    #[test]
-    fn stand_walk_after_a_push_matches_a_fresh_scan() {
-        let (mut pushes, mut onward) = (0, 0);
-        for (id, board, states, edges) in explored_catalog() {
-            let mut engine =
-                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-            let n = board.labels().len();
-            for (parent, state) in states.iter().enumerate() {
-                engine.reach.fill(&engine.board, state);
-                for &(child, push) in &edges[parent] {
-                    let Some((i, d)) = push else {
-                        continue;
-                    };
-                    let (from, to) = (state.boxes[i], states[child].boxes[i]);
-                    let boxes = &states[child].boxes[..n];
-                    let occupied =
-                        |cell: Cell| cell == to || (cell != from && engine.reach.blocked(cell));
-                    let exact = walk(&engine, from, boxes);
-                    for enough in 0..=exact + 1 {
-                        let got = engine.stand_walk(from, boxes, occupied, enough);
-                        assert_eq!(got < enough, exact < enough, "{id}: {got} {exact} {enough}");
-                        assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
-                    }
-                    let ahead = board.neighbors()[to as usize][d];
-                    if ahead != NONE && !occupied(ahead) && !engine.heuristic.dead(i, ahead) {
-                        assert_eq!(exact, 0, "{id} at {:?}", states[child]);
-                        onward += 1;
-                    }
-                    pushes += 1;
-                }
-            }
-        }
-        assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
-    }
-
-    /// The root estimate is pushes + stand walk. It rises over pushes + box
-    /// walk (the step to the nearest box's side, recomputed below) by
-    /// exactly these gains, on exactly these catalog boards, so a change to
-    /// either walk, to the dead masks or to the catalog shows here. The gain
-    /// reads only cells and dead masks, not the push count.
-    ///
-    /// The seven gains come from a Python replica of the engine's start
-    /// estimate, written from the stand-walk rule before this code and not
-    /// kept in the repo, which raised these 7 of the 57 boards by 2 each.
-    /// That is a second implementation of the same rule, not an
-    /// independent proof. tutorial-push checks by hand: its only statically
-    /// legal first push, right, needs a stand 3 steps from the keeper, 2
-    /// more than the step to the box's side, so its root is 1 + 3 = 4, the
-    /// optimum the crate example proves.
-    #[test]
-    fn stand_walk_raises_exactly_these_root_estimates() {
-        const RAISED: [(&str, u32); 7] = [
-            ("tutorial-push", 2),
-            ("beginner-detour", 2),
-            ("garden-2", 2),
-            ("classic-1", 2),
-            ("adv-gallery", 2),
-            ("theme-parking", 2),
-            ("expert-maze", 2),
-        ];
-        let mut raised = 0;
-        for (id, board) in catalog() {
-            let engine =
-                Engine::new(board.clone(), board.initial(), Policy::EXACT, STATES, 16).unwrap();
-            let start = engine.start;
-            let pushes = engine.heuristic.estimate(&start).unwrap();
-            let width = board.width();
-            let (x, y) = (start.player as usize % width, start.player as usize / width);
-            let box_walk = start.boxes[..board.labels().len()]
-                .iter()
-                .map(|&cell| {
-                    x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
-                })
-                .min()
-                .unwrap() as u32;
-            let gain = RAISED
-                .iter()
-                .find(|&&(raised_id, _)| raised_id == id)
-                .map_or(0, |&(_, gain)| gain);
-            let root = engine.root_estimate(&start, pushes);
-            assert_eq!(root, pushes + box_walk + gain, "{id}");
-            raised += usize::from(root > pushes + box_walk);
-        }
-        assert_eq!(raised, RAISED.len());
     }
 }

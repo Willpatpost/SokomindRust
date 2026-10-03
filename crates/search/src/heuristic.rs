@@ -189,7 +189,7 @@ impl Heuristic {
 
     /// Box `i`'s label group as a range of box slots: `i` and every box
     /// interchangeable with it, the run of equal labels that
-    /// [`canonicalize`](crate::engine::canonicalize) sorts.
+    /// [`canonicalize`](crate::push::canonicalize) sorts.
     pub(crate) fn group(&self, i: usize) -> Range<usize> {
         self.groups[self.group_of[i] as usize].range()
     }
@@ -370,7 +370,7 @@ fn cost(distance: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
-    use crate::engine::canonicalize;
+    use crate::push::canonicalize;
     use crate::testkit::{Lcg, explored_catalog, remaining};
     use sokomind_core::{Board, Cell, NONE};
     use std::mem::size_of;

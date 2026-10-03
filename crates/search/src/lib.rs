@@ -61,6 +61,7 @@ mod engine;
 mod exact;
 mod heuristic;
 mod proof;
+mod push;
 mod reach;
 #[cfg(test)]
 mod testkit;

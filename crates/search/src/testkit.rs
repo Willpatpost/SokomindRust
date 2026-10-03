@@ -2,7 +2,7 @@
 //! source and the rooms it generates, and two exhaustive oracles: the exact
 //! remaining moves from every primitive state of a small board, and whether
 //! each canonical state of one has a solution.
-use crate::engine::canonicalize;
+use crate::push::canonicalize;
 use sokomind_core::{Board, Cell, MAX_BOXES, State, Step};
 use std::{
     collections::{HashMap, VecDeque},
