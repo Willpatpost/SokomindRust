@@ -31,9 +31,32 @@
 //! such a one, so the scan is skipped outright. A corral with more than
 //! [`CAP`] potential pushes is skipped too, which bounds the freeze work
 //! per expansion; one with none is always judged.
-use crate::{deadlock::Deadlock, heuristic::Heuristic, reach::Reach};
-use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, WALL};
-use std::mem::size_of;
+//!
+//! The pocket check, `pockets_begin` and then one `pockets_step` unit at a
+//! time, asks a deeper question for the stage ladder. A pocket is a
+//! 4-connected component of the empty cells the keeper cannot reach with
+//! every box blocked; the boxes next to it are its members, and it borders
+//! only them and walls. Its search explores the world of the members
+//! alone, every other box taken off the board: pushes whose stand the
+//! keeper reaches, whose destination is free and live for the member's
+//! label, and that leave no freeze over the members holding one off its
+//! goal. The pocket is dead, and the state with it, when no state of that
+//! world lets the keeper into the pocket or has every member on a goal of
+//! its label. That is sound by projection: until the keeper gets in, only
+//! members' pushes change the pocket, and in a solution they form such a
+//! sequence that ends with every member on a goal, since the other boxes
+//! only obstruct, and a dead cell or a freeze over fewer boxes is dead with
+//! more. The check ports the stage probe's `pockets_ok` and `pocket_dead`
+//! (slurm/probes/p4b.rs 358-466, not tracked) with the same verdicts: a
+//! pocket with more than [`POCKET_BOXES`] members, or whose search would
+//! queue more than [`POCKET_NODES`] states, counts as alive.
+use crate::{
+    deadlock::{Deadlock, frozen_off_goal},
+    heuristic::Heuristic,
+    reach::Reach,
+};
+use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State, WALL};
+use std::{collections::TryReserveError, mem::size_of};
 
 /// Potential pushes judged per corral at most; a corral with more is
 /// skipped. The reference's PI-corral check caps a corral's boundary boxes
@@ -108,6 +131,204 @@ fn pushes(
         }
     }
     Some((pushes, count))
+}
+
+/// Members a pocket may have and still be searched, the probe's
+/// `POCKET_BOXES`; a pocket with more counts as alive.
+const POCKET_BOXES: usize = 8;
+/// States a pocket search may queue, its start included: the probe's
+/// `POCKET_NODES`, past which its pop count calls the pocket alive.
+const POCKET_NODES: usize = 512;
+/// Log2 of the seen table's slots.
+const TABLE_BITS: u32 = 10;
+/// The seen table's slots: at least twice the states it can hold, so its
+/// load stays at or below one half and every probe ends at an empty slot.
+const TABLE: usize = 1 << TABLE_BITS;
+/// An empty table slot, or the slot of an entry not in the table. No FIFO
+/// index reaches it.
+const NIL: u16 = u16::MAX;
+const _: () = assert!(TABLE >= 2 * POCKET_NODES && POCKET_NODES < NIL as usize);
+
+/// A queued state of a pocket search.
+#[derive(Clone, Copy)]
+struct Entry {
+    /// The members' cells in canonical order: the pocket's slot order, with
+    /// each label's run sorted by cell, so states that differ only by
+    /// swapping interchangeable boxes are equal arrays. `NONE` past the
+    /// pocket's members.
+    cells: [Cell; POCKET_BOXES],
+    /// The keeper's cell when queued, which its pop replaces with the
+    /// region, the least cell the keeper reaches: with `cells`, the key.
+    at: Cell,
+    /// The table slot this entry holds, `NIL` until its pop inserts it, and
+    /// for good when its key was popped before.
+    slot: u16,
+}
+// Ten u16 fields and no padding: the 20 bytes per entry `Pockets::BYTES`
+// counts.
+const _: () = assert!(size_of::<Entry>() == 20);
+
+impl Entry {
+    /// The key's home slot: the top bits of a multiplicative hash of the
+    /// region and the cells.
+    fn home(&self) -> usize {
+        let mut hash = u64::from(self.at);
+        for &cell in &self.cells {
+            hash = (hash ^ u64::from(cell)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+        (hash >> (u64::BITS - TABLE_BITS)) as usize
+    }
+}
+
+/// What one `Corral::pockets_step` unit found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PocketStep {
+    /// A pocket is dead, so the state has no solution. The check is over.
+    Dead,
+    /// No pocket is dead. The check is over.
+    Alive,
+    /// The check goes on with another unit.
+    More,
+}
+
+/// The next unit of a pockets check.
+enum Unit {
+    /// Scan on from the cursor; the last fill is the scan flood.
+    Scan,
+    /// Refill the scan flood, which the pops overwrote, then scan on.
+    Rescan,
+    /// Pop the current pocket's next entry.
+    Pop,
+}
+
+/// The pocket search's own fixed state: the FIFO of queued states, the
+/// table of popped keys, the scan cursor and the current pocket's members.
+/// The scan flood is `Reach`'s and the seen marks and pocket cells are
+/// `Corral`'s stamps, so nothing here grows with the board.
+///
+/// Layout: the FIFO is [`POCKET_NODES`] 20-byte entries, reserved once,
+/// and the table [`TABLE`] u16 FIFO indices, `NIL` when empty, probed
+/// linearly from a key's home slot. Only popped entries enter the table, at
+/// most one per FIFO entry, so its load stays at or below one half. A new
+/// pocket resets it by writing `NIL` back to the slots its FIFO entries
+/// recorded, never filling all of it. Nothing is allocated after `new`.
+pub(crate) struct Pockets {
+    /// Queued states, the next to pop at `head`; never past its capacity,
+    /// [`POCKET_NODES`].
+    fifo: Vec<Entry>,
+    /// Slot -> FIFO index of the entry that first popped with its key.
+    table: Vec<u16>,
+    head: usize,
+    /// The next cell the scan tests.
+    cursor: usize,
+    /// The check's first Corral epoch: a stamp below it marks a cell no
+    /// pocket of this check covers.
+    first: u32,
+    /// Each member's box slot, ascending. A slot stands only for its
+    /// label's group, dead cells and goals, so it stays valid for whichever
+    /// interchangeable box canonical order puts in its place.
+    slots: [u8; POCKET_BOXES],
+    /// The current pocket's member count.
+    count: usize,
+    unit: Unit,
+}
+
+impl Pockets {
+    /// Heap bytes `new` reserves: the FIFO and the table, 12,288 bytes.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) const BYTES: usize = POCKET_NODES * size_of::<Entry>() + TABLE * size_of::<u16>();
+    /// The FIFO and the table, reserved once at their final sizes, whatever
+    /// the board.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn new() -> Result<Self, TryReserveError> {
+        let mut fifo = Vec::new();
+        fifo.try_reserve_exact(POCKET_NODES)?;
+        let mut table = Vec::new();
+        table.try_reserve_exact(TABLE)?;
+        table.resize(TABLE, NIL);
+        Ok(Self {
+            fifo,
+            table,
+            head: 0,
+            cursor: 0,
+            first: 0,
+            slots: [0; POCKET_BOXES],
+            count: 0,
+            unit: Unit::Scan,
+        })
+    }
+    /// Starts the search of a pocket with the boxes in `members`, one to
+    /// [`POCKET_BOXES`] of them: clears the table and the FIFO, then queues
+    /// the members' cells with the state's keeper.
+    fn start(&mut self, heuristic: &Heuristic, state: &State, members: u32) {
+        debug_assert!(members != 0 && members.count_ones() as usize <= POCKET_BOXES);
+        for entry in &self.fifo {
+            if entry.slot != NIL {
+                self.table[usize::from(entry.slot)] = NIL;
+            }
+        }
+        self.fifo.clear();
+        self.head = 0;
+        self.count = 0;
+        let mut cells = [NONE; POCKET_BOXES];
+        for j in bits(members) {
+            self.slots[self.count] = j as u8;
+            cells[self.count] = state.boxes[j];
+            settle(
+                heuristic,
+                &self.slots,
+                &mut cells[..=self.count],
+                self.count,
+            );
+            self.count += 1;
+        }
+        debug_assert!(self.fifo.len() < self.fifo.capacity());
+        self.fifo.push(Entry {
+            cells,
+            at: state.player,
+            slot: NIL,
+        });
+        self.unit = Unit::Pop;
+    }
+    /// Inserts the key of FIFO entry `index`, whose `at` already holds its
+    /// region, and records its slot; false when an earlier pop holds the
+    /// same key.
+    fn insert(&mut self, index: usize) -> bool {
+        let entry = self.fifo[index];
+        let mut slot = entry.home();
+        loop {
+            let held = self.table[slot];
+            if held == NIL {
+                self.table[slot] = index as u16;
+                self.fifo[index].slot = slot as u16;
+                return true;
+            }
+            let other = &self.fifo[usize::from(held)];
+            if other.cells == entry.cells && other.at == entry.at {
+                return false;
+            }
+            slot = (slot + 1) % TABLE;
+        }
+    }
+}
+
+/// Moves the cell at `k`, the only one out of place, to its canonical
+/// position within its label's run of `cells`, whose box slots are
+/// `slots`: left past larger cells or right past smaller ones.
+fn settle(heuristic: &Heuristic, slots: &[u8], cells: &mut [Cell], mut k: usize) {
+    let same = |a: usize, b: usize| {
+        heuristic
+            .group(usize::from(slots[a]))
+            .contains(&usize::from(slots[b]))
+    };
+    while k > 0 && same(k - 1, k) && cells[k - 1] > cells[k] {
+        cells.swap(k - 1, k);
+        k -= 1;
+    }
+    while k + 1 < cells.len() && same(k, k + 1) && cells[k + 1] < cells[k] {
+        cells.swap(k, k + 1);
+        k += 1;
+    }
 }
 
 impl Corral {
@@ -218,21 +439,209 @@ impl Corral {
                 .iter()
                 .any(|&cell| board.tiles()[cell as usize] != 0 && !reach.blocked(cell))
     }
+    /// Opens a pockets check of `state`: fills `reach` with every box
+    /// blocked, the probe's scan flood, and puts the scan at cell 0 under a
+    /// fresh range of epochs. Until the check ends, `deadlock` must hold the
+    /// state's refresh and nothing else may use this `Corral` or `reach`:
+    /// the scan reads the fill between units, and stamps at or above the
+    /// check's first epoch mark the cells its pockets cover.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn pockets_begin(
+        &mut self,
+        pockets: &mut Pockets,
+        board: &Board,
+        reach: &mut Reach,
+        state: &State,
+    ) {
+        reach.fill(board, state);
+        // A check bumps the epoch once per pocket, fewer times than there
+        // are cells, so zeroing the stamps whenever fewer epochs than cells
+        // are left keeps it from wrapping inside a check.
+        if self.epoch > u32::MAX - self.stamps.len() as u32 {
+            self.stamps.fill(0);
+            self.epoch = 0;
+        }
+        pockets.first = self.epoch + 1;
+        pockets.cursor = 0;
+        pockets.unit = Unit::Scan;
+    }
+    /// One unit of the check `pockets_begin` opened: a pop of the current
+    /// pocket's search, or a scan on to the next pocket, which it floods
+    /// and, with one to [`POCKET_BOXES`] members, starts searching. A
+    /// pocket with no member borders only walls; every member on a goal
+    /// holds vacuously there, so it is alive and never searched.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn pockets_step(
+        &mut self,
+        pockets: &mut Pockets,
+        board: &Board,
+        heuristic: &Heuristic,
+        reach: &mut Reach,
+        deadlock: &Deadlock,
+        state: &State,
+    ) -> PocketStep {
+        match pockets.unit {
+            Unit::Pop => return self.pocket_pop(pockets, board, heuristic, reach),
+            Unit::Rescan => reach.fill(board, state),
+            Unit::Scan => {}
+        }
+        pockets.unit = Unit::Scan;
+        let (tiles, first) = (board.tiles(), pockets.first);
+        // An empty cell the scan flood missed, in no pocket of this check.
+        let Some(start) = (pockets.cursor..tiles.len()).find(|&cell| {
+            tiles[cell] != WALL
+                && self.stamps[cell] < first
+                && reach.distance(cell as Cell) == NONE
+                && deadlock.at(cell as Cell).is_none()
+        }) else {
+            pockets.cursor = tiles.len();
+            return PocketStep::Alive;
+        };
+        pockets.cursor = start + 1;
+        let members = self.pocket_flood(board, deadlock, start as Cell);
+        if members != 0 && members.count_ones() as usize <= POCKET_BOXES {
+            pockets.start(heuristic, state, members);
+        }
+        PocketStep::More
+    }
+    /// Floods the pocket of the empty cell `start` into the queue under a
+    /// fresh epoch, stamping each of its cells, and returns the boxes next
+    /// to it as a members mask. An empty neighbor of an unreached empty
+    /// cell is unreached too, so the flood needs no reach test, and it
+    /// always completes, so a later scan skips every cell it covered.
+    fn pocket_flood(&mut self, board: &Board, deadlock: &Deadlock, start: Cell) -> u32 {
+        self.epoch += 1;
+        let epoch = self.epoch;
+        self.queue.clear();
+        debug_assert!(self.queue.len() < self.queue.capacity());
+        self.queue.push(start);
+        self.stamps[start as usize] = epoch;
+        let mut members = 0;
+        let mut head = 0;
+        while head < self.queue.len() {
+            let cell = self.queue[head];
+            head += 1;
+            for &next in &board.neighbors()[cell as usize] {
+                if next == NONE {
+                    continue;
+                }
+                if let Some(j) = deadlock.at(next) {
+                    members |= 1 << j;
+                } else if self.stamps[next as usize] != epoch {
+                    self.stamps[next as usize] = epoch;
+                    debug_assert!(self.queue.len() < self.queue.capacity());
+                    self.queue.push(next);
+                }
+            }
+        }
+        members
+    }
+    /// Pops the current pocket's next state. It floods the keeper's region
+    /// with only the members blocked and replaces the entry's keeper with
+    /// the region's least cell, completing its key. A key popped before is
+    /// skipped, as the probe's seen set does. Otherwise the pocket ends
+    /// alive when the keeper gets into it, a cell with its flood's stamp,
+    /// or every member is on a goal of its label; else the state's pushes
+    /// are queued. The pocket ends dead when the FIFO runs out.
+    ///
+    /// The probe queues every push, repeats included, and calls the pocket
+    /// alive on its pop past [`POCKET_NODES`]; it orders members and pushes
+    /// differently from this search's slots and settled cells, but neither
+    /// verdict depends on order. A key fixes its region's flood and so its
+    /// pushes, so in any order a search reaches the same keys, and once it
+    /// has popped them all it has queued the same total: the start plus
+    /// each key's pushes on its first pop. Both call the pocket dead
+    /// exactly when no reachable key lets the keeper in or settles every
+    /// member and that total is at most [`POCKET_NODES`]; every other end
+    /// is alive in both. So ending alive on the first push the full FIFO
+    /// cannot take gives the probe's verdict, and a dead pocket has popped
+    /// exactly as many entries as the FIFO holds.
+    fn pocket_pop(
+        &self,
+        pockets: &mut Pockets,
+        board: &Board,
+        heuristic: &Heuristic,
+        reach: &mut Reach,
+    ) -> PocketStep {
+        let index = pockets.head;
+        pockets.head += 1;
+        let (entry, count, slots) = (pockets.fifo[index], pockets.count, pockets.slots);
+        let cells = &entry.cells[..count];
+        reach.fill_from(board, entry.at, cells);
+        // The keeper is never on a member, so the fill reaches at least its
+        // cell.
+        let region = *reach.reached_cells().iter().min().unwrap_or(&entry.at);
+        pockets.fifo[index].at = region;
+        if pockets.insert(index) {
+            let opened = reach
+                .reached_cells()
+                .iter()
+                .any(|&cell| self.stamps[cell as usize] == self.epoch);
+            let settled = cells
+                .iter()
+                .zip(&slots)
+                .all(|(&cell, &slot)| board.on_goal(usize::from(slot), cell));
+            if opened || settled {
+                pockets.unit = Unit::Rescan;
+                return PocketStep::More;
+            }
+            for (j, (&from, &slot)) in cells.iter().zip(&slots).enumerate() {
+                let around = board.neighbors()[from as usize];
+                for (d, &opposite) in OPPOSITE.iter().enumerate() {
+                    let (to, stand) = (around[d], around[opposite]);
+                    if to == NONE
+                        || stand == NONE
+                        || reach.distance(stand) == NONE
+                        || reach.blocked(to)
+                        || heuristic.dead(usize::from(slot), to)
+                    {
+                        continue;
+                    }
+                    let mut next = entry.cells;
+                    next[j] = to;
+                    settle(heuristic, &slots[..count], &mut next[..count], j);
+                    let pairs: [(usize, Cell); POCKET_BOXES] =
+                        std::array::from_fn(|k| (usize::from(slots[k]), next[k]));
+                    if frozen_off_goal(board, heuristic, &pairs[..count]) {
+                        continue;
+                    }
+                    if pockets.fifo.len() == POCKET_NODES {
+                        pockets.unit = Unit::Rescan;
+                        return PocketStep::More;
+                    }
+                    debug_assert!(pockets.fifo.len() < pockets.fifo.capacity());
+                    pockets.fifo.push(Entry {
+                        cells: next,
+                        at: from,
+                        slot: NIL,
+                    });
+                }
+            }
+        }
+        if pockets.head == pockets.fifo.len() {
+            PocketStep::Dead
+        } else {
+            PocketStep::More
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Corral, bits, pushes};
+    use super::{Corral, Entry, POCKET_BOXES, POCKET_NODES, PocketStep, Pockets, bits, pushes};
     use crate::{
         Status,
-        deadlock::{ALL_BOXES, Deadlock},
+        deadlock::{ALL_BOXES, Deadlock, frozen_off_goal},
         engine::{Engine, Policy},
         heuristic::Heuristic,
         reach::Reach,
         testkit::{Lcg, catalog, explored_catalog, random_room, remaining, solvable_states},
     };
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE};
-    use std::mem::size_of;
+    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State, WALL};
+    use std::{
+        collections::{HashSet, VecDeque},
+        mem::size_of,
+    };
 
     /// Two X boxes stacked in a one-cell door and the room below it, both
     /// goals above: the keeper reaches only the goal row, no push is legal,
@@ -253,6 +662,27 @@ mod tests {
     /// A must settle on its goal in the corridor only after B has passed
     /// it to the goal below; pushed in first, A seals B's goal off.
     const SETTLED: &str = "OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO";
+    /// Three pockets in scan order below the keeper's corridor: B's goal
+    /// cell under B, which B fills on the second pop, so the first pocket
+    /// is alive; a cell with walls all round, a pocket with no member; and
+    /// the cell under D, which D can only be pushed into, a dead cell, so
+    /// the third pocket is dead. The first pocket's pops flood with B alone
+    /// blocked and reach the third, so the scan finds it only from a fresh
+    /// scan flood.
+    const RESUME: &str = "OOOOOOOOO\nOR  d   O\nOOBOOODOO\nOObO O OO\nOOOOOOOOO";
+    /// Eight A boxes in the gaps of a wall above a corridor holding the A
+    /// goals in the columns between them, and B at the corridor's end below
+    /// a wall, its goal at the end of the keeper's corridor. The lower
+    /// corridor is one pocket with all nine boxes as members. Each A can
+    /// only be pushed down into it, onto a cell no other A can reach, and
+    /// the keeper never gets in.
+    const GAPS: &str = concat!(
+        "OOOOOOOOOOOOOOOOOOO\n",
+        "OR               bO\n",
+        "OOAOAOAOAOAOAOAOAOO\n",
+        "Oa a a a a a a a BO\n",
+        "OOOOOOOOOOOOOOOOOOO",
+    );
 
     fn at(board: &Board, row: usize, column: usize) -> Cell {
         (row * board.width() + column) as Cell
@@ -301,6 +731,178 @@ mod tests {
                         .is_dead_after_push(&self.board, Some(h), ALL_BOXES, cell, cell)
                 })
         }
+        /// Refreshes for the state and runs a pockets check to its end, unit
+        /// by unit as the ladder will: whether a pocket is dead, and how
+        /// many units the check took.
+        fn pockets(&mut self, pockets: &mut Pockets, state: &State) -> (bool, usize) {
+            let count = self.board.labels().len();
+            self.deadlock.refresh(&state.boxes[..count]);
+            self.corral
+                .pockets_begin(pockets, &self.board, &mut self.reach, state);
+            let mut units = 0;
+            loop {
+                units += 1;
+                match self.corral.pockets_step(
+                    pockets,
+                    &self.board,
+                    &self.heuristic,
+                    &mut self.reach,
+                    &self.deadlock,
+                    state,
+                ) {
+                    PocketStep::Dead => return (true, units),
+                    PocketStep::Alive => return (false, units),
+                    PocketStep::More => {}
+                }
+            }
+        }
+        /// The probe's `pockets_ok` (p4b.rs 358-394) over plain vectors and
+        /// a breadth-first flood of its own, with at most `boxes` members
+        /// per searched pocket and `nodes` pops per search: the pops of the
+        /// first dead pocket's search, or `None` when none is dead.
+        fn reference(&self, state: &State, boxes: usize, nodes: usize) -> Option<usize> {
+            let (board, tiles) = (&self.board, self.board.tiles());
+            let mut occupant: Vec<Option<usize>> = vec![None; tiles.len()];
+            for (i, &cell) in state.boxes[..board.labels().len()].iter().enumerate() {
+                occupant[cell as usize] = Some(i);
+            }
+            let blocked: Vec<bool> = occupant.iter().map(Option::is_some).collect();
+            let reached = flood(board, state.player, &blocked);
+            let mut seen = vec![false; tiles.len()];
+            for start in 0..tiles.len() {
+                if tiles[start] == WALL || blocked[start] || reached[start] || seen[start] {
+                    continue;
+                }
+                seen[start] = true;
+                let (mut pocket, mut members) = (vec![start as Cell], Vec::new());
+                let mut k = 0;
+                while k < pocket.len() {
+                    let x = pocket[k];
+                    k += 1;
+                    for &y in &board.neighbors()[x as usize] {
+                        if y == NONE {
+                            continue;
+                        }
+                        if let Some(i) = occupant[y as usize] {
+                            if !members.contains(&i) {
+                                members.push(i);
+                            }
+                        } else if !seen[y as usize] {
+                            seen[y as usize] = true;
+                            pocket.push(y);
+                        }
+                    }
+                }
+                if members.len() > boxes {
+                    continue;
+                }
+                if let Some(pops) = self.pocket_dead(state, &members, &pocket, nodes) {
+                    return Some(pops);
+                }
+            }
+            None
+        }
+        /// The probe's `pocket_dead` (p4b.rs 411-466) over plain vectors:
+        /// the pops of the members' search when the pocket is dead, `None`
+        /// when some state lets the keeper in or has every member on a goal
+        /// of its label, or a pop passes `nodes`. Each member keeps its own
+        /// slot, and a key sorts its (group, cell) pairs, as the probe's
+        /// does.
+        fn pocket_dead(
+            &self,
+            state: &State,
+            members: &[usize],
+            pocket: &[Cell],
+            nodes: usize,
+        ) -> Option<usize> {
+            let (board, heuristic) = (&self.board, &self.heuristic);
+            let start: Vec<Cell> = members.iter().map(|&i| state.boxes[i]).collect();
+            let mut seen = HashSet::new();
+            let mut queue = VecDeque::from([(start, state.player)]);
+            let mut pops = 0;
+            while let Some((cells, player)) = queue.pop_front() {
+                pops += 1;
+                if pops > nodes {
+                    return None;
+                }
+                let mut blocked = vec![false; board.tiles().len()];
+                for &cell in &cells {
+                    blocked[cell as usize] = true;
+                }
+                let reached = flood(board, player, &blocked);
+                let mut key: Vec<(usize, Cell)> = members
+                    .iter()
+                    .map(|&i| heuristic.group(i).start)
+                    .zip(cells.iter().copied())
+                    .collect();
+                key.sort_unstable();
+                let region = reached.iter().position(|&r| r).unwrap() as Cell;
+                if !seen.insert((key, region)) {
+                    continue;
+                }
+                let opened = pocket.iter().any(|&cell| reached[cell as usize]);
+                let settled = members
+                    .iter()
+                    .zip(&cells)
+                    .all(|(&i, &cell)| board.on_goal(i, cell));
+                if opened || settled {
+                    return None;
+                }
+                for (j, &x) in cells.iter().enumerate() {
+                    let around = board.neighbors()[x as usize];
+                    for (d, &opposite) in OPPOSITE.iter().enumerate() {
+                        let (y, stand) = (around[d], around[opposite]);
+                        if y == NONE
+                            || stand == NONE
+                            || !reached[stand as usize]
+                            || blocked[y as usize]
+                            || heuristic.dead(members[j], y)
+                        {
+                            continue;
+                        }
+                        let mut next = cells.clone();
+                        next[j] = y;
+                        let pairs: Vec<_> = members.iter().copied().zip(next.clone()).collect();
+                        if !frozen_off_goal(board, heuristic, &pairs) {
+                            queue.push_back((next, x));
+                        }
+                    }
+                }
+            }
+            Some(pops)
+        }
+    }
+
+    /// The cells `player` reaches by a plain breadth-first search, with the
+    /// `blocked` cells as walls.
+    fn flood(board: &Board, player: Cell, blocked: &[bool]) -> Vec<bool> {
+        let mut reached = vec![false; blocked.len()];
+        reached[player as usize] = true;
+        let mut queue = VecDeque::from([player]);
+        while let Some(cell) = queue.pop_front() {
+            for &next in &board.neighbors()[cell as usize] {
+                if next != NONE && !blocked[next as usize] && !reached[next as usize] {
+                    reached[next as usize] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        reached
+    }
+
+    /// A state of `board` with its boxes and keeper on distinct floor cells
+    /// drawn by `rng`.
+    fn random_state(board: &Board, rng: &mut Lcg) -> State {
+        let tiles = board.tiles();
+        let mut free: Vec<Cell> = (0..tiles.len() as Cell)
+            .filter(|&cell| tiles[cell as usize] != WALL)
+            .collect();
+        let mut state = board.initial();
+        for cell in &mut state.boxes[..board.labels().len()] {
+            *cell = free.swap_remove(rng.below(free.len()));
+        }
+        state.player = free.swap_remove(rng.below(free.len()));
+        state
     }
 
     /// Runs the exact policy on `board` from its start to a terminal
@@ -593,5 +1195,90 @@ mod tests {
         assert!(pushes(&board, boxes, &reach, 0b001).is_some_and(|(_, count)| count == 4));
         assert!(pushes(&board, boxes, &reach, 0b011).is_none());
         assert!(pushes(&board, boxes, &reach, 0b111).is_none());
+    }
+
+    /// The pockets check against `Checker::reference`, the probe's
+    /// `pockets_ok` with its pop-count exit, on the start and two random
+    /// states of every catalog board and the start and three random states
+    /// of 100 random rooms, all drawn from `Lcg(0x90c4)`: the same verdict
+    /// and, on a dead one, a FIFO holding as many states as the reference
+    /// popped. Both verdicts occur. The fixtures pin the edges. RESUME's
+    /// first pocket ends alive after its pops overwrote the scan flood, and
+    /// the scan finds the dead third pocket only from a fresh one. GAPS's
+    /// pocket has nine members, past `POCKET_BOXES`, so it is skipped,
+    /// though the reference without that cap finds it dead. With B moved
+    /// onto its goal, the eight A members queue 1,024 pushes past the start,
+    /// one for each A still up in each subset of them pushed down, so the
+    /// FIFO fills and the pocket counts as alive, though the uncapped
+    /// reference finds it dead after 1,025 pops. With one A already down as
+    /// well, the other seven queue 448, and the pocket is dead after 449.
+    #[test]
+    fn pockets_match_reference() {
+        let (boxes, nodes) = (POCKET_BOXES, POCKET_NODES);
+        let mut pockets = Pockets::new().unwrap();
+        let mut rng = Lcg(0x90c4);
+        let mut boards: Vec<(String, Board, usize)> = catalog()
+            .into_iter()
+            .map(|(id, board)| (id, board, 2))
+            .collect();
+        for n in 0..100 {
+            let board = Board::parse(&random_room(&mut rng)).unwrap();
+            boards.push((format!("room {n}"), board, 3));
+        }
+        let (mut dead, mut alive) = (0, 0);
+        for (id, board, draws) in &boards {
+            let mut checker = Checker::new(board);
+            for draw in 0..=*draws {
+                let state = if draw == 0 {
+                    board.initial()
+                } else {
+                    random_state(board, &mut rng)
+                };
+                let (found, _) = checker.pockets(&mut pockets, &state);
+                let pops = checker.reference(&state, boxes, nodes);
+                assert_eq!(found, pops.is_some(), "{id} draw {draw}");
+                if let Some(pops) = pops {
+                    assert_eq!(pockets.fifo.len(), pops, "{id} draw {draw}");
+                }
+                dead += usize::from(found);
+                alive += usize::from(!found);
+            }
+        }
+        assert!(dead > 0 && alive > 0, "{dead} {alive}");
+
+        let board = Board::parse(RESUME).unwrap();
+        let start = board.initial();
+        let mut checker = Checker::new(&board);
+        assert_eq!(checker.pockets(&mut pockets, &start), (true, 6));
+        assert_eq!(pockets.fifo.len(), 1);
+        assert_eq!(checker.reference(&start, boxes, nodes), Some(1));
+
+        let board = Board::parse(GAPS).unwrap();
+        let mut state = board.initial();
+        assert_eq!(state.boxes[7..9], [at(&board, 2, 16), at(&board, 3, 17)]);
+        let mut checker = Checker::new(&board);
+        assert_eq!(checker.pockets(&mut pockets, &state), (false, 2));
+        assert_eq!(checker.reference(&state, boxes, nodes), None);
+        assert_eq!(checker.reference(&state, MAX_BOXES, nodes), Some(1));
+        state.boxes[8] = at(&board, 1, 17);
+        assert!(!checker.pockets(&mut pockets, &state).0);
+        assert_eq!(pockets.fifo.len(), nodes);
+        assert_eq!(checker.reference(&state, boxes, nodes), None);
+        assert_eq!(checker.reference(&state, boxes, usize::MAX), Some(1_025));
+        state.boxes[7] = at(&board, 3, 16);
+        assert!(checker.pockets(&mut pockets, &state).0);
+        assert_eq!(pockets.fifo.len(), 449);
+        assert_eq!(checker.reference(&state, boxes, nodes), Some(449));
+    }
+
+    /// `Pockets::BYTES` is what `new` reserves: the FIFO's 512 entries of
+    /// 20 bytes and the table's 1,024 u16 slots.
+    #[test]
+    fn pockets_bytes_match_capacity() {
+        let pockets = Pockets::new().unwrap();
+        let reserved = pockets.fifo.capacity() * size_of::<Entry>()
+            + pockets.table.capacity() * size_of::<u16>();
+        assert_eq!(reserved, Pockets::BYTES);
+        assert_eq!(Pockets::BYTES, 12_288);
     }
 }
