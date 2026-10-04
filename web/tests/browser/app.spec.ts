@@ -128,9 +128,9 @@ test('finds a route through the in-browser engine', async ({ page }) => {
   await expect(page.locator('#expanded')).not.toHaveText('—');
 });
 
-// Quality finds no route on "Grand Hall" and searches it for hundreds of milliseconds
-// before a limit ends it, far longer than the gap between the two clicks, so Stop
-// always lands while the search runs and no route is on show.
+// Quality shows no route on "Grand Hall" for about a second natively, and longer in
+// WASM, until its stage search finds one, far longer than the gap between the two
+// clicks, so Stop always lands while the search runs and no route is on show.
 test('Stop ends a browser search and frees the controls', async ({ page }) => {
   await loaded(page);
   await page.selectOption('#puzzles', 'huge');

@@ -45,7 +45,9 @@ pub(crate) const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
 /// fixed-size scratch buffers. The stage ladder (stage.rs) reuses the route
 /// allowance: it exists only while the search has no route and is freed
 /// before one is recorded, and `Ladder::bytes_for(MAX_CELLS)` is asserted
-/// to fit.
+/// to fit. On wasm32 linear memory never shrinks, and the route need not
+/// reuse the blocks the ladder frees, so, like the first table that
+/// `Arena::grow` frees, they can stay allocated past the budget.
 const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
 
 /// Log2 of the records in a full [`Chunk`]. Unit tests use four-record

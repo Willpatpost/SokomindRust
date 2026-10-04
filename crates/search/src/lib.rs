@@ -106,14 +106,22 @@ pub enum Mode {
     // Fast's and Quality's weights copy Policy::FAST and Policy::QUALITY in
     // engine.rs (checked by scripts/mirrors.test.mjs).
     /// Weighted A* (weight 5) that ends at its first route, however long.
+    /// When the arena fills with no route under a limit of 4,096 states or
+    /// more, a bounded stage search takes over in the same arena and ends at
+    /// its first route; it is heuristic and incomplete, and when it gives up
+    /// or cannot run the search stops at the limit.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening
     /// the route until the queue empties or a limit hits. The first time the
     /// arena fills, in either phase and with a route or without, the search
     /// empties it but for its route, if any, which stays the bound to beat,
-    /// and starts over at weight 3. Its route never ends longer than it
-    /// would without the restart, and only a route that alone fills the
-    /// arena stops it there instead.
+    /// and starts over at weight 3. Its route never ends longer than the one
+    /// it carries into the restart, and only a route that alone fills the
+    /// arena stops it there instead. A Fast phase that fills the arena with
+    /// no route under a limit of 4,096 states or more runs Fast's stage
+    /// search first, and the restart keeps its route, if any, as the bound.
+    /// Under a smaller limit its route never ends longer than it would
+    /// without the restart.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes.
@@ -511,7 +519,9 @@ impl Search {
     /// has two sizes: at most 2^16 slots (256 KiB) at first, then the full
     /// size. On wasm32 linear memory never shrinks, so a search that grows
     /// its table can leave linear memory up to that freed first table,
-    /// 256 KiB, past this ceiling.
+    /// 256 KiB, past this ceiling, and one that ran the stage search up to
+    /// 200,000 bytes more, for the stage search's freed buffers, which the
+    /// route need not reuse.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }
