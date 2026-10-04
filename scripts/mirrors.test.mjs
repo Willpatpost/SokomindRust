@@ -725,8 +725,8 @@ test("the README, reserved_bytes' doc, parity.mjs and the arena's own comments q
 
 test("the README and reserved_bytes' doc quote arena.rs's ROUTE_ALLOWANCE, and Mode's docs stage.rs's MIN_STATES", () => {
   const allowance =
-    read('crates/search/src/arena.rs', /pub\(crate\) const ROUTE_ALLOWANCE: usize = (\d+) \* MAX_ROUTE;/) *
-    read('crates/core/src/game.rs', /pub const MAX_ROUTE: usize = ([\d_]+);/);
+    read('crates/search/src/arena.rs', /pub\(crate\) const ROUTE_ALLOWANCE: usize = (\d+) \* MAX_ROUTE;/)
+    * read('crates/core/src/game.rs', /pub const MAX_ROUTE: usize = ([\d_]+);/);
   assert.equal(read('README.md', /stage search up to ([\d,]+) bytes/), allowance);
   assert.equal(read('crates/search/src/lib.rs', /stage search up to\s+\/\/\/ ([\d,]+) bytes more/), allowance);
   const states = read('crates/search/src/stage.rs', /pub\(crate\) const MIN_STATES: usize = (\d+);/);
