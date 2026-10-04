@@ -190,8 +190,9 @@ the stage search's inserts when it runs (32 per state of the limit, at most
 most of it, and the route never ends longer than it would have at that fill.
 When that first fill comes in the Fast phase with no route, the stage search
 runs first, and the restart keeps its route, if it finds one, as the bound.
-Only a full arena restarts it, and at most once: a route that alone fills the arena ends it there instead, and a time
-limit that hits first ends Quality in whichever phase it is in.
+Only a full arena restarts it, and at most once: a route that alone fills the
+arena ends it there instead, and a time limit that hits first ends Quality in
+whichever phase it is in.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
