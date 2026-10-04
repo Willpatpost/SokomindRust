@@ -521,7 +521,11 @@ impl Search {
     /// its table can leave linear memory up to that freed first table,
     /// 256 KiB, past this ceiling, and one that ran the stage search up to
     /// 200,000 bytes more, for the stage search's freed buffers, which the
-    /// route need not reuse.
+    /// route need not reuse. The allocator's slack comes on top: it grows
+    /// linear memory by whole requests rounded up to 64 KiB, even when the
+    /// free space at the top of the heap falls just short, so each growth can
+    /// leave up to 64 KiB more there, and up to one of the arena's record
+    /// blocks plus 128 KiB can stay unused.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }

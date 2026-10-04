@@ -161,6 +161,8 @@ assert(tiny.growth <= TINY_GROWTH_CAP, `parity memory: ultra-tiny grew a fresh i
 // reserved_bytes charges and the state table grows once, freeing its first
 // table, at most 256 KiB, which linear memory keeps. The instance may grow by at
 // most reserved_bytes plus 2 MiB for that table, the allocator and the bindings.
+// The allocator grows memory by whole requests rounded up to 64 KiB, so up to
+// one of large's record blocks plus 128 KiB can stay unused at the top.
 const fill = await freshRun('memory-fill', 'large', 16);
 const fillCap = fill.metrics.reservedBytes + 2 * MIB;
 const fillSizes = `growth=${mib(fill.growth)} reserved=${mib(fill.metrics.reservedBytes)} limit=${mib(fillCap)}`;

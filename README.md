@@ -289,6 +289,14 @@ allocates little beyond the queue. WASM linear memory never shrinks and keeps
 what a run frees: a run that grows its table can end up to 256 KiB past the
 budget, for the freed first table, and one that ran the stage search up to
 200,000 bytes (the route allowance) more, for the stage search's freed buffers.
+The allocator's slack comes on top. It grows linear memory by a whole request,
+rounded up to 64 KiB, even when the free space at the top of the heap falls just
+short of it, so each growth can leave up to 64 KiB more there. A chunk's record
+and box blocks can both miss before that space holds one, so up to one record
+block plus 128 KiB can stay unused. Where that slack ends depends on every
+earlier allocation, and a few hundred bytes more elsewhere can cost a whole
+block: Grand Hall at 16 MiB ends 753 KiB past its ceiling, 512 KiB past the
+budget.
 An allocation refused below the budget also ends the run with a
 memory limit. The search memory metric is that ceiling, computed from buffer
 sizes at the arena's full limit (arena, queue, table, and per-cell flood,
