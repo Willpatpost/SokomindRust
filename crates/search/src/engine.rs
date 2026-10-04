@@ -496,6 +496,13 @@ impl Engine {
     /// when the arena is starved, when its limit is below
     /// [`stage::MIN_STATES`], or when the ladder's buffers cannot be
     /// reserved; the search then restarts or stops as it would unstaged.
+    // Cold and out of line: it runs at most once per search. Without these
+    // attributes, here and on advance_staged, plain searches ran slower with
+    // the same work; A/B job 46990 measured them recovering a sixth to a half
+    // of that (half on large Optimal), and the inline attributes on
+    // Parts::open, push::admit and stand_walk recover most of the rest.
+    #[cold]
+    #[inline(never)]
     fn start_staging(&mut self, parent: &Parent) -> bool {
         debug_assert_eq!(self.status, Status::Running);
         debug_assert!(self.staging.is_none() && self.incumbent.is_none());
@@ -535,6 +542,10 @@ impl Engine {
     /// out, and returns the pops left: 0 while the ladder still runs. A
     /// ladder that ends hands its route, or its lack of one, to the policy
     /// as a full arena would have.
+    // Cold and out of line, as start_staging: advance calls it only while
+    // a ladder runs.
+    #[cold]
+    #[inline(never)]
     fn advance_staged(&mut self, mut pops: u32) -> u32 {
         let Some(mut staging) = self.staging.take() else {
             return pops;

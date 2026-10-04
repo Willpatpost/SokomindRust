@@ -211,7 +211,13 @@ impl Parts<'_> {
     /// expects, then returns the node's estimate. Returns `None` instead,
     /// counted in `pruned_corrals`, when the sealed-corral check finds no
     /// solution from the node, which then gets no children.
-    #[inline]
+    // Always inlined, as admit and stand_walk: once the stage ladder became a
+    // second caller of open and admit, LLVM kept both and admit's stand_walk
+    // out of line, and plain searches ran 2-4% slower with the same work
+    // (symbol diff job 46993); forcing the three inline recovers most of that
+    // (A/B job 46997, which also forced the stage-only corral::settle), and
+    // about 1% stays on large.
+    #[inline(always)]
     pub(crate) fn open(&mut self, parent: &Parent) -> Option<u32> {
         *self.expanded += 1;
         self.arena.close(parent.index);
@@ -304,7 +310,8 @@ pub(crate) fn legal(board: &Board, reach: &Reach, i: usize, from: Cell, d: usize
 /// (expanded) state only with `reopen_closed`. `best` is the incumbent's
 /// moves, which every bound prune compares against; with no incumbent none
 /// of them runs.
-#[inline]
+// Always inlined: see Parts::open.
+#[inline(always)]
 pub(crate) fn admit(
     kernel: &mut Kernel<'_>,
     parent: &Parent,
@@ -440,6 +447,8 @@ pub(crate) fn root_estimate(
 /// Stops early once the answer is known to be below `enough` (0 asks for
 /// the exact walk): the result is below `enough` exactly when the exact
 /// walk is, and equals the exact walk otherwise. O(boxes * 4).
+// Always inlined: see Parts::open.
+#[inline(always)]
 fn stand_walk(
     board: &Board,
     heuristic: &Heuristic,
