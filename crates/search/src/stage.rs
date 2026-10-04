@@ -3,8 +3,9 @@
 //! a rise must pass, the ranked candidate moves of a frame root, the boxes
 //! a stage may move, and the ladder that drives them. Steps 7 and 8 of
 //! slurm/reports/stage-port-plan.md (not tracked) landed the parts and the
-//! ladder. Until step 9 wires the ladder into the engine, only tests reach
-//! this module.
+//! ladder; step 9 wired the ladder into the engine, which hands it a full
+//! arena with no route under a policy that stages (see `Policy::stage` in
+//! engine.rs).
 //!
 //! Accept is a heuristic filter, not a necessary condition. Sink, Matched
 //! and the pocket check only reject states with no solution, as the module
@@ -48,7 +49,8 @@ mod reference;
 mod rooms;
 
 #[cfg(test)]
-pub(crate) use ladder::{Done, Ladder, Tally};
+pub(crate) use ladder::Tally;
+pub(crate) use ladder::{Done, Ladder};
 
 use crate::{
     corral::{Corral, Pockets},

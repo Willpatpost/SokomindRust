@@ -198,7 +198,8 @@ impl Movers {
     }
 
     /// The slots a stage may move, in the probe's order, once `Merge` has
-    /// run.
+    /// run. Tests only: the ladder reads the frozen cells instead.
+    #[cfg(test)]
     pub(super) fn movers(&self) -> &[u8] {
         &self.mv[..usize::from(self.mv_len)]
     }

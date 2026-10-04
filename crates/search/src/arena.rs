@@ -439,6 +439,11 @@ impl Arena {
     pub(crate) fn len(&self) -> usize {
         self.len
     }
+    /// The most records the arena holds before only the spare insert may
+    /// follow, after any scaling down to the memory budget.
+    pub(crate) fn node_limit(&self) -> usize {
+        self.node_limit
+    }
     /// Whether only the spare insert may follow: the arena holds its limit,
     /// or a growth allocation failed ([`Arena::starved`]).
     pub(crate) fn is_full(&self) -> bool {

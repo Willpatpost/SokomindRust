@@ -6,6 +6,7 @@ use crate::{
     heuristic::{Heuristic, ParentGroup},
     push::{self, Child, Parent, Parts, Prunes, Push, SkipCounters, canonicalize},
     reach::Reach,
+    stage::{self, Done, Ladder},
 };
 use sokomind_core::{ACTIONS, Board, MAX_ROUTE, OPPOSITE, State};
 use std::ops::ControlFlow;
@@ -39,6 +40,10 @@ pub(crate) struct Policy {
     /// the start re-seeded under that policy, which then runs as a fresh
     /// search with the incumbent, if any, as the bound to beat.
     restart: Option<&'static Policy>,
+    /// Whether a full arena with no incumbent hands the search to the stage
+    /// ladder (stage.rs) instead of restarting or stopping. Fast-phase only:
+    /// the ladder ends at its first route, so it needs stop_on_goal_push.
+    stage: bool,
 }
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
@@ -50,8 +55,14 @@ impl Policy {
         prune_popped_estimate: false,
         then: None,
         restart: None,
+        stage: false,
     };
     /// First route wins, with no bound on its length. Fast never proves.
+    /// When the arena fills with no route, the stage ladder searches again
+    /// from the start in the same arena, and its first route wins; when it
+    /// gives up, the search stops at the limit as it would have unstaged.
+    /// Below [`stage::MIN_STATES`] states, or when the ladder's buffers
+    /// cannot be reserved, the full arena stops the search at once.
     pub(crate) const FAST: Self = Self {
         weight: 5,
         stop_on_goal_pop: true,
@@ -60,6 +71,7 @@ impl Policy {
         prune_popped_estimate: true,
         then: None,
         restart: None,
+        stage: true,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -70,10 +82,17 @@ impl Policy {
         prune_popped_estimate: true,
         then: None,
         restart: None,
+        stage: false,
     };
     /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
     /// in the same arena. The incumbent only improves, so the result is never
     /// longer than Fast's, and its bound prunes from the first Quality pop.
+    /// After a staged route, Quality runs in place on the ladder's last
+    /// stage, and that run is incomplete: nodes it closed skipped the boxes
+    /// the stage froze, and rises past the 128 an expansion holds, like
+    /// rises accept rejected, sit in the table unqueued, so Quality reaches
+    /// their states again only through a strictly cheaper duplicate
+    /// (`reopen_closed`).
     pub(crate) const FAST_THEN_QUALITY: Self = Self {
         then: Some(&Self::QUALITY),
         ..Self::FAST
@@ -88,12 +107,17 @@ impl Policy {
     /// Quality mode: [`Self::FAST_THEN_QUALITY`], except that the first time
     /// the arena fills, in either phase and with a route or without, the
     /// search starts over once as plain [`Self::QUALITY`] in the emptied
-    /// arena, which keeps only its route's path, as the bound to beat. Fast
-    /// then Quality would have stopped at that same fill with that same
-    /// route, so the result is never longer than Fast then Quality's; when
-    /// Fast fills the arena without a route, it is the plain Quality result.
-    /// When the route's path alone leaves no room for the start, it stops
-    /// where Fast then Quality does.
+    /// arena, which keeps only its route's path, as the bound to beat. A
+    /// fill in the Quality phase finds Fast then Quality stopping there with
+    /// that same route, so the result is never longer than Fast then
+    /// Quality's would be. When Fast fills the arena without a route, the
+    /// stage ladder runs first, as under [`Self::FAST`], and the restart
+    /// carries its route, so the result is never longer than the staged
+    /// route; a ladder that gives up leaves the plain Quality result. Below
+    /// [`stage::MIN_STATES`] states, where the ladder declines, the result
+    /// is never longer than Fast then Quality's, and a routeless fill gives
+    /// the plain Quality result. When the route's path alone leaves no room
+    /// for the start, it does what Fast then Quality does there.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         then: Some(&Self::QUALITY_RESTART),
         restart: Some(&Self::QUALITY),
@@ -115,20 +139,39 @@ impl Policy {
 // Exact soundness assumes one admissible weight for the whole search.
 const _: () = assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_none());
 const _: () = assert!(Policy::EXACT.weight == 1);
+// Nothing the stage ladder finds may feed a proof (see stage.rs).
+const _: () = assert!(!Policy::EXACT.stage);
+// Fast and the policies that start as Fast stage; Quality phases never
+// do.
+const _: () = assert!(Policy::FAST.stage && Policy::FAST_THEN_QUALITY.stage);
+const _: () = assert!(Policy::FAST_THEN_QUALITY_RESTART.stage);
+const _: () = assert!(!Policy::QUALITY.stage && !Policy::QUALITY_RESTART.stage);
 // Mode's docs (lib.rs) call Quality's weight lighter than Fast's, and the
 // arena's key-width test takes Fast's as the largest.
 const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // Every `then` and `restart` target is itself in `Policy::ALL`, so the
 // checks that loop over it cover every policy a search can switch to. A
 // restarted policy has no next phase and no restart of its own, so it runs
-// to the end and a search restarts at most once.
+// to the end and a search restarts at most once. A staging policy stops on
+// a solved push, since the ladder ends at its first route, and is weighted.
+// No `then` or `restart` target stages, so only a root policy stages, and a
+// search stages at most once: the ladder's end hands over to such a target
+// or ends the search.
 const _: () = {
     let all = Policy::ALL;
     let mut i = 0;
     while i < all.len() {
-        assert!(listed(all[i].then) && listed(all[i].restart));
-        if let Some(next) = all[i].restart {
+        let p = all[i];
+        assert!(listed(p.then) && listed(p.restart));
+        if let Some(next) = p.restart {
             assert!(next.then.is_none() && next.restart.is_none());
+            assert!(!next.stage);
+        }
+        if let Some(next) = p.then {
+            assert!(!next.stage);
+        }
+        if p.stage {
+            assert!(p.stop_on_goal_push && p.weight > 1);
         }
         i += 1;
     }
@@ -174,6 +217,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 prune_popped_estimate,
                 then,
                 restart,
+                stage,
             } = *a;
             weight == b.weight
                 && stop_on_goal_pop == b.stop_on_goal_pop
@@ -182,6 +226,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 && prune_popped_estimate == b.prune_popped_estimate
                 && same(then, b.then)
                 && same(restart, b.restart)
+                && stage == b.stage
         }
         (None, None) => true,
         _ => false,
@@ -206,13 +251,35 @@ pub(crate) struct Engine {
     expanded: u32,
     skipped: SkipCounters,
     incumbent: Option<u32>,
-    /// Records a restart dropped; they still count as generated. The
-    /// incumbent's path stays in the arena, so it counts there, once.
+    /// Records a restart or the stage ladder's reseeds dropped; they still
+    /// count as generated. A kept path stays in the arena, so it counts
+    /// there, once.
     discarded: u32,
     /// g + queued h (at least 1) of a node whose expansion a limit cut short.
     /// Under an admissible h, no route through its unpushed successors along
     /// this path is shorter, so the exact frontier must include it.
     interrupted_f: Option<u64>,
+    /// Some while the stage ladder runs the search; never with an incumbent.
+    staging: Option<Staging>,
+    /// The last ladder's tally, for tests.
+    #[cfg(test)]
+    staged: Option<stage::Tally>,
+}
+
+/// The stage ladder running a search whose arena filled with no route.
+struct Staging {
+    ladder: Ladder,
+    /// g + queued h (at least 1) of the parent whose insert filled the
+    /// arena. The ladder's first reseed drops that parent, so a ladder that
+    /// gives up stops with the same `interrupted_f` an unstaged stop would.
+    trigger_f: u64,
+}
+
+/// g + queued h (at least 1) of `parent`, the f a limit that cuts its
+/// expansion short records: an expanded node is unsolved, so at least one
+/// move remains.
+fn limit_f(parent: &Parent) -> u64 {
+    parent.node.g as u64 + parent.queued_h.max(1) as u64
 }
 
 /// What [`Engine::pop`] made of one queue entry.
@@ -233,6 +300,9 @@ enum Inserted {
     /// of its parent's expansion. A solved child was kept first and is the
     /// incumbent the restart carries; any other child is dropped too.
     Restarted,
+    /// The arena filled with no route and the stage ladder took over; the
+    /// parent is gone.
+    Staged,
     /// The search ended: a limit or a solved push stopped it.
     Stopped,
 }
@@ -270,6 +340,9 @@ impl Engine {
             incumbent: None,
             discarded: 0,
             interrupted_f: None,
+            staging: None,
+            #[cfg(test)]
+            staged: None,
         };
         search.seed();
         Ok(search)
@@ -364,9 +437,11 @@ impl Engine {
             .min(self.interrupted_f.unwrap_or(u64::MAX))
     }
     /// Ends a running search from outside: `reason` is a limit or
-    /// `Cancelled`, never a terminal verdict the search did not reach.
+    /// `Cancelled`, never a terminal verdict the search did not reach. A
+    /// running stage ladder is dropped with its unfinished stage.
     pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
+            self.staging = None;
             self.status = match reason {
                 StopReason::Cancelled => Status::Cancelled,
                 StopReason::TimeLimit => Status::TimeLimit,
@@ -413,15 +488,124 @@ impl Engine {
         self.interrupted_f = Some(f);
         self.status = self.arena.limit_status();
     }
-    /// Work is sliced by queue pops so a worker can yield, report, or cancel.
+    /// Hands the search to the stage ladder when the arena filled, while
+    /// expanding `parent`, with no route: builds the ladder from the start
+    /// with the work [`stage::work`] gives for the arena's limit, and begins
+    /// it, which empties the arena but for a fresh copy of the start. The
+    /// next [`Self::advance`] call runs it. False, with nothing changed,
+    /// when the arena is starved, when its limit is below
+    /// [`stage::MIN_STATES`], or when the ladder's buffers cannot be
+    /// reserved; the search then restarts or stops as it would unstaged.
+    fn start_staging(&mut self, parent: &Parent) -> bool {
+        debug_assert_eq!(self.status, Status::Running);
+        debug_assert!(self.staging.is_none() && self.incumbent.is_none());
+        let limit = self.arena.node_limit();
+        // The non-full insert path already stops a starved search, so this
+        // is a guard: a starved arena could not hold the ladder's stages.
+        if self.arena.starved() || limit < stage::MIN_STATES {
+            return false;
+        }
+        let Ok(mut ladder) = Ladder::new(
+            &self.board,
+            &self.heuristic,
+            &self.start,
+            stage::work(limit),
+            self.policy.weight,
+            self.policy.reopen_closed,
+        ) else {
+            return false;
+        };
+        // Only a root policy stages, so no restart has re-seeded the arena,
+        // and the start is still the record new's seed inserted first.
+        debug_assert!(self.arena.node(0).state == self.start);
+        // begin cannot fail here, so the ladder never gives up before its
+        // first stage: insert runs only in a running search, and seed ends
+        // the search when the start has no assignment, so the start has an
+        // estimate; clear_keeping(0) keeps one record, below a limit of at
+        // least MIN_STATES; and a starved arena was declined above.
+        ladder.begin(&mut self.parts());
+        self.discarded += ladder.take_dropped();
+        self.staging = Some(Staging {
+            ladder,
+            trigger_f: limit_f(parent),
+        });
+        true
+    }
+    /// Runs the stage ladder one unit per pop until it ends or the pops run
+    /// out, and returns the pops left: 0 while the ladder still runs. A
+    /// ladder that ends hands its route, or its lack of one, to the policy
+    /// as a full arena would have.
+    fn advance_staged(&mut self, mut pops: u32) -> u32 {
+        let Some(mut staging) = self.staging.take() else {
+            return pops;
+        };
+        let mut done = None;
+        while done.is_none() && pops > 0 {
+            pops -= 1;
+            done = staging.ladder.step(&mut self.parts());
+        }
+        self.discarded += staging.ladder.take_dropped();
+        let Some(done) = done else {
+            self.staging = Some(staging);
+            return 0;
+        };
+        #[cfg(test)]
+        {
+            self.staged = Some(staging.ladder.tally());
+        }
+        let trigger_f = staging.trigger_f;
+        // The ladder goes before its route becomes the incumbent, so the
+        // two never coexist.
+        drop(staging);
+        // An arena that cannot grow seeds no fresh search and runs no more
+        // Quality: it ends the search, as it does an unstaged one.
+        let starved = self.arena.starved();
+        match done {
+            Done::Solved(id) => {
+                self.incumbent = Some(id);
+                // FTQR starts over as plain Quality, the staged route the
+                // bound to beat.
+                let restarted = !starved && self.restart();
+                if !restarted {
+                    if !self.next_phase() {
+                        // FAST: the staged route ends the search, as a
+                        // solved push does.
+                        self.status = Status::Solved;
+                    } else if starved {
+                        // FTQ, or FTQR, keeps the route but stops there.
+                        self.stop_at_limit(trigger_f);
+                    }
+                    // Otherwise FTQ's Quality phase, or FTQR's whose route
+                    // left no room for a fresh start, goes on in place.
+                }
+            }
+            // FTQR starts over as plain Quality with no route; FAST and FTQ
+            // stop where they would have unstaged.
+            Done::GaveUp => {
+                if starved || !self.restart() {
+                    self.stop_at_limit(trigger_f);
+                }
+            }
+        }
+        pops
+    }
+    /// Work is sliced by pops so a worker can yield, report, or cancel. A
+    /// pop is one queue pop, or one stage ladder unit while the ladder runs
+    /// the search; a search that hands over to the ladder returns at once.
     /// Stale, solved and dominated pops count toward `pops` without
     /// expanding anything.
-    pub(crate) fn advance(&mut self, pops: u32) {
+    pub(crate) fn advance(&mut self, mut pops: u32) {
+        debug_assert!(self.staging.is_none() || self.incumbent.is_none());
         if self.status != Status::Running {
             return;
         }
         // Each pop runs these steps in order, and the first check that
         // rejects something skips the rest for it:
+        // - stage: while the stage ladder runs the search, a pop is one of
+        //   its units instead: one rank unit, one movers unit, one stage
+        //   expansion, one accept unit (a ban or one check), one commit, or
+        //   one fail pass. When the ladder ends, its route, or a full arena
+        //   without one, goes to the policy, and the pops left go on below.
         // - pop: an empty queue ends the search. A stale entry (stale_pops)
         //   is skipped, a solved node is recorded and skipped or ends the
         //   search, and a node the bound prunes (pruned_bound) is skipped.
@@ -435,8 +619,14 @@ impl Engine {
         //   settled child's duplicate (pruned_duplicates), assignment
         //   (pruned_assignment), g + h bound and stand walk (pruned_bound).
         // - insert: store and queue the child and record a solved one. A
-        //   full arena starts the search over or ends it, and so may a
-        //   solved push.
+        //   full arena hands the search to the stage ladder, starts it over
+        //   or ends it, and so may a solved push.
+        if self.staging.is_some() {
+            pops = self.advance_staged(pops);
+            if self.status != Status::Running || self.staging.is_some() {
+                return;
+            }
+        }
         for _ in 0..pops {
             let parent = match self.pop() {
                 Popped::Expand(parent) => parent,
@@ -509,8 +699,8 @@ impl Engine {
     /// push the static check ([`push::legal`]) passes goes to
     /// [`Self::admit`], and each child it admits to [`Self::insert`], unless
     /// the prologue's sealed-corral check finds no solution from the node,
-    /// which then gets no children. Breaks when the search ended during the
-    /// expansion.
+    /// which then gets no children. Breaks when the search ended or handed
+    /// over to the stage ladder during the expansion.
     #[inline]
     fn expand(&mut self, parent: Parent) -> ControlFlow<()> {
         let Some(parent_h) = self.parts().open(&parent) else {
@@ -547,7 +737,9 @@ impl Engine {
                     // The arena was emptied but for the incumbent's path;
                     // the next pop takes the re-seeded start.
                     Inserted::Restarted => return ControlFlow::Continue(()),
-                    Inserted::Stopped => return ControlFlow::Break(()),
+                    // The arena now holds the ladder's start, and the next
+                    // advance call runs the ladder.
+                    Inserted::Staged | Inserted::Stopped => return ControlFlow::Break(()),
                 }
             }
         }
@@ -583,11 +775,13 @@ impl Engine {
     }
     /// Stores and queues an admitted child, recording it when it is solved.
     /// At a full arena a solved child is kept as the incumbent, in the spare
-    /// slot, and then the search starts over or ends. Below the limit a
-    /// solved child may end it, and so does a failed growth allocation,
-    /// with [`Status::MemoryLimit`].
+    /// slot; then, with no incumbent, a staging policy hands the search to
+    /// the stage ladder, and otherwise the search starts over or ends.
+    /// Below the limit a solved child may end it, and so does a failed
+    /// growth allocation, with [`Status::MemoryLimit`].
     #[inline]
     fn insert(&mut self, parent: &Parent, child: Child) -> Inserted {
+        debug_assert!(self.staging.is_none() || self.incumbent.is_none());
         // admit's g + h prune left g + h < best, so a solved child always
         // improves the incumbent.
         let goal = child.is_goal(&self.board);
@@ -599,11 +793,13 @@ impl Engine {
                 self.incumbent = Some(self.arena.insert(node, slot));
             }
             // The rest of this expansion belongs to the discarded arena.
+            if self.policy.stage && self.incumbent.is_none() && self.start_staging(parent) {
+                return Inserted::Staged;
+            }
             if self.restart() {
                 return Inserted::Restarted;
             }
-            // An expanded node is unsolved, so at least one move remains.
-            self.stop_at_limit(parent.node.g as u64 + parent.queued_h.max(1) as u64);
+            self.stop_at_limit(limit_f(parent));
             return Inserted::Stopped;
         }
         let id = self.arena.insert(node, slot);
@@ -623,7 +819,7 @@ impl Engine {
         // arena but with no restart: a fresh search would need the same
         // allocation.
         if self.arena.starved() {
-            self.stop_at_limit(parent.node.g as u64 + parent.queued_h.max(1) as u64);
+            self.stop_at_limit(limit_f(parent));
             return Inserted::Stopped;
         }
         Inserted::Queued
@@ -685,41 +881,13 @@ impl Engine {
         );
         self.prunes = prunes;
     }
-
-    /// Runs the stage ladder from the start of this fresh engine until it
-    /// solves, records its route as the incumbent and returns its tally.
-    /// Panics when the ladder gives up. Temporary: step 9 of the stage port
-    /// plan wires the ladder into the search and replaces this driver.
-    fn run_stage_ladder(&mut self, work: u32) -> crate::stage::Tally {
-        use crate::stage::{Done, Ladder};
-        let ladder = Ladder::new(
-            &self.board,
-            &self.heuristic,
-            &self.start,
-            work,
-            self.policy.weight,
-            self.policy.reopen_closed,
-        );
-        let mut ladder = ladder.expect("the ladder's buffers");
-        ladder.begin(&mut self.parts());
-        let id = loop {
-            match ladder.step(&mut self.parts()) {
-                Some(Done::Solved(id)) => break id,
-                Some(Done::GaveUp) => panic!("the stage ladder gave up"),
-                None => {}
-            }
-        };
-        self.incumbent = Some(id);
-        self.discarded += ladder.take_dropped();
-        ladder.tally()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Policy};
+    use super::{Engine, Policy, same};
     use crate::{
-        SearchStats, Status,
+        SearchStats, Status, StopReason,
         exact::ExactSearch,
         heuristic::Heuristic,
         push::Prunes,
@@ -727,6 +895,7 @@ mod tests {
         testkit::{Lcg, catalog, explored_catalog, huge, random_room},
     };
     use sokomind_core::{Board, Game};
+    use std::time::Instant;
 
     /// Small enough for debug builds. At this limit Fast finds 30 catalog
     /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
@@ -823,6 +992,11 @@ mod tests {
     /// run. Returns the Quality run, the Fast then Quality run and how they
     /// relate.
     fn check_restart(context: &str, board: &Board, max_states: usize) -> (Engine, Engine, Restart) {
+        // The bounds and the Fresh equality below hold only unstaged.
+        assert!(
+            max_states < stage::MIN_STATES,
+            "{context}: the ladder would stage"
+        );
         let (both, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
         let (mut restart, _) = run(board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
         let stats = restart.stats();
@@ -1396,28 +1570,123 @@ mod tests {
         }
     }
 
-    /// Runs the stage ladder on huge with `limit` states and `work` inserts,
-    /// replays its route, which must be the probe's 812 moves of 268 pushes,
-    /// and returns its tally. The checks budget must not have ended it.
-    fn stage_ladder_on_huge(limit: usize, work: u32) -> Tally {
+    /// The memory budget of the staged tests, the probe's.
+    const STAGED_MIB: usize = 64;
+    /// The limit `staged_generated_bound` and `staged_slicing_is_deterministic`
+    /// give a staging policy on huge: at least `stage::MIN_STATES`, so the
+    /// arena, which fills with no route, stages, and small enough for a cheap
+    /// fill.
+    const STAGED: usize = 8_192;
+
+    /// A fresh engine for `policy` on huge from its start, at `max_states`
+    /// states and `STAGED_MIB`.
+    fn fresh_on_huge(policy: Policy, max_states: usize) -> Engine {
         let board = huge();
-        let mut engine =
-            Engine::new(board.clone(), board.initial(), Policy::FAST, limit, 64).unwrap();
-        let tally = engine.run_stage_ladder(work);
-        let route = engine.solution().unwrap().expect("a staged route");
-        let mut game = Game::new(board);
+        Engine::new(
+            board.clone(),
+            board.initial(),
+            policy,
+            max_states,
+            STAGED_MIB,
+        )
+        .unwrap()
+    }
+
+    /// Runs `policy` on huge from its start at `max_states` states and
+    /// `STAGED_MIB`, in slices of `pops`, to a terminal status.
+    fn on_huge(policy: Policy, max_states: usize, pops: u32) -> Engine {
+        let mut engine = fresh_on_huge(policy, max_states);
+        while engine.status() == Status::Running {
+            engine.advance(pops);
+        }
+        engine
+    }
+
+    /// Rebuilds `engine`'s route on huge and replays it in a fresh game,
+    /// which it must solve in the moves the engine counts. Returns its moves
+    /// and pushes.
+    fn replay_on_huge(engine: &mut Engine) -> (u32, u32) {
+        let route = engine.solution().unwrap().expect("a route");
+        let mut game = Game::new(huge());
         game.replay(&route).unwrap();
         assert!(game.solved());
-        assert_eq!((game.moves(), game.pushes()), (812, 268));
+        assert_eq!(Some(game.moves()), engine.best_moves());
+        (game.moves(), game.pushes())
+    }
+
+    /// Drives `engine` to a terminal status one pop at a time, checking that
+    /// it never stages, and that it ends with no route.
+    fn drive_unstaged(engine: &mut Engine) {
+        while engine.status() == Status::Running {
+            engine.advance(1);
+            assert!(engine.staging.is_none());
+        }
+        assert!(engine.staged.is_none() && engine.best_moves().is_none());
+    }
+
+    /// Checks the counter identities `engine` must keep, staged or not.
+    fn assert_counters(engine: &Engine) {
+        let stats = engine.stats();
+        assert_eq!(
+            stats.unique_states + stats.duplicate_improvements,
+            engine.generated()
+        );
+        assert!(engine.expanded() <= engine.generated());
+        assert!(stats.stale_pops <= stats.duplicate_improvements);
+    }
+
+    /// What a run ends with, for comparing runs.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Ended {
+        status: Status,
+        route: Option<String>,
+        expanded: u32,
+        generated: u32,
+        stats: SearchStats,
+        /// Whether a ladder ran to its end.
+        staged: bool,
+    }
+
+    /// What `engine`, which has ended, ends with; rebuilding its route also
+    /// replays it.
+    fn ended(engine: &mut Engine) -> Ended {
+        Ended {
+            status: engine.status(),
+            route: engine.solution().unwrap(),
+            expanded: engine.expanded(),
+            generated: engine.generated(),
+            stats: engine.stats(),
+            staged: engine.staged.is_some(),
+        }
+    }
+
+    /// Fast on huge at `max_states` states and `STAGED_MIB`, in slices of
+    /// 2^20 pops as a worker runs it: the arena fills with no route, and the
+    /// staged route, the probe's 812 moves of 268 pushes, ends the search.
+    /// Prints the checks spent and the time taken, and returns the ladder's
+    /// tally, whose checks budget must not have ended it.
+    fn staged_fast_on_huge(max_states: usize) -> Tally {
+        let started = Instant::now();
+        let mut engine = on_huge(Policy::FAST, max_states, 1 << 20);
+        let elapsed = started.elapsed().as_millis();
+        assert_eq!(engine.status(), Status::Solved);
+        assert_eq!(replay_on_huge(&mut engine), (812, 268));
+        let tally = engine.staged.expect("a staged search");
         assert!(!tally.checks_bound);
-        println!("checks {} for work {}", tally.checks, tally.work);
+        println!(
+            "checks {} for work {}, {elapsed} ms",
+            tally.checks, tally.work
+        );
         tally
     }
 
-    /// The ladder at the probe's 64 MiB settings matches probe-46758.
+    /// Staged Fast at the probe's 64 MiB settings matches probe-46758. The
+    /// ladder's first reseed keeps only the start, so it runs as the probe's
+    /// did from a fresh arena, and the scaled limit gives the probe's 2^20
+    /// work.
     #[test]
     #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn stage_ladder_routes_huge_at_64_mib() {
+    fn staged_fast_routes_huge_at_64_mib() {
         let Tally {
             work,
             commits,
@@ -1428,7 +1697,7 @@ mod tests {
             rejects,
             checks: _,
             checks_bound: _,
-        } = stage_ladder_on_huge(60_000_000, 1 << 20);
+        } = staged_fast_on_huge(60_000_000);
         assert_eq!(
             (work, commits, failures, backtracks, deepest, accepts),
             (617_192, 26, 10, 3, 22, 21_940)
@@ -1436,10 +1705,10 @@ mod tests {
         assert_eq!(rejects, [187, 17_530, 0, 1_706, 2_487, 4]);
     }
 
-    /// The ladder at the gate's limit of 20,000 states matches probe-46758.
+    /// Staged Fast at the gate's limit of 20,000 states matches probe-46758.
     #[test]
     #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn stage_ladder_routes_huge_at_the_gate() {
+    fn staged_fast_routes_huge_at_the_gate() {
         let Tally {
             work,
             commits,
@@ -1450,12 +1719,140 @@ mod tests {
             rejects,
             checks: _,
             checks_bound: _,
-        } = stage_ladder_on_huge(20_000, stage::work(20_000));
+        } = staged_fast_on_huge(20_000);
         println!("deepest {deepest}");
         assert_eq!(
             (work, commits, failures, backtracks, accepts),
             (192_499, 26, 10, 3, 7_766)
         );
         assert_eq!(rejects, [187, 5_956, 0, 1_593, 0, 4]);
+    }
+
+    /// Exact never stages: at a limit where Fast would, its full arena on
+    /// huge ends the search with no route.
+    #[test]
+    fn exact_never_stages() {
+        let mut engine = fresh_on_huge(Policy::EXACT, 20_000);
+        drive_unstaged(&mut engine);
+        assert!(matches!(
+            engine.status(),
+            Status::StateLimit | Status::MemoryLimit
+        ));
+    }
+
+    /// Below `stage::MIN_STATES` states the ladder declines: Fast fills the
+    /// arena on huge with no route and stops there, as it does unstaged.
+    #[test]
+    fn stage_declines_below_min_states() {
+        let mut engine = fresh_on_huge(Policy::FAST, stage::MIN_STATES - 1);
+        drive_unstaged(&mut engine);
+        assert_eq!(engine.status(), Status::StateLimit);
+    }
+
+    /// An arena that cannot grow never stages, at a limit where a full one
+    /// would: the search stops at once with `MemoryLimit`, as in
+    /// `a_refused_growth_stops_with_memory_limit`.
+    #[test]
+    fn stage_declines_when_starved() {
+        let mut engine = fresh_on_huge(Policy::FAST, stage::MIN_STATES);
+        engine.arena.refuse_growth(true);
+        drive_unstaged(&mut engine);
+        assert_eq!(engine.status(), Status::MemoryLimit);
+    }
+
+    /// A staged search's records stay within the bound that keeps every
+    /// counter in u32 (section 4.6 of slurm/reports/stage-port-plan.md, not
+    /// tracked): two arenas of at most L + 1 records, the ladder's work, and
+    /// one live copy of a root per reseed, at most 12,870 of them. The
+    /// counter identities hold across the ladder's reseeds.
+    #[test]
+    fn staged_generated_bound() {
+        let engine = on_huge(Policy::FAST, STAGED, 1);
+        assert!(engine.staged.is_some());
+        let limit = STAGED as u64;
+        let bound = 2 * (limit + 1) + u64::from(stage::work(STAGED)) + 12_870;
+        let generated = engine.generated();
+        assert!(u64::from(generated) <= bound, "{generated} > {bound}");
+        assert_counters(&engine);
+    }
+
+    /// A staged search ends the same in slices of one pop as in slices of
+    /// 2^20: the ladder runs one unit per pop, and the pops a slice has left
+    /// when it ends go to the search it hands back to. Quality mode starts
+    /// over when the ladder ends, with its route or without, so it always
+    /// hands back.
+    #[test]
+    fn staged_slicing_is_deterministic() {
+        let policy = Policy::FAST_THEN_QUALITY_RESTART;
+        let one = ended(&mut on_huge(policy, STAGED, 1));
+        assert!(one.staged);
+        assert_eq!(ended(&mut on_huge(policy, STAGED, 1 << 20)), one);
+    }
+
+    /// The three staging policies on huge at 20,000 states, where Fast fills
+    /// the arena with no route. Fast ends with the staged route, the
+    /// probe's 812 moves. Fast then Quality goes on in place from it, and
+    /// Quality mode starts over as plain Quality with it as the bound, at
+    /// the pop that ends the ladder; no route ends longer, every one
+    /// replays, and the counter identities hold after either handoff.
+    #[test]
+    fn fast_ftq_ftqr_handoffs() {
+        const LIMIT: usize = 20_000;
+        let mut fast = on_huge(Policy::FAST, LIMIT, 1);
+        assert_eq!(fast.status(), Status::Solved);
+        assert!(fast.staged.is_some());
+        assert_eq!(replay_on_huge(&mut fast), (812, 268));
+        let staged = fast.best_moves().unwrap();
+        let mut both = on_huge(Policy::FAST_THEN_QUALITY, LIMIT, 1);
+        assert!(both.staged.is_some());
+        assert!(same(Some(&both.policy), Some(&Policy::QUALITY)));
+        assert_counters(&both);
+        let (moves, _) = replay_on_huge(&mut both);
+        assert!(moves <= staged, "{moves} > {staged}");
+        let mut restart = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, LIMIT);
+        while restart.staged.is_none() {
+            assert_eq!(restart.status(), Status::Running);
+            restart.advance(1);
+        }
+        // The pop that ended the ladder started over as plain Quality, not
+        // as Quality mode's second phase in place, with the staged route.
+        assert!(same(Some(&restart.policy), Some(&Policy::QUALITY)));
+        assert_eq!(restart.best_moves(), Some(staged));
+        while restart.status() == Status::Running {
+            restart.advance(1);
+        }
+        assert_counters(&restart);
+        let (moves, _) = replay_on_huge(&mut restart);
+        assert!(moves <= staged, "{moves} > {staged}");
+    }
+
+    /// A stop while the ladder runs drops it with its unfinished stage and
+    /// ends the search with the stop's status and no route, and a later
+    /// advance does nothing. At `stage::MIN_STATES` states the fill before
+    /// it is cheap.
+    #[test]
+    fn stop_during_staging() {
+        for (reason, status) in [
+            (StopReason::TimeLimit, Status::TimeLimit),
+            (StopReason::Cancelled, Status::Cancelled),
+        ] {
+            let mut engine = fresh_on_huge(Policy::FAST, stage::MIN_STATES);
+            while engine.staging.is_none() {
+                assert_eq!(engine.status(), Status::Running);
+                engine.advance(1);
+            }
+            // Some ladder units, past the first stage's rank and movers
+            // units, so the stop lands mid-stage with stage records in the
+            // arena.
+            engine.advance(4_096);
+            assert!(engine.staging.is_some(), "the ladder ended early");
+            assert!(engine.arena.len() > 1);
+            engine.stop(reason);
+            assert!(engine.staging.is_none() && engine.staged.is_none());
+            assert_eq!((engine.status(), engine.best_moves()), (status, None));
+            let generated = engine.generated();
+            engine.advance(1);
+            assert_eq!((engine.status(), engine.generated()), (status, generated));
+        }
     }
 }
