@@ -190,31 +190,6 @@ pub(crate) enum Done {
     GaveUp,
 }
 
-/// What a ladder did, for tests.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Tally {
-    /// Inserts charged to the work budget.
-    pub(crate) work: u32,
-    /// Rises committed as frames.
-    pub(crate) commits: u32,
-    /// Stages that failed.
-    pub(crate) failures: u32,
-    /// Backjumps.
-    pub(crate) backtracks: u32,
-    /// The highest frame index pushed.
-    pub(crate) deepest: u32,
-    /// Rises that reached the ban step.
-    pub(crate) accepts: u32,
-    /// Rejected rises by the step that rejected them: ban, Lane, Sink,
-    /// Line, Matched, the pocket check.
-    pub(crate) rejects: [u32; 6],
-    /// Checks spent.
-    pub(crate) checks: u32,
-    /// Whether the checks budget ended the ladder.
-    pub(crate) checks_bound: bool,
-}
-
 /// The stage ladder of one search; see the module docs. It owns its facts
 /// and buffers, and borrows the search's components one unit at a time.
 pub(crate) struct Ladder {
@@ -246,8 +221,6 @@ pub(crate) struct Ladder {
     backtracks: u32,
     /// Records the reseeds dropped since the last [`Ladder::take_dropped`].
     dropped: u32,
-    #[cfg(test)]
-    tally: Tally,
 }
 
 impl Ladder {
@@ -304,8 +277,6 @@ impl Ladder {
             cap_end: 0,
             backtracks: 0,
             dropped: 0,
-            #[cfg(test)]
-            tally: Tally::default(),
         })
     }
 
@@ -328,18 +299,10 @@ impl Ladder {
     pub(crate) fn step(&mut self, parts: &mut Parts<'_>) -> Option<Done> {
         if !matches!(self.phase, Phase::Search | Phase::Over) {
             if self.checks == 0 {
-                #[cfg(test)]
-                {
-                    self.tally.checks_bound = true;
-                }
                 self.phase = Phase::Over;
                 return Some(Done::GaveUp);
             }
             self.checks -= 1;
-            #[cfg(test)]
-            {
-                self.tally.checks += 1;
-            }
         }
         let done = match self.phase {
             Phase::Rank(unit) => self.rank_unit(parts, unit),
@@ -360,12 +323,6 @@ impl Ladder {
     /// search adds to its discarded count.
     pub(crate) fn take_dropped(&mut self) -> u32 {
         std::mem::take(&mut self.dropped)
-    }
-
-    /// What the ladder did so far.
-    #[cfg(test)]
-    pub(crate) fn tally(&self) -> Tally {
-        self.tally
     }
 
     /// Pushes a frame for `root`, the kept path's record `depth`, with its
@@ -392,11 +349,6 @@ impl Ladder {
             bans: [Ban::Mask(0, 0); MAX_BANS],
         });
         self.root = *root;
-        #[cfg(test)]
-        {
-            // Below FRAMES, so it fits u32.
-            self.tally.deepest = self.tally.deepest.max(top as u32);
-        }
         self.phase = Phase::Rank(RankUnit::Rank(0));
     }
 
@@ -499,10 +451,6 @@ impl Ladder {
                 let rise = self.facts.rooms.level(board, heuristic, &node.state) > level;
                 let id = arena.insert(node, slot);
                 self.work -= 1;
-                #[cfg(test)]
-                {
-                    self.tally.work += 1;
-                }
                 if goal {
                     return Some(Done::Solved(id));
                 }
@@ -523,12 +471,8 @@ impl Ladder {
         None
     }
 
-    /// Fails the stage: counts the failure and turns to the fail loop.
+    /// Fails the stage: turns to the fail loop.
     fn fail_with(&mut self, why: Why) -> Option<Done> {
-        #[cfg(test)]
-        {
-            self.tally.failures += 1;
-        }
         self.phase = Phase::Fail(why);
         None
     }
@@ -555,10 +499,6 @@ impl Ladder {
         let child = parts.arena.node(id).state;
         let verdict = match step {
             Step::Ban => {
-                #[cfg(test)]
-                {
-                    self.tally.accepts += 1;
-                }
                 if self.banned(parts.board, parts.heuristic, &child) {
                     Verdict::Reject
                 } else {
@@ -583,13 +523,7 @@ impl Ladder {
                 Phase::Accept { rise, step }
             }
             Verdict::Pass => Phase::Commit(id),
-            Verdict::Reject => {
-                #[cfg(test)]
-                {
-                    self.tally.rejects[reject_index(step)] += 1;
-                }
-                self.enter_rise(parts.arena, usize::from(rise) + 1)
-            }
+            Verdict::Reject => self.enter_rise(parts.arena, usize::from(rise) + 1),
         };
         None
     }
@@ -617,10 +551,6 @@ impl Ladder {
         };
         let kept = parts.arena.node(k).state;
         debug_assert_eq!(kept, child, "the kept path ends at the rise");
-        #[cfg(test)]
-        {
-            self.tally.commits += 1;
-        }
         self.push_frame(parts, k, &child);
         None
     }
@@ -645,10 +575,6 @@ impl Ladder {
             return Some(Done::GaveUp);
         }
         self.backtracks += 1;
-        #[cfg(test)]
-        {
-            self.tally.backtracks += 1;
-        }
         let (target, ban) = self.culprit(parts);
         self.frames.truncate(target + 1);
         let frame = self.top_mut();
@@ -761,19 +687,6 @@ fn tools<'a>(parts: &'a mut Parts<'_>) -> Tools<'a> {
         reach: parts.reach,
         deadlock: parts.deadlock,
         corral: parts.corral,
-    }
-}
-
-/// The index in `Tally::rejects` of a reject at `step`.
-#[cfg(test)]
-fn reject_index(step: Step) -> usize {
-    match step {
-        Step::Ban => 0,
-        Step::Check(Check::Lane) => 1,
-        Step::Check(Check::Sink) => 2,
-        Step::Check(Check::Line(_)) => 3,
-        Step::Check(Check::Matched) => 4,
-        Step::Check(Check::PocketsInit | Check::PocketPop) => 5,
     }
 }
 

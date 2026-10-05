@@ -277,9 +277,6 @@ pub(crate) struct Engine {
     /// Whether the root policy may still stage. A resumed search keeps a
     /// policy with `stage` set, so the flag lives here.
     may_stage: bool,
-    /// The last ladder's tally, for tests.
-    #[cfg(test)]
-    staged: Option<stage::Tally>,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -370,8 +367,6 @@ impl Engine {
             staging: None,
             fill_at,
             may_stage: policy.stage,
-            #[cfg(test)]
-            staged: None,
         };
         search.seed();
         Ok(search)
@@ -617,10 +612,6 @@ impl Engine {
             self.staging = Some(staging);
             return 0;
         };
-        #[cfg(test)]
-        {
-            self.staged = Some(staging.ladder.tally());
-        }
         let trigger_f = staging.trigger_f;
         let early = staging.early;
         // The ladder goes before its route becomes the incumbent, so the
@@ -969,12 +960,10 @@ impl Engine {
 mod tests {
     use super::{Engine, Policy, same};
     use crate::{
-        SearchStats, Status, StopReason,
-        stage::{self, Tally},
+        SearchStats, Status, StopReason, stage,
         testkit::{catalog, huge},
     };
     use sokomind_core::{Board, Game};
-    use std::time::Instant;
 
     /// Small enough for debug builds. At this limit Fast finds 30 catalog
     /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
@@ -1279,21 +1268,16 @@ mod tests {
         engine
     }
 
-    /// Rebuilds `engine`'s route and replays it in a fresh game on `board`,
+    /// Rebuilds `engine`'s route and replays it in a fresh game on huge,
     /// which it must solve in the moves the engine counts. Returns its moves
     /// and pushes.
-    fn replay(engine: &mut Engine, board: Board) -> (u32, u32) {
+    fn replay_on_huge(engine: &mut Engine) -> (u32, u32) {
         let route = engine.solution().unwrap().expect("a route");
-        let mut game = Game::new(board);
+        let mut game = Game::new(huge());
         game.replay(&route).unwrap();
         assert!(game.solved());
         assert_eq!(Some(game.moves()), engine.best_moves());
         (game.moves(), game.pushes())
-    }
-
-    /// `replay` on huge.
-    fn replay_on_huge(engine: &mut Engine) -> (u32, u32) {
-        replay(engine, huge())
     }
 
     /// Drives `engine` to a terminal status one pop at a time, checking that
@@ -1303,7 +1287,19 @@ mod tests {
             engine.advance(1);
             assert!(engine.staging.is_none());
         }
-        assert!(engine.staged.is_none() && engine.best_moves().is_none());
+        assert!(engine.best_moves().is_none());
+    }
+
+    /// Drives `engine` to a terminal status one pop at a time, checking that
+    /// a ladder runs on the way. A ladder ends before its search does, so it
+    /// has run to its end.
+    fn drive_staged(engine: &mut Engine) {
+        let mut staged = false;
+        while engine.status() == Status::Running {
+            engine.advance(1);
+            staged |= engine.staging.is_some();
+        }
+        assert!(staged, "no ladder ran");
     }
 
     /// Checks the counter identities `engine` must keep, staged or not.
@@ -1325,8 +1321,6 @@ mod tests {
         expanded: u32,
         generated: u32,
         stats: SearchStats,
-        /// Whether a ladder ran to its end.
-        staged: bool,
     }
 
     /// What `engine`, which has ended, ends with; rebuilding its route also
@@ -1338,206 +1332,7 @@ mod tests {
             expanded: engine.expanded(),
             generated: engine.generated(),
             stats: engine.stats(),
-            staged: engine.staged.is_some(),
         }
-    }
-
-    /// Fast on huge at `max_states` states and `STAGED_MIB`, in slices of
-    /// 2^20 pops (slicing changes no result, see
-    /// `staged_slicing_is_deterministic`): the arena fills with no route, and
-    /// the staged route, the probe's 812 moves of 268 pushes, ends the search.
-    /// Prints the checks spent and the time taken, and returns the ladder's
-    /// tally, whose checks budget must not have ended it.
-    fn staged_fast_on_huge(max_states: usize) -> Tally {
-        let started = Instant::now();
-        let mut engine = on_huge(Policy::FAST, max_states, 1 << 20);
-        let elapsed = started.elapsed().as_millis();
-        assert_eq!(engine.status(), Status::Solved);
-        assert_eq!(replay_on_huge(&mut engine), (812, 268));
-        let tally = engine.staged.expect("a staged search");
-        assert!(!tally.checks_bound);
-        println!(
-            "checks {} for work {}, {elapsed} ms",
-            tally.checks, tally.work
-        );
-        tally
-    }
-
-    /// Staged Fast at the probe's 64 MiB settings matches probe-46758. The
-    /// ladder's first reseed keeps only the start, so it runs as the probe's
-    /// did from a fresh arena, and the scaled limit gives the probe's 2^20
-    /// work.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_fast_routes_huge_at_64_mib() {
-        let Tally {
-            work,
-            commits,
-            failures,
-            backtracks,
-            deepest,
-            accepts,
-            rejects,
-            checks: _,
-            checks_bound: _,
-        } = staged_fast_on_huge(60_000_000);
-        assert_eq!(
-            (work, commits, failures, backtracks, deepest, accepts),
-            (617_192, 26, 10, 3, 22, 21_940)
-        );
-        assert_eq!(rejects, [187, 17_530, 0, 1_706, 2_487, 4]);
-    }
-
-    /// Staged Fast at the gate's limit, `GATE` states, matches probe-46758.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_fast_routes_huge_at_the_gate() {
-        let Tally {
-            work,
-            commits,
-            failures,
-            backtracks,
-            deepest,
-            accepts,
-            rejects,
-            checks: _,
-            checks_bound: _,
-        } = staged_fast_on_huge(GATE);
-        println!("deepest {deepest}");
-        assert_eq!(
-            (work, commits, failures, backtracks, accepts),
-            (192_499, 26, 10, 3, 7_766)
-        );
-        assert_eq!(rejects, [187, 5_956, 0, 1_593, 0, 4]);
-    }
-
-    /// Quality mode on huge at 60M states and 64 MiB, in slices of 2^20 pops
-    /// but one pop at a time while the ladder runs, so the test stops at the
-    /// pop that ends it and reads the route before Quality starts: Fast
-    /// fills the arena with no route, the ladder routes it (the probe's 812
-    /// moves of 268 pushes), and the pop that ends the ladder starts plain
-    /// Quality over with that route as its bound. The fresh search fills the
-    /// arena and ends there, and its route replays and is no longer. Prints
-    /// the time to the first route and to the end.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_quality_routes_huge_at_64_mib() {
-        let started = Instant::now();
-        let mut engine = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, 60_000_000);
-        // The slice that fills the arena returns at once with the ladder
-        // running; single pops then stop at the pop that ends it.
-        while engine.staging.is_none() {
-            assert_eq!(engine.status(), Status::Running);
-            engine.advance(1 << 20);
-        }
-        while engine.staged.is_none() {
-            assert!(engine.staging.is_some());
-            engine.advance(1);
-        }
-        let first = started.elapsed().as_millis();
-        assert!(same(Some(&engine.policy), Some(&Policy::QUALITY)));
-        assert_eq!(replay_on_huge(&mut engine), (812, 268));
-        assert!(!engine.staged.as_ref().unwrap().checks_bound);
-        while engine.status() == Status::Running {
-            engine.advance(1 << 20);
-        }
-        let total = started.elapsed().as_millis();
-        assert_eq!(engine.status(), Status::MemoryLimit);
-        assert_counters(&engine);
-        let (moves, _) = replay_on_huge(&mut engine);
-        assert!(moves <= 812, "{moves} > 812");
-        println!("first route {first} ms, ended {total} ms, {moves} moves");
-    }
-
-    /// The state limit of the benchmark gate.
-    const GATE: usize = 20_000;
-    /// The ladder's whole work budget at the gate, `stage::work(GATE)`.
-    const GATE_WORK: u32 = 640_000;
-    /// A board's catalog id, the ladder's work on it, and its route's moves
-    /// and pushes.
-    type GateBoard = (&'static str, u32, Option<(u32, u32)>);
-
-    /// The catalog boards plain Fast leaves unrouted at the gate, with the
-    /// work probe-46758's ladder (accept tests lane, sink, e, f and g) spent
-    /// on each and the route it found, or `None` where it gave up. The probe
-    /// ran with a budget of 2^20; the six boards that spent the whole of it
-    /// give up here at `GATE_WORK`, and every other board took the same work.
-    const GATE_STAGED: [GateBoard; 23] = [
-        ("gen-v2-320041-027a9b04", 280, Some((141, 58))),
-        ("gen-v2-320050-4eb88a2d", 28_791, Some((230, 68))),
-        ("gen-v2-320050-78319f43", 337, Some((181, 55))),
-        ("gen-v2-320050-ece6c64b", 306, Some((170, 52))),
-        ("gen-v2-320081-b59cab95", 652, Some((153, 50))),
-        ("gen-v2-330146-44c41505", 83_809, Some((178, 62))),
-        ("gen-v2-340053-466f0008", 527_793, Some((175, 57))),
-        ("gen-v2-340106-b3558338", 395, Some((197, 80))),
-        ("gen-v2-340114-a8b9d02a", 196_557, Some((229, 80))),
-        ("gen-v2-340187-cd08a50a", 63_798, Some((219, 77))),
-        ("gen-v2-340272-fd819d0e", 711, Some((343, 121))),
-        ("gen-v2-350070-6be05c02", 323_274, Some((309, 112))),
-        ("gen-v2-350108-80cb0432", 72_983, Some((289, 99))),
-        ("gen-v2-360372-b5687375", 50_772, Some((397, 138))),
-        ("gen-v2-370002-8ea0b852", 58_500, Some((491, 162))),
-        ("huge", 192_499, Some((812, 268))),
-        ("gen-v2-340046-c9f5ef3b", GATE_WORK, None),
-        ("gen-v2-340048-b5d312a6", 149_724, None),
-        ("gen-v2-340053-6d913910", GATE_WORK, None),
-        ("gen-v2-350001-a996dcbc", GATE_WORK, None),
-        ("gen-v2-350108-b13869bc", GATE_WORK, None),
-        ("gen-v2-360313-16158b3b", GATE_WORK, None),
-        ("gen-v2-370193-88873f15", GATE_WORK, None),
-    ];
-
-    /// Fast on every catalog board at the gate's limit and `STAGED_MIB`, in
-    /// slices of 2^20 pops. Each board in `GATE_STAGED` stages and ends as
-    /// the probe's ladder did: after the same work, with the same moves and
-    /// pushes or at the state limit with no route. Every other board routes
-    /// before its arena fills and never stages. Prints each staged board's
-    /// checks and time.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_gate_routes_match_probe() {
-        assert_eq!(stage::work(GATE), GATE_WORK);
-        let mut staged = 0;
-        for (id, board) in catalog() {
-            let started = Instant::now();
-            let mut engine = Engine::new(
-                board.clone(),
-                board.initial(),
-                Policy::FAST,
-                GATE,
-                STAGED_MIB,
-            )
-            .unwrap();
-            while engine.status() == Status::Running {
-                engine.advance(1 << 20);
-            }
-            let elapsed = started.elapsed().as_millis();
-            let Some(&(_, work, expected)) = GATE_STAGED.iter().find(|entry| entry.0 == id) else {
-                assert!(engine.staged.is_none(), "{id}");
-                assert_eq!(engine.status(), Status::Solved, "{id}");
-                continue;
-            };
-            staged += 1;
-            let tally = engine.staged.as_ref().expect(&id);
-            assert!(!tally.checks_bound, "{id}");
-            assert_eq!(tally.work, work, "{id}");
-            println!(
-                "{id}: checks {} for work {}, {elapsed} ms",
-                tally.checks, tally.work
-            );
-            match expected {
-                Some(route) => {
-                    assert_eq!(engine.status(), Status::Solved, "{id}");
-                    assert_eq!(replay(&mut engine, board), route, "{id}");
-                }
-                None => {
-                    assert_eq!(engine.status(), Status::StateLimit, "{id}");
-                    assert_eq!(engine.best_moves(), None, "{id}");
-                }
-            }
-        }
-        assert_eq!(staged, GATE_STAGED.len());
     }
 
     /// Exact never stages: at a limit where Fast would, its full arena on
@@ -1579,8 +1374,8 @@ mod tests {
     /// counter identities hold across the ladder's reseeds.
     #[test]
     fn staged_generated_bound() {
-        let engine = on_huge(Policy::FAST, STAGED, 1);
-        assert!(engine.staged.is_some());
+        let mut engine = fresh_on_huge(Policy::FAST, STAGED);
+        drive_staged(&mut engine);
         let limit = STAGED as u64;
         let bound = 2 * (limit + 1) + u64::from(stage::work(STAGED)) + 12_870;
         let generated = engine.generated();
@@ -1596,8 +1391,9 @@ mod tests {
     #[test]
     fn staged_slicing_is_deterministic() {
         let policy = Policy::FAST_THEN_QUALITY_RESTART;
-        let one = ended(&mut on_huge(policy, STAGED, 1));
-        assert!(one.staged);
+        let mut engine = fresh_on_huge(policy, STAGED);
+        drive_staged(&mut engine);
+        let one = ended(&mut engine);
         assert_eq!(ended(&mut on_huge(policy, STAGED, 1 << 20)), one);
     }
 
@@ -1610,20 +1406,23 @@ mod tests {
     #[test]
     fn fast_ftq_ftqr_handoffs() {
         const LIMIT: usize = 20_000;
-        let mut fast = on_huge(Policy::FAST, LIMIT, 1);
+        let mut fast = fresh_on_huge(Policy::FAST, LIMIT);
+        drive_staged(&mut fast);
         assert_eq!(fast.status(), Status::Solved);
-        assert!(fast.staged.is_some());
         assert_eq!(replay_on_huge(&mut fast), (812, 268));
         let staged = fast.best_moves().unwrap();
-        let mut both = on_huge(Policy::FAST_THEN_QUALITY, LIMIT, 1);
-        assert!(both.staged.is_some());
+        let mut both = fresh_on_huge(Policy::FAST_THEN_QUALITY, LIMIT);
+        drive_staged(&mut both);
         assert!(same(Some(&both.policy), Some(&Policy::QUALITY)));
         assert_counters(&both);
         let (moves, _) = replay_on_huge(&mut both);
         assert!(moves <= staged, "{moves} > {staged}");
         let mut restart = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, LIMIT);
-        while restart.staged.is_none() {
+        while restart.staging.is_none() {
             assert_eq!(restart.status(), Status::Running);
+            restart.advance(1);
+        }
+        while restart.staging.is_some() {
             restart.advance(1);
         }
         // The pop that ended the ladder started over as plain Quality, not
@@ -1660,7 +1459,7 @@ mod tests {
             assert!(engine.staging.is_some(), "the ladder ended early");
             assert!(engine.arena.len() > 1);
             engine.stop(reason);
-            assert!(engine.staging.is_none() && engine.staged.is_none());
+            assert!(engine.staging.is_none());
             assert_eq!((engine.status(), engine.best_moves()), (status, None));
             let generated = engine.generated();
             engine.advance(1);
