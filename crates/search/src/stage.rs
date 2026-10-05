@@ -23,8 +23,8 @@
 //! production budget (64 MiB, 60M states) plain Fast routes 40 boards, and
 //! the ladder, started on its full arena, routes 10 of the other 17, Grand
 //! Hall among them. At the benchmark gate's 20,000 states it routes 16 of
-//! the 23 boards plain Fast misses, with the moves, pushes and work that
-//! `engine::tests::staged_gate_routes_match_probe` pins. Run from the start
+//! the 23 boards plain Fast misses, with the probe's moves and pushes,
+//! which benchmarks/catalog-baseline.json records. Run from the start
 //! with all of the probe's tests (job 46757), the ladder missed 3 boards
 //! plain Fast routes, so it runs only after a plain search reaches its stage
 //! point: its arena holds [`FILL_MIB`]'s capacity, or it fills.
@@ -66,12 +66,8 @@ mod checks;
 mod ladder;
 mod movers;
 mod rank;
-#[cfg(test)]
-mod reference;
 mod rooms;
 
-#[cfg(test)]
-pub(crate) use ladder::Tally;
 pub(crate) use ladder::{Done, Ladder};
 
 use crate::{

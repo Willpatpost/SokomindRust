@@ -1,8 +1,7 @@
 //! Test-only helpers shared by the unit tests: the catalog, a seeded random
-//! source and the rooms it generates, floor component floods and the stage
-//! probe's box groups, and two exhaustive oracles: the exact remaining moves
-//! from every primitive state of a small board, and whether each canonical
-//! state of one has a solution.
+//! source and the rooms it generates, floor component floods, and two
+//! exhaustive oracles: the exact remaining moves from every primitive state
+//! of a small board, and whether each canonical state of one has a solution.
 use crate::push::canonicalize;
 use sokomind_core::{Board, Cell, MAX_BOXES, State, Step, WALL};
 use std::{
@@ -92,9 +91,8 @@ impl Lcg {
 /// the robot and up to two inner walls, all on distinct cells. Its draws
 /// pin the rooms of `flagged_pushes_leave_no_solution` in the deadlock
 /// tests and `corral_dead_room_states_have_no_solution` in the corral
-/// tests, both from `Lcg(0x5eed)`, and of `pruning_never_changes_a_live_run`
-/// in the engine tests, from `Lcg(0xd1ff)`; changing them swaps those
-/// boards and invalidates the Python counts all three cite.
+/// tests, both from `Lcg(0x5eed)`; changing them swaps those boards and
+/// invalidates the Python counts both cite.
 pub(crate) fn random_room(rng: &mut Lcg) -> String {
     const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
     let set = SETS[rng.below(SETS.len())];
@@ -153,22 +151,6 @@ pub(crate) fn adjacent(board: &Board, cell: usize) -> [Option<usize>; 4] {
     ];
     let floor = |&next: &usize| next < tiles.len() && tiles[next] != WALL;
     steps.map(|next| next.filter(floor))
-}
-
-/// The stage probe's group of each box slot, one per run of equal labels,
-/// and of each cell's goal, `usize::MAX` off goals.
-pub(crate) fn probe_groups(board: &Board) -> (Vec<usize>, Vec<usize>) {
-    let labels = board.labels();
-    let mut group = vec![0; labels.len()];
-    for i in 1..labels.len() {
-        group[i] = group[i - 1] + usize::from(labels[i] != labels[i - 1]);
-    }
-    let mut goal_group = vec![usize::MAX; board.tiles().len()];
-    for &(goal, label) in board.goals() {
-        let i = labels.iter().position(|&l| l == label).unwrap();
-        goal_group[usize::from(goal)] = group[i];
-    }
-    (group, goal_group)
 }
 
 /// Every primitive state reachable from the start, without expanding solved

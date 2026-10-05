@@ -355,10 +355,10 @@ fn unpack_head(head: u16) -> (Cell, usize) {
 
 #[cfg(test)]
 mod tests {
-    use crate::deadlock::{Deadlock, GoalReach, SinkLines};
+    use crate::deadlock::GoalReach;
     use crate::heuristic::Heuristic;
     use crate::reach::Blocks;
-    use crate::testkit::{Lcg, catalog, components, probe_groups, random_room};
+    use crate::testkit::{Lcg, catalog, components, random_room};
     use sokomind_core::{Board, Cell, MAX_CELLS, NONE, OPPOSITE, State, WALL};
 
     /// The keeper's row holds the `A` box, a `b` goal and the `a` goal.
@@ -522,65 +522,6 @@ mod tests {
         state
     }
 
-    /// A port of the stage probe's `sink_lines`: each wall-to-wall row,
-    /// then column, of at least two cells, every one with a wall on one
-    /// side across it.
-    fn probe_lines(board: &Board) -> Vec<Vec<Cell>> {
-        let neighbors = board.neighbors();
-        let mut lines = Vec::new();
-        for (back, forward, a, b) in [(2, 3, 0, 1), (0, 1, 2, 3)] {
-            for (c, (&tile, around)) in board.tiles().iter().zip(neighbors).enumerate() {
-                if tile == WALL || around[back] != NONE {
-                    continue;
-                }
-                let mut run = Vec::new();
-                let mut frozen = true;
-                let mut x = c as Cell;
-                loop {
-                    let adjacent = neighbors[usize::from(x)];
-                    frozen &= adjacent[a] == NONE || adjacent[b] == NONE;
-                    run.push(x);
-                    if adjacent[forward] == NONE {
-                        break;
-                    }
-                    x = adjacent[forward];
-                }
-                if frozen && run.len() >= 2 {
-                    lines.push(run);
-                }
-            }
-        }
-        lines
-    }
-
-    /// A port of the stage probe's `sink_ok`, with `occupant` holding one
-    /// plus the box slot on each cell, 0 on cells without a box.
-    fn probe_sink_ok(
-        lines: &[Vec<Cell>],
-        occupant: &[usize],
-        group: &[usize],
-        goal_group: &[usize],
-    ) -> bool {
-        lines.iter().all(|line| {
-            let mut next = 0;
-            line.iter().all(|&c| {
-                let o = occupant[usize::from(c)];
-                if o == 0 {
-                    return true;
-                }
-                let g = group[o - 1];
-                let fits = |&k: &usize| goal_group[usize::from(line[k])] == g;
-                match (next..line.len()).find(fits) {
-                    Some(k) => {
-                        next = k + 1;
-                        true
-                    }
-                    None => false,
-                }
-            })
-        })
-    }
-
     /// GoalReach against the probe's forward search on every catalog
     /// board, `SPLIT` and 100 rooms. Each build reserves exactly
     /// `bytes_for` and numbers one state per side of each keeper cell.
@@ -660,57 +601,6 @@ mod tests {
                 let matched = table.matched(&blocks, &heuristic, &state);
                 assert_eq!(matched, expected, "{id}: {state:?}");
                 verdicts[usize::from(matched)] += 1;
-            }
-        }
-        assert!(verdicts.iter().all(|&n| n > 0), "{verdicts:?}");
-    }
-
-    /// SinkLines against the ports of the probe's `sink_lines` and
-    /// `sink_ok` on every catalog board, `SPLIT` and 100 rooms: a head per
-    /// line, `on_line` on exactly the lines' cells, and `sink_ok` agreeing
-    /// on 50 random box placements per board. Each box lands on a line
-    /// cell a quarter of the time, so lines often hold several boxes and
-    /// both verdicts come up.
-    #[test]
-    fn sink_matches_probe() {
-        let mut rng = Lcg(0x51ec);
-        let mut verdicts = [0; 2];
-        for (id, board) in boards(&mut rng) {
-            let lines = probe_lines(&board);
-            let (group, goal_group) = probe_groups(&board);
-            let sink = SinkLines::build(&board).unwrap();
-            assert_eq!(
-                sink.heap_bytes(),
-                SinkLines::bytes_for(board.tiles().len()),
-                "{id}"
-            );
-            assert_eq!(sink.heads.len(), lines.len(), "{id}");
-            let line_cells: Vec<Cell> = lines.concat();
-            for c in 0..board.tiles().len() as Cell {
-                assert_eq!(sink.on_line(c), line_cells.contains(&c), "{id}: {c}");
-            }
-            let floor = floor_cells(&board);
-            let boxes = board.labels().len();
-            let mut deadlock = Deadlock::new(&board);
-            for _ in 0..50 {
-                let mut placed: Vec<Cell> = Vec::new();
-                while placed.len() < boxes {
-                    let on_line = !line_cells.is_empty() && rng.below(4) == 0;
-                    let pool = if on_line { &line_cells } else { &floor };
-                    let c = pool[rng.below(pool.len())];
-                    if !placed.contains(&c) {
-                        placed.push(c);
-                    }
-                }
-                deadlock.refresh(&placed);
-                let mut occupant = vec![0; board.tiles().len()];
-                for (i, &c) in placed.iter().enumerate() {
-                    occupant[usize::from(c)] = i + 1;
-                }
-                let want = probe_sink_ok(&lines, &occupant, &group, &goal_group);
-                let got = sink.sink_ok(&board, &deadlock);
-                assert_eq!(got, want, "{id}: {placed:?}");
-                verdicts[usize::from(want)] += 1;
             }
         }
         assert!(verdicts.iter().all(|&n| n > 0), "{verdicts:?}");

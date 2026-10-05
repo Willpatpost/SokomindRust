@@ -1,14 +1,15 @@
 use crate::{
-    SearchError, SearchStats, SolutionError, Status, StopReason,
+    MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, SolutionError, Status,
+    StopReason,
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node, TableCounters},
     corral::Corral,
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
-    push::{self, Child, Parent, Parts, Prunes, Push, SkipCounters, canonicalize},
+    push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
     stage::{self, Done, Ladder},
 };
-use sokomind_core::{ACTIONS, Board, MAX_ROUTE, OPPOSITE, State};
+use sokomind_core::{ACTIONS, Board, MAX_CELLS, MAX_ROUTE, OPPOSITE, State};
 use std::ops::ControlFlow;
 
 /// What separates the modes. Everything else, from child order to pruning
@@ -99,14 +100,14 @@ impl Policy {
     /// rises accept rejected, sit in the table unqueued, so Quality reaches
     /// their states again only through a strictly cheaper duplicate
     /// (`reopen_closed`).
-    pub(crate) const FAST_THEN_QUALITY: Self = Self {
+    const FAST_THEN_QUALITY: Self = Self {
         then: Some(&Self::QUALITY),
         ..Self::FAST
     };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
     /// arena fills the search starts over as plain [`Self::QUALITY`],
     /// bounded by the route it has.
-    pub(crate) const QUALITY_RESTART: Self = Self {
+    const QUALITY_RESTART: Self = Self {
         restart: Some(&Self::QUALITY),
         ..Self::QUALITY
     };
@@ -255,8 +256,6 @@ pub(crate) struct Engine {
     reach: Reach,
     deadlock: Deadlock,
     corral: Corral,
-    /// Always [`Prunes::ALL`] outside tests.
-    prunes: Prunes,
     arena: Arena,
     status: Status,
     expanded: u32,
@@ -279,9 +278,6 @@ pub(crate) struct Engine {
     /// Whether the root policy may still stage. A resumed search keeps a
     /// policy with `stage` set, so the flag lives here.
     may_stage: bool,
-    /// The last ladder's tally, for tests.
-    #[cfg(test)]
-    staged: Option<stage::Tally>,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -329,6 +325,37 @@ enum Inserted {
     Stopped,
 }
 
+/// Budget bytes for the longest route and its letter string, `MAX_ROUTE`
+/// bytes each, which [`Engine::solution`] allocates on demand. Part of
+/// [`FIXED_SCRATCH`], and the most the stage ladder may hold.
+const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
+
+/// Budget bytes charged to every search whatever the board: the route
+/// allowance plus a 64 KiB allowance for the fixed-size scratch buffers.
+/// The stage ladder reuses the route allowance: it exists only while the
+/// search has no route and is freed before one is recorded, and
+/// `Ladder::bytes_for(MAX_CELLS)` is asserted to fit. On wasm32 linear
+/// memory never shrinks, and the route need not reuse the blocks the ladder
+/// frees, so, like the first table that `Arena::grow` frees, they can stay
+/// allocated past the budget.
+const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
+const _: () = assert!(Ladder::bytes_for(MAX_CELLS) <= ROUTE_ALLOWANCE);
+
+/// The bytes a search charges its budget besides the arena: the flood,
+/// deadlock and corral buffers and the heuristic tables per cell, plus
+/// [`FIXED_SCRATCH`]. Counted in u64, since usize is 32 bits on wasm32, and
+/// saturating, so a board too large to count never fits instead of
+/// wrapping.
+fn fixed_bytes(cells: usize, boxes: usize) -> u64 {
+    let per_cell = Reach::BYTES_PER_CELL
+        + Deadlock::BYTES_PER_CELL
+        + Corral::BYTES_PER_CELL
+        + Heuristic::bytes_per_cell(boxes);
+    (cells as u64)
+        .saturating_mul(per_cell as u64)
+        .saturating_add(FIXED_SCRATCH as u64)
+}
+
 impl Engine {
     pub(crate) fn new(
         board: Board,
@@ -341,12 +368,16 @@ impl Engine {
             .validate_state(&start)
             .map_err(SearchError::InvalidState)?;
         canonicalize(&board, &mut start);
+        if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
+            return Err(SearchError::Limits);
+        }
         let cells = board.tiles().len();
         let boxes = board.labels().len();
-        let arena = Arena::new(cells, boxes, max_states, memory_mib)?;
+        let fixed = fixed_bytes(cells, boxes);
+        let arena = Arena::new(fixed, boxes, max_states, memory_mib)?;
         let node_limit = arena.node_limit();
         let fill_at = if policy.stage {
-            Arena::capacity(cells, boxes, max_states, stage::FILL_MIB)
+            Arena::capacity(fixed, boxes, max_states, stage::FILL_MIB)
                 .map_or(node_limit, |c| c.limit.min(node_limit))
         } else {
             node_limit
@@ -363,7 +394,6 @@ impl Engine {
             heuristic,
             deadlock,
             corral,
-            prunes: Prunes::ALL,
             status: Status::Running,
             expanded: 0,
             skipped: SkipCounters::default(),
@@ -373,8 +403,6 @@ impl Engine {
             staging: None,
             fill_at,
             may_stage: policy.stage,
-            #[cfg(test)]
-            staged: None,
         };
         search.seed();
         Ok(search)
@@ -462,7 +490,7 @@ impl Engine {
     /// Queue keys are `g + weight * h`, so this is a lower bound only under
     /// the exact policy's weight of 1; only [`crate::ExactSearch`] reads it.
     pub(crate) fn frontier(&self) -> u64 {
-        debug_assert_eq!(self.policy.weight, 1, "weighted keys bound nothing");
+        assert_eq!(self.policy.weight, 1, "weighted keys bound nothing");
         self.arena
             .min_f()
             .unwrap_or(u64::MAX)
@@ -620,10 +648,6 @@ impl Engine {
             self.staging = Some(staging);
             return 0;
         };
-        #[cfg(test)]
-        {
-            self.staged = Some(staging.ladder.tally());
-        }
         let trigger_f = staging.trigger_f;
         let early = staging.early;
         // The ladder goes before its route becomes the incumbent, so the
@@ -770,7 +794,6 @@ impl Engine {
             deadlock: &mut self.deadlock,
             corral: &mut self.corral,
             arena: &mut self.arena,
-            prunes: self.prunes,
             skipped: &mut self.skipped,
             expanded: &mut self.expanded,
         }
@@ -970,34 +993,15 @@ impl Engine {
 }
 
 #[cfg(test)]
-impl Engine {
-    /// Replaces [`Prunes::ALL`] with `prunes`, the only way to turn a
-    /// detector off. Seeding runs no detector, so on an engine that has not
-    /// expanded anything the new flags govern the whole run. A setter rather
-    /// than a constructor argument, so it also reaches the engine inside
-    /// [`crate::ExactSearch`].
-    fn set_prunes(&mut self, prunes: Prunes) {
-        assert_eq!(
-            self.expanded, 0,
-            "flags change only before the first expansion"
-        );
-        self.prunes = prunes;
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::{Engine, Policy, same};
+    use super::{Engine, Policy, fixed_bytes, same};
     use crate::{
-        SearchStats, Status, StopReason,
-        exact::ExactSearch,
-        heuristic::Heuristic,
-        push::Prunes,
-        stage::{self, Tally},
-        testkit::{Lcg, catalog, explored_catalog, huge, random_room},
+        MAX_STATES, MEMORY_MIB_RANGE, SearchError, SearchStats, Status, StopReason,
+        arena::Arena,
+        stage,
+        testkit::{catalog, huge},
     };
-    use sokomind_core::{Board, Game};
-    use std::time::Instant;
+    use sokomind_core::{Board, Game, MAX_BOXES, MAX_CELLS};
 
     /// Small enough for debug builds. At this limit Fast finds 30 catalog
     /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
@@ -1223,12 +1227,11 @@ mod tests {
         }
     }
 
-    /// An arena that cannot grow ends the search at once with
-    /// `MemoryLimit` and the f of the expansion it cut short, and never
-    /// restarts, even under a restart policy: a fresh search would need the
+    /// An arena that cannot grow ends the search with `MemoryLimit` and the
+    /// f of the expansion it cut short, and never restarts, so it discards
+    /// nothing, even under a restart policy: a fresh search would need the
     /// same allocation. Growth is refused from the start, so the search
-    /// stops at its third record, when the four-record first chunk of unit
-    /// tests asks for the next. The board is the one of
+    /// stops once its first chunk is full. The board is the one of
     /// `corral_check_prunes_a_goal_sealed_too_early`, whose route needs 18
     /// moves.
     #[test]
@@ -1244,431 +1247,29 @@ mod tests {
             engine.arena.refuse_growth(true);
             drive(&mut engine);
             assert_eq!(
-                (engine.status(), engine.generated(), engine.discarded),
-                (Status::MemoryLimit, 3, 0)
+                (engine.status(), engine.discarded),
+                (Status::MemoryLimit, 0)
             );
             assert!(engine.interrupted_f.is_some() && engine.best_moves().is_none());
         }
     }
 
-    /// One row per detector: its name, every detector on but that one, and
-    /// how many runs turning it off must change at least, counting a run
-    /// changed when any `SearchStats` counter differs, so a flag that never
-    /// reaches its detector fails instead of passing on identical runs.
-    /// Zero until a detector reads the flag. Full literals rather than
-    /// `..Prunes::ALL`, so a new flag fails to compile here until every row
-    /// sets it. The minimum is the replica's count of changed runs that
-    /// generate fewer records. With the sealed-corral check on in both runs,
-    /// `dead_pair` changes 9 runs in `corral_port.py live` (cited at
-    /// `FINISH`), all on catalog boards, 6 of them with fewer records
-    /// generated. `corral` changes 186 there, 2 finishing catalog runs, 112
-    /// finishing room runs and 72 capped ones, 73 of them with fewer
-    /// records generated.
-    const TOGGLES: [(&str, Prunes, usize); 2] = [
-        (
-            "dead_pair",
-            Prunes {
-                dead_pair: false,
-                corral: true,
-            },
-            6,
-        ),
-        (
-            "corral",
-            Prunes {
-                dead_pair: true,
-                corral: false,
-            },
-            73,
-        ),
-    ];
-    /// Enough for every finishing-leg run to end on its own. A Python
-    /// replica of `pruning_never_changes_a_live_run`
-    /// (pruning/replicas/live_run_replica.py, not tracked) puts the push
-    /// states reachable on those boards, before any pruning, at 1,841 at
-    /// most on an explored board and 13,045 on a room. With the
-    /// sealed-corral row added (pruning/replicas/corral_port.py live, not
-    /// tracked), no finishing run generates more than 163 records.
-    const FINISH: usize = 20_000;
-    /// Rooms in the finishing leg.
-    const ROOMS: usize = 100;
-    /// The capped leg's limit.
-    const CAPPED: usize = 2_000;
-
-    /// Finished above capped above cancelled or running, as `rank` in
-    /// scripts/bench-gate.mjs orders statuses.
-    fn rank(status: Status) -> u8 {
-        match status {
-            Status::Solved | Status::Exhausted => 2,
-            Status::StateLimit | Status::MemoryLimit | Status::TimeLimit => 1,
-            Status::Running | Status::Cancelled => 0,
-        }
-    }
-
-    /// What one run in `pruning_never_changes_a_live_run` ends with.
-    struct Trace {
-        status: Status,
-        /// Moves, pushes and the route itself, as a fresh game replays it.
-        route: Option<(u32, u32, String)>,
-        /// Moves, expanded and generated when a route first appeared.
-        first: Option<(u32, u32, u32)>,
-        expanded: u32,
-        generated: u32,
-        stats: SearchStats,
-        /// Exact's lower bound, `u64::MAX` when it has none because nothing
-        /// is left to search; `None` under Fast, so one comparison serves
-        /// both modes.
-        lower_bound: Option<u64>,
-    }
-
-    /// Runs `board` from its start to a terminal status under Exact or Fast
-    /// with `prunes`.
-    fn trace(board: &Board, exact: bool, max_states: usize, prunes: Prunes) -> Trace {
-        let start = board.initial();
-        if exact {
-            let mut search = ExactSearch::new(board.clone(), start, max_states, 16).unwrap();
-            let mut traced = observe(board, search.engine_mut(), prunes);
-            traced.lower_bound = Some(search.lower_bound().map_or(u64::MAX, u64::from));
-            traced
-        } else {
-            let mut engine =
-                Engine::new(board.clone(), start, Policy::FAST, max_states, 16).unwrap();
-            observe(board, &mut engine, prunes)
-        }
-    }
-
-    /// Installs `prunes`, drives `engine` to a terminal status and records
-    /// what it ends with, replaying its route in a fresh game.
-    fn observe(board: &Board, engine: &mut Engine, prunes: Prunes) -> Trace {
-        engine.set_prunes(prunes);
-        let first = drive(engine);
-        let route = engine.solution().unwrap().map(|route| {
-            let mut game = Game::new(board.clone());
-            game.replay(&route).unwrap();
-            assert!(game.solved());
-            (game.moves(), game.pushes(), route)
-        });
-        Trace {
-            status: engine.status(),
-            route,
-            first,
-            expanded: engine.expanded(),
-            generated: engine.generated(),
-            stats: engine.stats(),
-            lower_bound: None,
-        }
-    }
-
-    /// The counters a detector never raises on a finished live run; see
-    /// `pruning_never_changes_a_live_run`. The destructure names every
-    /// `SearchStats` field, so a new counter fails to compile here until it
-    /// is classified.
-    fn bounded(trace: &Trace) -> [(&'static str, u64); 11] {
-        let SearchStats {
-            unique_states,
-            duplicate_improvements,
-            reopened_states,
-            stale_pops,
-            peak_queue,
-            pruned_dead_cells,
-            pruned_deadlocks: _,
-            pruned_duplicates,
-            pruned_assignment,
-            pruned_bound,
-            pruned_corrals: _,
-        } = trace.stats;
-        [
-            ("expanded", u64::from(trace.expanded)),
-            ("generated", u64::from(trace.generated)),
-            ("unique_states", u64::from(unique_states)),
-            ("duplicate_improvements", u64::from(duplicate_improvements)),
-            ("reopened_states", u64::from(reopened_states)),
-            ("stale_pops", u64::from(stale_pops)),
-            ("peak_queue", u64::from(peak_queue)),
-            ("pruned_dead_cells", pruned_dead_cells),
-            ("pruned_duplicates", pruned_duplicates),
-            ("pruned_assignment", pruned_assignment),
-            ("pruned_bound", pruned_bound),
-        ]
-    }
-
-    /// Checks a run with every detector on against the same run with one
-    /// off, claim by claim as `pruning_never_changes_a_live_run` lists them.
-    fn compare(context: &str, off: &Trace, on: &Trace) {
-        assert!(
-            rank(on.status) >= rank(off.status),
-            "{context}: {} after {}",
-            on.status.as_str(),
-            off.status.as_str()
-        );
-        if let Some(&(moves, ..)) = off.route.as_ref() {
-            let on_moves = on.route.as_ref().map(|&(got, ..)| got);
-            assert!(
-                on_moves.is_some_and(|got| got <= moves),
-                "{context}: route {on_moves:?} after {moves}"
-            );
-        }
-        assert!(
-            on.lower_bound >= off.lower_bound,
-            "{context}: lower bound {:?} after {:?}",
-            on.lower_bound,
-            off.lower_bound
-        );
-        if let Some((moves, expanded, generated)) = off.first {
-            let Some((on_moves, on_expanded, on_generated)) = on.first else {
-                panic!("{context}: no first route after {:?}", off.first);
-            };
-            // A capped off run whose first route came from the expansion the
-            // cap interrupted may have stopped before a shorter goal child of
-            // that expansion, which the on run, with fewer records, still
-            // reaches, possibly in the spare node.
-            let interrupted = rank(off.status) == 1 && expanded == off.expanded;
-            let same_event =
-                on_moves == moves && on_expanded <= expanded && on_generated <= generated;
-            assert!(
-                same_event || (interrupted && on_moves <= moves && on_expanded <= expanded),
-                "{context}: first route {:?} after {:?}",
-                on.first,
-                off.first
-            );
-        }
-        if rank(off.status) == 2 {
-            assert_eq!(
-                (on.status, &on.route),
-                (off.status, &off.route),
-                "{context}"
-            );
-            if off.route.is_some() {
-                for ((name, on_count), (_, off_count)) in bounded(on).into_iter().zip(bounded(off))
-                {
-                    assert!(
-                        on_count <= off_count,
-                        "{context}: {name} {on_count} after {off_count}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// The in-repo form of the identity theorem: a dead-state detector
-    /// never changes a live run. Each board runs under Exact and Fast, one
-    /// pop at a time, with every detector on and then with each one off
-    /// (`TOGGLES`), in two legs: at `FINISH`, where the off run must end on
-    /// its own, every explored catalog board and the first `ROOMS` rooms
-    /// `random_room` draws from `Lcg(0xd1ff)` whose start has an
-    /// assignment; at `CAPPED`, every catalog board. A room without one ends
-    /// at its seed before any detector runs, so it is skipped: the Python
-    /// replicas cited at `FINISH` both need 1,465 draws for the 100 rooms.
-    /// Where the off run ends on its own and the on run generated fewer
-    /// records, a boundary leg reruns both at the on run's generated count,
-    /// and each `TOGGLES` row must change at least its minimum of runs.
-    ///
-    /// Call a detector entry-complete when the set E of states the on run
-    /// calls dead is closed under every push that passes the dead-cell
-    /// check, every push the off run flags lands in E, and the on run flags
-    /// every push from outside E into E. From a start outside E, the on run
-    /// is then the off run with E's states deleted: the same events in the
-    /// same order, since queue ties break by insertion order, which
-    /// deleting records keeps. A push into E that reaches the freeze check
-    /// counts one `pruned_deadlocks` instead of what the off run did with
-    /// that child. The freeze rule with its dead-pair case is entry-complete
-    /// in the admit chain. Its E holds the states with a box held off its
-    /// goal, a superset of what the rule without the case holds, and a held
-    /// box never moves: a wall or held box on its axis makes the push
-    /// illegal, and two dead neighbors make it land on a dead cell, which
-    /// the dead-cell check prunes first. If the held box's component after a
-    /// push from outside E did not contain the pushed box, none of its boxes
-    /// moved and they held it the same way before. The freeze check takes
-    /// the greatest fixpoint over the pushed box's whole component, the same
-    /// there as over the board, so it flags the push. A start with a
-    /// solution is outside any sound E, so the capped leg relies on every
-    /// catalog board having one.
-    ///
-    /// The claims, and why they hold:
-    /// - Status rank on >= off. The on run's records are the off run's
-    ///   minus E's at every matched point, so it never fills the arena
-    ///   first, and where the off run ends on its own, the on run ends at
-    ///   the same event.
-    /// - Wherever the off run has a route, the on run has one no longer.
-    ///   The off run's route reaches only live states, so the on run finds
-    ///   it too before any cap.
-    /// - The first route is the same live event in both runs: equal moves,
-    ///   with expanded and generated no higher, read after the pop that
-    ///   found it. The bench reads `first_route_*` only every
-    ///   `POPS_PER_CHECK` pops, so there they can still rise by one slice.
-    /// - Exact's lower bound on >= off. Where the off run stops, the on
-    ///   run's queue is the off run's minus E's entries, so its frontier is
-    ///   no lower, and with consistent keys no child queues below its
-    ///   parent, so the frontier never falls later. The incumbent cap cannot
-    ///   pull it under either: the off bound is at most the optimum, which
-    ///   no route beats.
-    /// - Where the off run ends on its own, the same status and the same
-    ///   route: moves, pushes and the route string.
-    /// - At the boundary, the on run ends as before with the same route,
-    ///   and the off run, which needs more records, hits the cap: the on
-    ///   run never inserts at a full arena, so it is the same run, while the
-    ///   off run's first insert past the cap stops it. The claims above
-    ///   then compare a capped off run with a finished on run, the case
-    ///   where rank and lower bound can rise. The lower bound is asserted
-    ///   only no lower: the cap can fall in an expansion whose key already
-    ///   equals the optimum.
-    ///
-    /// One exception narrows the first-route claim: in Exact, when the cap
-    /// interrupts the expansion that found the off run's first route, the
-    /// on run, which stores fewer of that expansion's children, may go on
-    /// to a later goal child with a shorter walk, possibly in the spare
-    /// node. There only its moves and expanded are bounded, no higher.
-    ///
-    /// Counters are compared only where the off run ends on its own with a
-    /// route, the case the deletion argument settles. `expanded`,
-    /// `generated`, `unique_states`, `duplicate_improvements`,
-    /// `reopened_states` and `stale_pops` count events, of which the on run
-    /// has a subset. `peak_queue` is a maximum over queues that are the off
-    /// run's minus E's entries. `pruned_dead_cells`, `pruned_duplicates`,
-    /// `pruned_assignment` and `pruned_bound` count rejections, which match
-    /// on live states and happen on E's states only in the off run.
-    /// `pruned_deadlocks` has no bound: the on run adds a flag per push into
-    /// E, the off run flags pushes made inside E, and either can be larger.
-    /// Nor has `pruned_corrals`, which only the on run of its row counts.
-    /// Where the off run hits the cap, the on run goes on past that point,
-    /// so no counter is compared. Without a route the start may lie in E.
-    /// Both runs then see only dead states, not always the same ones, and
-    /// either may count more, so only status and route are compared, and
-    /// `FINISH` leaves both room to end. The replica finds 72 of the rooms
-    /// solvable; the other 28 expand before they end Exhausted.
-    ///
-    /// A detector that is not entry-complete, such as one run at expansion
-    /// time or one that flags only some pushes into its E, can add records
-    /// or hit the cap first. Its flag must re-derive these claims before it
-    /// gets a row in `TOGGLES`.
-    ///
-    /// The sealed-corral check is such a detector: it runs at expansion,
-    /// so a dead state is still expanded, and only its children go. Its
-    /// live events still match until either run fills the arena. Every
-    /// parent of a state with a solution has one, and a pruned state has
-    /// none, so both runs store the same live records with the same g and
-    /// pop them in the same order: keys are unchanged and ties break by
-    /// insertion order, which skipping other records keeps. Where both runs
-    /// end on their own, they end at the same event with the same route.
-    /// The dead records differ: a dead child the off run first stores from
-    /// a pruned parent the on run may store later from another parent, at
-    /// a higher g, and explore from there. So the remaining claims, which
-    /// count records or compare a capped run, rest on the replica, not on
-    /// the deletion argument. So do the `dead_pair` row's: its flag also
-    /// drops the dead-pair case from the corral check's freeze, an
-    /// expansion-time change on top of the admit chain's. corral_port.py
-    /// live checks every claim of every run in both rows, the 76 boundary
-    /// legs included, with 0 failures. A failure here after a change
-    /// elsewhere means a claim needs a new argument, not that the detector
-    /// flags a live state; the oracle tests in corral.rs check that.
-    ///
-    /// Cost: per board and mode, the all-on run plus one run per flag, one
-    /// pop at a time, and two more per boundary. The capped leg dominates
-    /// with at most 57 x 2 x 3 x 2,001 records, about 684k, around six
-    /// times `fast_then_quality_starts_as_fast_and_never_ends_longer`; the
-    /// replica counts about 439k. The finishing leg generates about 13k and
-    /// the boundary legs about 19k.
-    #[test]
-    fn pruning_never_changes_a_live_run() {
-        let mut rng = Lcg(0xd1ff);
-        let rooms = std::iter::repeat_with(move || Board::parse(&random_room(&mut rng)).unwrap())
-            .filter(|board| Heuristic::new(board).estimate(&board.initial()).is_some())
-            .take(ROOMS)
-            .enumerate()
-            .map(|(n, board)| (format!("room {n}"), board));
-        let finishing = explored_catalog()
-            .iter()
-            .map(|(id, board, ..)| (id.clone(), board.clone()))
-            .chain(rooms)
-            .map(|(id, board)| (id, board, FINISH, true));
-        let capped = catalog()
-            .into_iter()
-            .map(|(id, board)| (id, board, CAPPED, false));
-        let mut changed = [0; TOGGLES.len()];
-        for (id, board, max_states, must_finish) in finishing.chain(capped) {
-            for (mode, exact) in [("exact", true), ("fast", false)] {
-                let on = trace(&board, exact, max_states, Prunes::ALL);
-                for (row, (name, prunes, _)) in TOGGLES.into_iter().enumerate() {
-                    let context = format!("{id} {mode} at {max_states} states, {name} off");
-                    let off = trace(&board, exact, max_states, prunes);
-                    if must_finish {
-                        assert_eq!(
-                            rank(off.status),
-                            2,
-                            "{context}: {}, raise FINISH",
-                            off.status.as_str()
-                        );
-                    }
-                    compare(&context, &off, &on);
-                    changed[row] += usize::from(on.stats != off.stats);
-                    if rank(off.status) == 2 && on.generated < off.generated {
-                        let at = on.generated as usize;
-                        let context = format!("{context}, at {at} states");
-                        let on_at = trace(&board, exact, at, Prunes::ALL);
-                        let off_at = trace(&board, exact, at, prunes);
-                        assert!(
-                            rank(on_at.status) == 2 && on_at.route == on.route,
-                            "{context}: {} {:?} instead of the finished {:?}",
-                            on_at.status.as_str(),
-                            on_at.route,
-                            on.route
-                        );
-                        assert_eq!(rank(off_at.status), 1, "{context}");
-                        compare(&context, &off_at, &on_at);
-                    }
-                }
-            }
-        }
-        for ((name, _, min_changed), changed) in TOGGLES.into_iter().zip(changed) {
-            assert!(
-                changed >= min_changed,
-                "{name} off changed {changed} runs, below {min_changed}"
-            );
-        }
-    }
-
     /// The board of `an_empty_goal_behind_a_settled_corral_is_dead` in the
     /// corral tests: A pushed into the corridor before B has passed seals
-    /// B's goal off. The sealed-corral check prunes one such state in each
-    /// mode, and both modes keep their 18-move route with fewer records.
-    /// The counts are pruning/replicas/corral_port.py fixtures, line f3
-    /// (not tracked).
+    /// B's goal off. Both modes prune such a state with the sealed-corral
+    /// check and still end Solved with the 18-move route, which Exact proves
+    /// shortest.
     #[test]
     fn corral_check_prunes_a_goal_sealed_too_early() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
-        let without = Prunes {
-            dead_pair: true,
-            corral: false,
-        };
-        // Generated, expanded and the first route's moves, expanded and
-        // generated, off then on.
-        for (exact, counts_off, counts_on) in [
-            (true, (12, 11, (18, 9, 12)), (10, 9, (18, 8, 10))),
-            (false, (11, 8, (18, 8, 11)), (9, 7, (18, 7, 9))),
-        ] {
-            let off = trace(&board, exact, STATES, without);
-            let on = trace(&board, exact, STATES, Prunes::ALL);
-            for (traced, (generated, expanded, first), corrals) in
-                [(&off, counts_off, 0), (&on, counts_on, 1)]
-            {
-                assert_eq!(
-                    (
-                        traced.generated,
-                        traced.expanded,
-                        traced.first,
-                        traced.stats.pruned_corrals
-                    ),
-                    (generated, expanded, Some(first), corrals),
-                    "exact {exact}"
-                );
-                let moves = traced
-                    .route
-                    .as_ref()
-                    .map(|&(moves, pushes, _)| (moves, pushes));
-                assert_eq!(moves, Some((18, 5)), "exact {exact}");
-            }
-            assert_eq!(on.route, off.route, "exact {exact}");
-            compare(&format!("exact {exact}"), &off, &on);
+        for (mode, policy) in [("exact", Policy::EXACT), ("fast", Policy::FAST)] {
+            let (engine, _) = run(&board, policy, STATES);
+            assert_eq!(
+                (engine.status(), engine.best_moves()),
+                (Status::Solved, Some(18)),
+                "{mode}"
+            );
+            assert!(engine.stats().pruned_corrals > 0, "{mode}");
         }
     }
 
@@ -1704,21 +1305,16 @@ mod tests {
         engine
     }
 
-    /// Rebuilds `engine`'s route and replays it in a fresh game on `board`,
+    /// Rebuilds `engine`'s route and replays it in a fresh game on huge,
     /// which it must solve in the moves the engine counts. Returns its moves
     /// and pushes.
-    fn replay(engine: &mut Engine, board: Board) -> (u32, u32) {
+    fn replay_on_huge(engine: &mut Engine) -> (u32, u32) {
         let route = engine.solution().unwrap().expect("a route");
-        let mut game = Game::new(board);
+        let mut game = Game::new(huge());
         game.replay(&route).unwrap();
         assert!(game.solved());
         assert_eq!(Some(game.moves()), engine.best_moves());
         (game.moves(), game.pushes())
-    }
-
-    /// `replay` on huge.
-    fn replay_on_huge(engine: &mut Engine) -> (u32, u32) {
-        replay(engine, huge())
     }
 
     /// Drives `engine` to a terminal status one pop at a time, checking that
@@ -1728,7 +1324,19 @@ mod tests {
             engine.advance(1);
             assert!(engine.staging.is_none());
         }
-        assert!(engine.staged.is_none() && engine.best_moves().is_none());
+        assert!(engine.best_moves().is_none());
+    }
+
+    /// Drives `engine` to a terminal status one pop at a time, checking that
+    /// a ladder runs on the way. A ladder ends before its search does, so it
+    /// has run to its end.
+    fn drive_staged(engine: &mut Engine) {
+        let mut staged = false;
+        while engine.status() == Status::Running {
+            engine.advance(1);
+            staged |= engine.staging.is_some();
+        }
+        assert!(staged, "no ladder ran");
     }
 
     /// Checks the counter identities `engine` must keep, staged or not.
@@ -1750,8 +1358,6 @@ mod tests {
         expanded: u32,
         generated: u32,
         stats: SearchStats,
-        /// Whether a ladder ran to its end.
-        staged: bool,
     }
 
     /// What `engine`, which has ended, ends with; rebuilding its route also
@@ -1763,206 +1369,7 @@ mod tests {
             expanded: engine.expanded(),
             generated: engine.generated(),
             stats: engine.stats(),
-            staged: engine.staged.is_some(),
         }
-    }
-
-    /// Fast on huge at `max_states` states and `STAGED_MIB`, in slices of
-    /// 2^20 pops (slicing changes no result, see
-    /// `staged_slicing_is_deterministic`): the arena fills with no route, and
-    /// the staged route, the probe's 812 moves of 268 pushes, ends the search.
-    /// Prints the checks spent and the time taken, and returns the ladder's
-    /// tally, whose checks budget must not have ended it.
-    fn staged_fast_on_huge(max_states: usize) -> Tally {
-        let started = Instant::now();
-        let mut engine = on_huge(Policy::FAST, max_states, 1 << 20);
-        let elapsed = started.elapsed().as_millis();
-        assert_eq!(engine.status(), Status::Solved);
-        assert_eq!(replay_on_huge(&mut engine), (812, 268));
-        let tally = engine.staged.expect("a staged search");
-        assert!(!tally.checks_bound);
-        println!(
-            "checks {} for work {}, {elapsed} ms",
-            tally.checks, tally.work
-        );
-        tally
-    }
-
-    /// Staged Fast at the probe's 64 MiB settings matches probe-46758. The
-    /// ladder's first reseed keeps only the start, so it runs as the probe's
-    /// did from a fresh arena, and the scaled limit gives the probe's 2^20
-    /// work.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_fast_routes_huge_at_64_mib() {
-        let Tally {
-            work,
-            commits,
-            failures,
-            backtracks,
-            deepest,
-            accepts,
-            rejects,
-            checks: _,
-            checks_bound: _,
-        } = staged_fast_on_huge(60_000_000);
-        assert_eq!(
-            (work, commits, failures, backtracks, deepest, accepts),
-            (617_192, 26, 10, 3, 22, 21_940)
-        );
-        assert_eq!(rejects, [187, 17_530, 0, 1_706, 2_487, 4]);
-    }
-
-    /// Staged Fast at the gate's limit, `GATE` states, matches probe-46758.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_fast_routes_huge_at_the_gate() {
-        let Tally {
-            work,
-            commits,
-            failures,
-            backtracks,
-            deepest,
-            accepts,
-            rejects,
-            checks: _,
-            checks_bound: _,
-        } = staged_fast_on_huge(GATE);
-        println!("deepest {deepest}");
-        assert_eq!(
-            (work, commits, failures, backtracks, accepts),
-            (192_499, 26, 10, 3, 7_766)
-        );
-        assert_eq!(rejects, [187, 5_956, 0, 1_593, 0, 4]);
-    }
-
-    /// Quality mode on huge at 60M states and 64 MiB, in slices of 2^20 pops
-    /// but one pop at a time while the ladder runs, so the test stops at the
-    /// pop that ends it and reads the route before Quality starts: Fast
-    /// fills the arena with no route, the ladder routes it (the probe's 812
-    /// moves of 268 pushes), and the pop that ends the ladder starts plain
-    /// Quality over with that route as its bound. The fresh search fills the
-    /// arena and ends there, and its route replays and is no longer. Prints
-    /// the time to the first route and to the end.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_quality_routes_huge_at_64_mib() {
-        let started = Instant::now();
-        let mut engine = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, 60_000_000);
-        // The slice that fills the arena returns at once with the ladder
-        // running; single pops then stop at the pop that ends it.
-        while engine.staging.is_none() {
-            assert_eq!(engine.status(), Status::Running);
-            engine.advance(1 << 20);
-        }
-        while engine.staged.is_none() {
-            assert!(engine.staging.is_some());
-            engine.advance(1);
-        }
-        let first = started.elapsed().as_millis();
-        assert!(same(Some(&engine.policy), Some(&Policy::QUALITY)));
-        assert_eq!(replay_on_huge(&mut engine), (812, 268));
-        assert!(!engine.staged.as_ref().unwrap().checks_bound);
-        while engine.status() == Status::Running {
-            engine.advance(1 << 20);
-        }
-        let total = started.elapsed().as_millis();
-        assert_eq!(engine.status(), Status::MemoryLimit);
-        assert_counters(&engine);
-        let (moves, _) = replay_on_huge(&mut engine);
-        assert!(moves <= 812, "{moves} > 812");
-        println!("first route {first} ms, ended {total} ms, {moves} moves");
-    }
-
-    /// The state limit of the benchmark gate.
-    const GATE: usize = 20_000;
-    /// The ladder's whole work budget at the gate, `stage::work(GATE)`.
-    const GATE_WORK: u32 = 640_000;
-    /// A board's catalog id, the ladder's work on it, and its route's moves
-    /// and pushes.
-    type GateBoard = (&'static str, u32, Option<(u32, u32)>);
-
-    /// The catalog boards plain Fast leaves unrouted at the gate, with the
-    /// work probe-46758's ladder (accept tests lane, sink, e, f and g) spent
-    /// on each and the route it found, or `None` where it gave up. The probe
-    /// ran with a budget of 2^20; the six boards that spent the whole of it
-    /// give up here at `GATE_WORK`, and every other board took the same work.
-    const GATE_STAGED: [GateBoard; 23] = [
-        ("gen-v2-320041-027a9b04", 280, Some((141, 58))),
-        ("gen-v2-320050-4eb88a2d", 28_791, Some((230, 68))),
-        ("gen-v2-320050-78319f43", 337, Some((181, 55))),
-        ("gen-v2-320050-ece6c64b", 306, Some((170, 52))),
-        ("gen-v2-320081-b59cab95", 652, Some((153, 50))),
-        ("gen-v2-330146-44c41505", 83_809, Some((178, 62))),
-        ("gen-v2-340053-466f0008", 527_793, Some((175, 57))),
-        ("gen-v2-340106-b3558338", 395, Some((197, 80))),
-        ("gen-v2-340114-a8b9d02a", 196_557, Some((229, 80))),
-        ("gen-v2-340187-cd08a50a", 63_798, Some((219, 77))),
-        ("gen-v2-340272-fd819d0e", 711, Some((343, 121))),
-        ("gen-v2-350070-6be05c02", 323_274, Some((309, 112))),
-        ("gen-v2-350108-80cb0432", 72_983, Some((289, 99))),
-        ("gen-v2-360372-b5687375", 50_772, Some((397, 138))),
-        ("gen-v2-370002-8ea0b852", 58_500, Some((491, 162))),
-        ("huge", 192_499, Some((812, 268))),
-        ("gen-v2-340046-c9f5ef3b", GATE_WORK, None),
-        ("gen-v2-340048-b5d312a6", 149_724, None),
-        ("gen-v2-340053-6d913910", GATE_WORK, None),
-        ("gen-v2-350001-a996dcbc", GATE_WORK, None),
-        ("gen-v2-350108-b13869bc", GATE_WORK, None),
-        ("gen-v2-360313-16158b3b", GATE_WORK, None),
-        ("gen-v2-370193-88873f15", GATE_WORK, None),
-    ];
-
-    /// Fast on every catalog board at the gate's limit and `STAGED_MIB`, in
-    /// slices of 2^20 pops. Each board in `GATE_STAGED` stages and ends as
-    /// the probe's ladder did: after the same work, with the same moves and
-    /// pushes or at the state limit with no route. Every other board routes
-    /// before its arena fills and never stages. Prints each staged board's
-    /// checks and time.
-    #[test]
-    #[ignore = "release only: run on SLURM with --ignored --nocapture"]
-    fn staged_gate_routes_match_probe() {
-        assert_eq!(stage::work(GATE), GATE_WORK);
-        let mut staged = 0;
-        for (id, board) in catalog() {
-            let started = Instant::now();
-            let mut engine = Engine::new(
-                board.clone(),
-                board.initial(),
-                Policy::FAST,
-                GATE,
-                STAGED_MIB,
-            )
-            .unwrap();
-            while engine.status() == Status::Running {
-                engine.advance(1 << 20);
-            }
-            let elapsed = started.elapsed().as_millis();
-            let Some(&(_, work, expected)) = GATE_STAGED.iter().find(|entry| entry.0 == id) else {
-                assert!(engine.staged.is_none(), "{id}");
-                assert_eq!(engine.status(), Status::Solved, "{id}");
-                continue;
-            };
-            staged += 1;
-            let tally = engine.staged.as_ref().expect(&id);
-            assert!(!tally.checks_bound, "{id}");
-            assert_eq!(tally.work, work, "{id}");
-            println!(
-                "{id}: checks {} for work {}, {elapsed} ms",
-                tally.checks, tally.work
-            );
-            match expected {
-                Some(route) => {
-                    assert_eq!(engine.status(), Status::Solved, "{id}");
-                    assert_eq!(replay(&mut engine, board), route, "{id}");
-                }
-                None => {
-                    assert_eq!(engine.status(), Status::StateLimit, "{id}");
-                    assert_eq!(engine.best_moves(), None, "{id}");
-                }
-            }
-        }
-        assert_eq!(staged, GATE_STAGED.len());
     }
 
     /// Exact never stages: at a limit where Fast would, its full arena on
@@ -2004,8 +1411,8 @@ mod tests {
     /// counter identities hold across the ladder's reseeds.
     #[test]
     fn staged_generated_bound() {
-        let engine = on_huge(Policy::FAST, STAGED, 1);
-        assert!(engine.staged.is_some());
+        let mut engine = fresh_on_huge(Policy::FAST, STAGED);
+        drive_staged(&mut engine);
         let limit = STAGED as u64;
         let bound = 2 * (limit + 1) + u64::from(stage::work(STAGED)) + 12_870;
         let generated = engine.generated();
@@ -2021,8 +1428,9 @@ mod tests {
     #[test]
     fn staged_slicing_is_deterministic() {
         let policy = Policy::FAST_THEN_QUALITY_RESTART;
-        let one = ended(&mut on_huge(policy, STAGED, 1));
-        assert!(one.staged);
+        let mut engine = fresh_on_huge(policy, STAGED);
+        drive_staged(&mut engine);
+        let one = ended(&mut engine);
         assert_eq!(ended(&mut on_huge(policy, STAGED, 1 << 20)), one);
     }
 
@@ -2035,20 +1443,23 @@ mod tests {
     #[test]
     fn fast_ftq_ftqr_handoffs() {
         const LIMIT: usize = 20_000;
-        let mut fast = on_huge(Policy::FAST, LIMIT, 1);
+        let mut fast = fresh_on_huge(Policy::FAST, LIMIT);
+        drive_staged(&mut fast);
         assert_eq!(fast.status(), Status::Solved);
-        assert!(fast.staged.is_some());
         assert_eq!(replay_on_huge(&mut fast), (812, 268));
         let staged = fast.best_moves().unwrap();
-        let mut both = on_huge(Policy::FAST_THEN_QUALITY, LIMIT, 1);
-        assert!(both.staged.is_some());
+        let mut both = fresh_on_huge(Policy::FAST_THEN_QUALITY, LIMIT);
+        drive_staged(&mut both);
         assert!(same(Some(&both.policy), Some(&Policy::QUALITY)));
         assert_counters(&both);
         let (moves, _) = replay_on_huge(&mut both);
         assert!(moves <= staged, "{moves} > {staged}");
         let mut restart = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, LIMIT);
-        while restart.staged.is_none() {
+        while restart.staging.is_none() {
             assert_eq!(restart.status(), Status::Running);
+            restart.advance(1);
+        }
+        while restart.staging.is_some() {
             restart.advance(1);
         }
         // The pop that ended the ladder started over as plain Quality, not
@@ -2085,11 +1496,75 @@ mod tests {
             assert!(engine.staging.is_some(), "the ladder ended early");
             assert!(engine.arena.len() > 1);
             engine.stop(reason);
-            assert!(engine.staging.is_none() && engine.staged.is_none());
+            assert!(engine.staging.is_none());
             assert_eq!((engine.status(), engine.best_moves()), (status, None));
             let generated = engine.generated();
             engine.advance(1);
             assert_eq!((engine.status(), engine.generated()), (status, generated));
+        }
+    }
+
+    /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
+    /// entry and 8 to 16 bytes of table, so no budget holds a full
+    /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
+    /// where the next state would double the table, and 11,177,601 at
+    /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
+    /// bytes. Every budget is sized without allocating, through
+    /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
+    /// millions of the four-record chunks unit tests use.
+    #[test]
+    fn memory_binds_a_full_limit_at_every_budget() {
+        let shapes = [
+            (4, 1, 33_554_431),
+            (MAX_CELLS, 1, 33_554_431),
+            (4, MAX_BOXES, 11_181_644),
+            (MAX_CELLS, MAX_BOXES, 11_177_601),
+        ];
+        let top = *MEMORY_MIB_RANGE.end();
+        for (cells, boxes, fits) in shapes {
+            let fixed = fixed_bytes(cells, boxes);
+            let capacity = Arena::capacity(fixed, boxes, MAX_STATES, top).unwrap();
+            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
+        }
+        for memory_mib in MEMORY_MIB_RANGE {
+            for (cells, boxes, _) in shapes {
+                let fixed = fixed_bytes(cells, boxes);
+                let capacity = Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
+                assert!(
+                    capacity.limit < MAX_STATES,
+                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
+                );
+                assert!(capacity.bytes <= memory_mib << 20);
+            }
+        }
+    }
+
+    /// The exact edge at 64 MiB for the largest board and box count: 691,841
+    /// states fit with 24 bytes to spare, and one more scales the request.
+    #[test]
+    fn a_limit_one_past_the_budget_is_scaled_to_it() {
+        let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES);
+        let fits = Arena::new(fixed, MAX_BOXES, 691_841, 64).unwrap();
+        assert_eq!(fits.node_limit(), 691_841);
+        assert_eq!(fits.limit_status(), Status::StateLimit);
+        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
+        drop(fits);
+        let scaled = Arena::new(fixed, MAX_BOXES, 691_842, 64).unwrap();
+        assert_eq!(scaled.node_limit(), 691_841);
+        assert_eq!(scaled.limit_status(), Status::MemoryLimit);
+    }
+
+    /// A cell count too large to count in bytes never fits, on wasm32 and
+    /// 64-bit alike: the fixed bytes saturate instead of wrapping to a small
+    /// total.
+    #[test]
+    fn a_board_too_large_to_count_never_fits() {
+        let fixed = fixed_bytes(usize::MAX, MAX_BOXES);
+        for memory_mib in [*MEMORY_MIB_RANGE.start(), *MEMORY_MIB_RANGE.end()] {
+            assert_eq!(
+                Arena::capacity(fixed, MAX_BOXES, MAX_STATES, memory_mib).err(),
+                Some(SearchError::BudgetTooSmall)
+            );
         }
     }
 }

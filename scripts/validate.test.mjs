@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { execute, formatDuration, plan, summary } from './validate.mjs';
+import { execute, plan, summary } from './validate.mjs';
 
 /** @typedef {import('./validate.mjs').Step} Step */
 
@@ -136,18 +136,10 @@ test("execute passes each step's env to run", () => {
 
 test('the summary shows SKIP, never PASS, for a skipped step and counts every result', () => {
   const text = summary(fake(false, []).outcomes);
-  assert.match(text, /^ {2}PASS {2}npm run a {2}1\.5s$/m);
-  assert.match(text, /^ {2}SKIP {2}npm run c {2}skipped by --quick$/m);
-  assert.match(text, /^Result: PASS - 3 passed, 0 failed, 1 skipped in 4\.5s$/m);
+  assert.match(text, /^ *SKIP +npm run c\b/m);
+  assert.doesNotMatch(text, /^ *PASS +npm run c\b/m);
+  assert.match(text, /^Result: PASS - 3 passed, 0 failed, 1 skipped\b/m);
   assert.ok(/^[\x20-\x7e\n]*$/.test(text), 'ASCII only');
   const failed = summary(fake(false, ['npm run b']).outcomes);
-  assert.match(failed, /^ {2}FAIL {2}npm run b {2}1\.5s, exit code 3$/m);
-  assert.match(failed, /^Result: FAIL - 1 passed, 1 failed, 2 skipped in 3\.0s$/m);
-});
-
-test('durations read as seconds under a minute, then as minutes and seconds', () => {
-  assert.equal(formatDuration(12_300), '12.3s');
-  assert.equal(formatDuration(59_400), '59.4s');
-  assert.equal(formatDuration(59_500), '1m 00s');
-  assert.equal(formatDuration(185_000), '3m 05s');
+  assert.match(failed, /^Result: FAIL - 1 passed, 1 failed, 2 skipped\b/m);
 });

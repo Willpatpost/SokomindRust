@@ -104,7 +104,7 @@ export function execute(steps, { keepGoing, run, now }) {
  * 12.3s under a minute, otherwise 3m 05s.
  * @param {number} ms
  */
-export function formatDuration(ms) {
+function formatDuration(ms) {
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;

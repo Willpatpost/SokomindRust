@@ -1,9 +1,6 @@
-//! The accept checks a rise must pass, one unit each, in the probe's order:
-//! Lane, Sink, Line for each unsettled box, Matched, then the pocket check.
-//! This ports the probe's `lane_open`, `lane_lost`, `line_mobile_ok` and
-//! `accept` (p4b.rs 726-752, 813-838 and 872-901). The probe's `verdict`
-//! audit is not ported. Ban, the first check of the ladder's accept, comes
-//! with the ladder in step 8.
+//! The accept checks a rise must pass, one unit each, in this order: Lane,
+//! Sink, Line for each unsettled box, Matched, then the pocket check. Ban,
+//! the first check of the ladder's accept, is the ladder's own.
 //!
 //! - Lane: a goal that the state leaves unfilled had an open lane at the
 //!   root and has none now. A lane into goal `q` from direction `d` is
@@ -237,14 +234,23 @@ pub(super) fn first_reject(
 mod tests {
     use super::{Check, Facts, Pockets, Tools, Verdict, first_reject, root_lanes, run};
     use crate::{
-        stage::reference::{FAR, Geo, Owned, ROUTES, at, macro_ends, random_state, route_pushes},
-        testkit::{Lcg, catalog, huge},
+        corral::Corral, deadlock::Deadlock, heuristic::Heuristic, reach::Reach, stage::Scratch,
+        testkit::huge,
     };
-    use sokomind_core::{Cell, NONE, OPPOSITE, State, WALL};
+    use sokomind_core::{Board, Cell, State, Step, WALL, decode_direction};
 
-    /// The probe's P2e chain roots f19, f20 and f21 on huge (p4b.rs
-    /// 1347-1397): f20 seals the pocket (1,8)-(1,9) behind the X boxes on
-    /// (1,7), (1,10) and (2,9), and f21 keeps the seal.
+    /// Three solution routes of huge, each with its move count: 626, 893
+    /// and 503 moves, of 248, 278 and 236 pushes. Each file ends in a
+    /// newline, so the route helpers trim it.
+    const ROUTES: [(usize, &str); 3] = [
+        (626, include_str!("../../testdata/huge-626.txt")),
+        (893, include_str!("../../testdata/huge-893.txt")),
+        (503, include_str!("../../testdata/huge-503.txt")),
+    ];
+
+    /// Three roots of one chain on huge, f19, f20 and f21: f20 seals the
+    /// pocket (1,8)-(1,9) behind the X boxes on (1,7), (1,10) and (2,9),
+    /// and f21 keeps the seal.
     const F19: [&str; 15] = [
         "###############",
         "#AXX...X...xxb#",
@@ -299,10 +305,142 @@ mod tests {
         "###############",
     ];
 
-    /// One fixture of plan §7.2: a frame root and a child on huge, with
-    /// what the levels and the checks must give.
+    /// Every component a check unit borrows, owned and built for one board.
+    struct Owned {
+        heuristic: Heuristic,
+        reach: Reach,
+        deadlock: Deadlock,
+        corral: Corral,
+        scratch: Scratch,
+        facts: Facts,
+    }
+
+    impl Owned {
+        fn new(board: &Board) -> Self {
+            let cells = board.tiles().len();
+            let heuristic = Heuristic::new(board);
+            let mut scratch = Scratch::new(cells).expect("stage scratch");
+            let player = board.initial().player;
+            let built = Facts::build(board, &heuristic, player, &mut scratch);
+            let facts = built.expect("stage facts");
+            Self {
+                heuristic,
+                reach: Reach::new(cells),
+                deadlock: Deadlock::new(board),
+                corral: Corral::new(board),
+                scratch,
+                facts,
+            }
+        }
+
+        /// The units' three borrows, for `board`, the board these were
+        /// built for.
+        fn parts<'a>(&'a mut self, board: &'a Board) -> (Tools<'a>, &'a Facts, &'a mut Scratch) {
+            let tools = Tools {
+                board,
+                heuristic: &self.heuristic,
+                reach: &mut self.reach,
+                deadlock: &mut self.deadlock,
+                corral: &mut self.corral,
+            };
+            (tools, &self.facts, &mut self.scratch)
+        }
+    }
+
+    /// The cell in row `r` and column `c` of `board`.
+    fn at(board: &Board, r: usize, c: usize) -> Cell {
+        (r * board.width() + c) as Cell
+    }
+
+    /// The state after each push of `route`, trimmed, in push order.
+    fn route_pushes(board: &Board, route: &str) -> Vec<State> {
+        let mut state = board.initial();
+        let mut pushes = Vec::new();
+        for action in route.trim().bytes() {
+            let direction = decode_direction(action).expect("a route action");
+            if let Step::Push(_) = board.step(&mut state, direction).expect("a legal move") {
+                pushes.push(state);
+            }
+        }
+        pushes
+    }
+
+    /// Along `route`, trimmed, the state after the last push of each run of
+    /// pushes of one box.
+    fn macro_ends(board: &Board, route: &str) -> Vec<State> {
+        let mut state = board.initial();
+        let mut ends = Vec::new();
+        let mut current = None;
+        let mut last = state;
+        for action in route.trim().bytes() {
+            let direction = decode_direction(action).expect("a route action");
+            if let Step::Push(slot) = board.step(&mut state, direction).expect("a legal move") {
+                if current.is_some_and(|s| s != slot) {
+                    ends.push(last);
+                }
+                current = Some(slot);
+                last = state;
+            }
+        }
+        ends.push(last);
+        ends
+    }
+
+    /// `base` with each `(from, to)` box move applied in order and the
+    /// keeper on `player`. Panics when a `from` holds no box, or when a
+    /// `to` or `player` is a wall or holds a box.
+    fn place(board: &Board, base: &State, moves: &[(Cell, Cell)], player: Cell) -> State {
+        let boxes = board.labels().len();
+        let free = |state: &State, c: Cell| {
+            board.tiles()[usize::from(c)] != WALL && !state.boxes[..boxes].contains(&c)
+        };
+        let mut state = *base;
+        for &(from, to) in moves {
+            let i = state.boxes[..boxes].iter().position(|&c| c == from);
+            assert!(free(&state, to), "{to} is not free");
+            state.boxes[i.expect("a box to move")] = to;
+        }
+        assert!(free(&state, player), "{player} is not free");
+        state.player = player;
+        state
+    }
+
+    /// The cell of the first box labelled `label`.
+    fn box_of(board: &Board, state: &State, label: u8) -> Cell {
+        let i = board.labels().iter().position(|&l| l == label);
+        state.boxes[i.expect("a box of the label")]
+    }
+
+    /// The state a picture draws, its rows from the board's top row: each
+    /// box letter fills its label's slots in row-major order, and '@' is
+    /// the keeper. Panics when a label's box count is off or no keeper is
+    /// drawn.
+    fn picture(board: &Board, rows: &[&str]) -> State {
+        let labels = board.labels();
+        let mut state = board.initial();
+        let mut placed = vec![false; labels.len()];
+        let mut player = None;
+        for (r, row) in rows.iter().enumerate() {
+            for (c, ch) in row.bytes().enumerate() {
+                if ch == b'@' {
+                    player = Some(at(board, r, c));
+                } else if labels.contains(&ch) {
+                    let i = (0..labels.len()).find(|&i| labels[i] == ch && !placed[i]);
+                    let i = i.expect("a slot left for the box");
+                    placed[i] = true;
+                    state.boxes[i] = at(board, r, c);
+                }
+            }
+        }
+        assert!(placed.iter().all(|&p| p), "a box is missing");
+        state.player = player.expect("a keeper");
+        state
+    }
+
+    /// One fixture on huge: a frame root and a child, with what the levels
+    /// and the checks must give.
     struct Fixture {
-        /// The fixture's name in the plan's table.
+        /// The fixture's name.
         name: &'static str,
         /// The frame root, which gives the lanes.
         root: State,
@@ -317,22 +455,18 @@ mod tests {
         rejected: &'static [&'static str],
     }
 
-    /// The fixtures of plan §7.2, built as the probe's `fixtures` builds
-    /// them (p4b.rs 1303-1407). The root is the start unless stated.
-    fn huge_fixtures(geo: &Geo<'_>) -> Vec<Fixture> {
-        let board = geo.board;
+    /// The fixtures on huge, each child one or two box moves from its root
+    /// or a picture. The root is the start unless stated.
+    fn huge_fixtures(board: &Board) -> Vec<Fixture> {
         let start = board.initial();
         let at = |r, c| at(board, r, c);
-        let place = |base: &State, moves: &[(Cell, Cell)], player| {
-            geo.place(base, moves, player).expect("the fixture fits")
-        };
-        let parse = |rows: &[&str]| geo.parse_show(rows).expect("the picture parses");
-        let ends = macro_ends(board, ROUTES[1].1).expect("route 893");
+        let place =
+            |base: &State, moves: &[(Cell, Cell)], player| place(board, base, moves, player);
+        let ends = macro_ends(board, ROUTES[1].1);
         let f2_root = place(&start, &[(at(3, 1), at(2, 1))], at(3, 1));
-        let a = geo.box_of(&start, b'A').expect("huge has an A box");
-        let b = geo.box_of(&start, b'B').expect("huge has a B box");
+        let (a, b) = (box_of(board, &start, b'A'), box_of(board, &start, b'B'));
         let f6_moves = [(at(12, 4), at(13, 2)), (at(12, 10), at(13, 12))];
-        let (f19, f20, f21) = (parse(&F19), parse(&F20), parse(&F21));
+        let [f19, f20, f21] = [F19, F20, F21].map(|rows| picture(board, &rows));
         vec![
             Fixture {
                 name: "m11",
@@ -465,14 +599,13 @@ mod tests {
         }
     }
 
-    /// Plan §7.2 on huge: each fixture's levels, the check that first
-    /// rejects its child, and every check that rejects it.
+    /// Each fixture's levels, the check that first rejects its child, and
+    /// every check that rejects it.
     #[test]
     fn fixtures() {
         let board = huge();
+        let cases = huge_fixtures(&board);
         let mut owned = Owned::new(&board);
-        let geo = Geo::new(&board, &owned.heuristic);
-        let cases = huge_fixtures(&geo);
         let (mut tools, facts, scratch) = owned.parts(&board);
         let heuristic = tools.heuristic;
         let pockets = &mut scratch.pockets;
@@ -490,18 +623,17 @@ mod tests {
         }
     }
 
-    /// Plan §7.3 on huge's three probe routes, of 248, 278 and 236 pushes.
-    /// With each push state as its own root, Sink, Matched and the pocket
-    /// check reject none, and Line rejects only pushes 78 to 80 of route
-    /// 503, which put B on (1,10), (1,11) and (1,12). Each route rises
-    /// exactly 23 times, a rise being a push state whose level exceeds the
-    /// previous rise's, from the start. Against the previous rise as root,
-    /// no check rejects a rise.
+    /// Huge's three routes, of 248, 278 and 236 pushes. With each push
+    /// state as its own root, Sink, Matched and the pocket check reject
+    /// none, and Line rejects only pushes 78 to 80 of route 503, which put
+    /// B on (1,10), (1,11) and (1,12). Each route rises exactly 23 times, a
+    /// rise being a push state whose level exceeds the previous rise's,
+    /// from the start. Against the previous rise as root, no check rejects
+    /// a rise, so the accept checks keep every rise of a real solution.
     #[test]
     fn route_replay() {
         let board = huge();
         let mut owned = Owned::new(&board);
-        let geo = Geo::new(&board, &owned.heuristic);
         let (mut tools, facts, scratch) = owned.parts(&board);
         let heuristic = tools.heuristic;
         let pockets = &mut scratch.pockets;
@@ -522,8 +654,8 @@ mod tests {
                 let want = [(78, vec!["e"]), (79, vec!["e"]), (80, vec!["e"])];
                 assert_eq!(rejected, want);
                 for (k, c) in [(78, 10), (79, 11), (80, 12)] {
-                    let b = geo.box_of(&states[k - 1], b'B');
-                    assert_eq!(b, Some(at(&board, 1, c)), "push {k}");
+                    let b = box_of(&board, &states[k - 1], b'B');
+                    assert_eq!(b, at(&board, 1, c), "push {k}");
                 }
             } else {
                 assert!(rejected.is_empty(), "{moves}: {rejected:?}");
@@ -545,153 +677,5 @@ mod tests {
             }
             assert_eq!(rises, 23, "{moves}");
         }
-    }
-
-    /// Random (root, child) pairs of every catalog board: the root's lanes
-    /// match the probe's `lane_open` goal by goal, the Lane unit matches
-    /// the probe's `lane_lost`, and each Line unit matches the probe's test
-    /// (e) on the first unsettled box from its slot on (p4b.rs 726-750 and
-    /// 813-838). Some pair must lose a lane and some box must fail Line.
-    #[test]
-    fn checks_match_probe() {
-        let mut rng = Lcg(0xc4ec);
-        let (mut lost, mut immobile) = (0, 0);
-        for (id, board) in catalog() {
-            let mut owned = Owned::new(&board);
-            let geo = Geo::new(&board, &owned.heuristic);
-            let on_line = probe_on_line(&geo);
-            let mut pairs = Vec::new();
-            for _ in 0..30 {
-                let root = random_state(&mut rng, &board, &owned.heuristic);
-                let child = random_state(&mut rng, &board, &owned.heuristic);
-                pairs.push((root, child));
-            }
-            let (mut tools, facts, scratch) = owned.parts(&board);
-            let heuristic = tools.heuristic;
-            let pockets = &mut scratch.pockets;
-            for (p, (root, child)) in pairs.iter().enumerate() {
-                let lanes = root_lanes(&mut tools, root);
-                let root_occ = geo.occ(root);
-                for (t, &q) in heuristic.goal_cells().iter().enumerate() {
-                    let g = geo.goal_group[usize::from(q)];
-                    let open = probe_lane_open(&geo, q, g, &root_occ);
-                    assert_eq!((lanes >> t) & 1 != 0, open, "{id} pair {p} column {t}");
-                }
-                let lane = run(&mut tools, facts, pockets, child, lanes, Check::Lane);
-                let want = if probe_lane_lost(&geo, child, root) {
-                    lost += 1;
-                    Verdict::Reject
-                } else {
-                    Verdict::Next(Check::Sink)
-                };
-                assert_eq!(lane, want, "{id} pair {p}");
-                let w = geo.settled(child);
-                for i in 0..geo.slots {
-                    let check = Check::Line(i as u8);
-                    let got = run(&mut tools, facts, pockets, child, lanes, check);
-                    let unsettled = (i..geo.slots).find(|&j| !w[usize::from(child.boxes[j])]);
-                    let want = match unsettled {
-                        None => Verdict::Next(Check::Matched),
-                        Some(j) if probe_line(&geo, &on_line, child, j) => {
-                            Verdict::Next(Check::Line(j as u8 + 1))
-                        }
-                        Some(_) => Verdict::Reject,
-                    };
-                    immobile += usize::from(want == Verdict::Reject);
-                    assert_eq!(got, want, "{id} pair {p} slot {i}");
-                }
-            }
-        }
-        assert!(lost > 0, "no pair lost a lane");
-        assert!(immobile > 0, "no box failed Line");
-    }
-
-    /// The probe's `lane_open` (p4b.rs 726-741): some lane into goal `q`
-    /// of group `g` is open in the occupancy `occ` of `Geo::occ`.
-    fn probe_lane_open(geo: &Geo<'_>, q: Cell, g: usize, occ: &[usize]) -> bool {
-        let fits = |o: usize| o != 0 && geo.group[o - 1] == g;
-        (0..4).any(|d| {
-            let src = geo.nb[usize::from(q)][OPPOSITE[d]];
-            if src == NONE {
-                return false;
-            }
-            let sup = geo.nb[usize::from(src)][OPPOSITE[d]];
-            if sup == NONE {
-                return false;
-            }
-            let (s, p) = (occ[usize::from(src)], occ[usize::from(sup)]);
-            ((s == 0 || fits(s)) && p == 0) || (fits(p) && s == 0)
-        })
-    }
-
-    /// The probe's `lane_lost` (p4b.rs 743-750): some goal that `child`
-    /// leaves unfilled had an open lane in `root` and has none in `child`.
-    fn probe_lane_lost(geo: &Geo<'_>, child: &State, root: &State) -> bool {
-        let (occ, root_occ) = (geo.occ(child), geo.occ(root));
-        geo.goals.iter().any(|&(q, g)| {
-            !geo.filled(q, g, &occ)
-                && probe_lane_open(geo, q, g, &root_occ)
-                && !probe_lane_open(geo, q, g, &occ)
-        })
-    }
-
-    /// The probe's `on_line` (p4b.rs 197-202): the cells of its
-    /// `sink_lines` (640-666), every wall-to-wall run of two or more cells
-    /// along a row or a column with a wall across the run at each cell.
-    fn probe_on_line(geo: &Geo<'_>) -> Vec<bool> {
-        let tiles = geo.board.tiles();
-        let mut on_line = vec![false; geo.nb.len()];
-        for (back, fwd, a, b) in [(2, 3, 0, 1), (0, 1, 2, 3)] {
-            for (c, around) in geo.nb.iter().enumerate() {
-                if tiles[c] == WALL || around[back] != NONE {
-                    continue;
-                }
-                let mut run = Vec::new();
-                let mut frozen = true;
-                let mut x = c as Cell;
-                loop {
-                    let n = geo.nb[usize::from(x)];
-                    frozen &= n[a] == NONE || n[b] == NONE;
-                    run.push(x);
-                    if n[fwd] == NONE {
-                        break;
-                    }
-                    x = n[fwd];
-                }
-                if frozen && run.len() >= 2 {
-                    for x in run {
-                        on_line[usize::from(x)] = true;
-                    }
-                }
-            }
-        }
-        on_line
-    }
-
-    /// The probe's test (e) for box `i` of `s`, which is unsettled (p4b.rs
-    /// 813-838): with the settled boxes, the boxes on `on_line` cells and
-    /// the box itself blocking the keeper, the keeper reaches the stand of
-    /// a push of the box to a cell that holds no settled box and is not
-    /// dead for its group.
-    fn probe_line(geo: &Geo<'_>, on_line: &[bool], s: &State, i: usize) -> bool {
-        let w = geo.settled(s);
-        let mut blocked = w.clone();
-        for &c in &s.boxes[..geo.slots] {
-            if on_line[usize::from(c)] {
-                blocked[usize::from(c)] = true;
-            }
-        }
-        let x = s.boxes[i];
-        blocked[usize::from(x)] = true;
-        let k = geo.flood(s.player, &blocked);
-        let (g, around) = (geo.group[i], geo.nb[usize::from(x)]);
-        (0..4).any(|d| {
-            let (y, st) = (around[d], around[OPPOSITE[d]]);
-            y != NONE
-                && st != NONE
-                && k[usize::from(st)] != FAR
-                && !w[usize::from(y)]
-                && !geo.dead[g][usize::from(y)]
-        })
     }
 }
