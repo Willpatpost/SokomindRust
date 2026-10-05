@@ -1735,23 +1735,24 @@ mod tests {
 
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
     /// entry and 8 to 16 bytes of table, so no budget holds a full
-    /// `MAX_STATES`: 256 MiB holds 8,388,607 states at one box, where the
-    /// next state would double the table, and 2,788,993 at `MAX_BOXES` on
-    /// `MAX_CELLS` cells (`MAX_STATES`'s doc). Every other budget is sized
-    /// without allocating, through [`Arena::capacity`].
+    /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
+    /// where the next state would double the table, and 11,177,601 at
+    /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc). Every budget is
+    /// sized without allocating, through [`Arena::capacity`]: an arena at the
+    /// top would reserve chunk lists for millions of the four-record chunks
+    /// unit tests use.
     #[test]
     fn memory_binds_a_full_limit_at_every_budget() {
         let shapes = [
-            (4, 1, 8_388_607),
-            (MAX_CELLS, 1, 8_388_607),
-            (4, MAX_BOXES, 2_793_036),
-            (MAX_CELLS, MAX_BOXES, 2_788_993),
+            (4, 1, 33_554_431),
+            (MAX_CELLS, 1, 33_554_431),
+            (4, MAX_BOXES, 11_181_644),
+            (MAX_CELLS, MAX_BOXES, 11_177_601),
         ];
+        let top = *MEMORY_MIB_RANGE.end();
         for (cells, boxes, fits) in shapes {
-            let arena = Arena::new(cells, boxes, MAX_STATES, 256).unwrap();
-            assert_eq!(arena.node_limit, fits, "{cells} cells, {boxes} boxes");
-            assert_eq!(arena.limit_status(), Status::MemoryLimit);
-            assert!(arena.reserved_bytes() <= 256 << 20);
+            let capacity = Arena::capacity(cells, boxes, MAX_STATES, top).unwrap();
+            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
         }
         for memory_mib in MEMORY_MIB_RANGE {
             for (cells, boxes, _) in shapes {

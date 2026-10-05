@@ -78,13 +78,13 @@ use std::ops::RangeInclusive;
 /// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
-/// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,788,993 states at
-/// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
-/// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
-/// request at this limit therefore ends with [`Status::MemoryLimit`], never
-/// [`Status::StateLimit`]. Records, the queue and the table are allocated
-/// only as the search fills them, so one that ends early, as on a small
-/// board, allocates little of its budget.
+/// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,601
+/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells and 33,554,431 at one box
+/// (the arena test `memory_binds_a_full_limit_at_every_budget`). A search
+/// that fills a request at this limit therefore ends with
+/// [`Status::MemoryLimit`], never [`Status::StateLimit`]. Records, the queue
+/// and the table are allocated only as the search fills them, so one that
+/// ends early, as on a small board, allocates little of its budget.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
@@ -94,7 +94,10 @@ pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// full [`MAX_STATES`] (see there for the per-state cost), so a larger budget
 /// raises a full limit's scaled-down state count all the way to this range's
 /// end.
-pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
+pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=1024;
+// Below 4 GiB, so a budget in bytes, and every count the arena allocates
+// within it, fits a usize on wasm32.
+const _: () = assert!(*MEMORY_MIB_RANGE.end() < 4096);
 
 /// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].
 /// [`Mode::as_str`] gives its wire name: the server's `mode` field, the WASM

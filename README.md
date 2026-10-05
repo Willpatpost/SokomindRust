@@ -277,12 +277,12 @@ Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
 per arena (`sokomind_search::MAX_STATES`), 128 MiB accounted search storage, and
 one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration);
-the search crate, and so the browser worker, accepts budgets up to 256 MiB. The
+the search crate, and so the browser worker, accepts budgets up to 1024 MiB. The
 web app sends the full state cap and the budget its memory select names (16 to
 128 MiB, 64 by default) to either engine. A state costs a 12-byte record, 2
 bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
 memory budget always binds before the state cap: on the catalog's boards 64 MiB
-holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 256 MiB 3.67-8.39M, and a
+holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a
 run that fills its arena reports a memory limit. The arena holds at most the
 smaller of the state cap and what the budget holds. Records and their queue
 entries grow in blocks of 2^16 as the search fills them, and the index table has
