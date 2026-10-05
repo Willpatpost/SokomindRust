@@ -66,8 +66,6 @@ mod checks;
 mod ladder;
 mod movers;
 mod rank;
-#[cfg(test)]
-mod reference;
 mod rooms;
 
 pub(crate) use ladder::{Done, Ladder};

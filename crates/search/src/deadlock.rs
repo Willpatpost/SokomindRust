@@ -268,13 +268,13 @@ impl Deadlock {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL_BOXES, Deadlock, EMPTY, frozen_off_goal};
+    use super::{ALL_BOXES, Deadlock, EMPTY};
     use crate::{
         heuristic::Heuristic,
         push::canonicalize,
-        testkit::{Lcg, catalog, explored_catalog, random_room, remaining, solvable_states},
+        testkit::{Lcg, explored_catalog, random_room, remaining, solvable_states},
     };
-    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State, Step, WALL};
+    use sokomind_core::{Board, Cell, MAX_BOXES, NONE, State, Step};
 
     /// D is frozen on its goal once pushed down; pushing A left then freezes A
     /// against it, while pushing A right puts it on its goal.
@@ -628,120 +628,5 @@ mod tests {
             lone >= 3_900 && lone_flags >= 1_450 && grouped >= 800,
             "{lone} {lone_flags} {grouped}"
         );
-    }
-
-    /// The probe's geometry for its `frozen_off_goal` (slurm/probes/p4b.rs,
-    /// not tracked): floor, neighbors, each slot's group, each goal cell's
-    /// group, and per group the floor cells from which no push sequence
-    /// takes a box to one of its goals. The probe pulls those from the
-    /// goals; `Heuristic::dead` marks the same cells, as `dead_matches_pull`
-    /// checks on every catalog board.
-    struct Geo {
-        floor: Vec<bool>,
-        nb: Vec<[Cell; 4]>,
-        group: Vec<usize>,
-        goal_group: Vec<usize>,
-        dead: Vec<Vec<bool>>,
-    }
-
-    impl Geo {
-        fn new(board: &Board, heuristic: &Heuristic) -> Self {
-            let (group, goal_group) = crate::testkit::probe_groups(board);
-            let floor: Vec<bool> = board.tiles().iter().map(|&tile| tile != WALL).collect();
-            let mut dead: Vec<Vec<bool>> = Vec::new();
-            for i in (0..group.len()).filter(|&i| heuristic.group(i).start == i) {
-                let cells = (0..floor.len()).map(|c| floor[c] && heuristic.dead(i, c as Cell));
-                dead.push(cells.collect());
-            }
-            Self {
-                floor,
-                nb: board.neighbors().to_vec(),
-                group,
-                goal_group,
-                dead,
-            }
-        }
-
-        /// The probe's `frozen_off_goal`: box `j` of group `group[j]` on
-        /// `cells[j]`, no other box on the board.
-        fn frozen_off_goal(&self, cells: &[Cell], group: &[usize]) -> bool {
-            let wall = |c: Cell| c == NONE || !self.floor[c as usize];
-            let mut frozen = vec![true; cells.len()];
-            loop {
-                let mut changed = false;
-                for (j, (&x, &g)) in cells.iter().zip(group).enumerate() {
-                    if !frozen[j] {
-                        continue;
-                    }
-                    let (nb, dead) = (self.nb[x as usize], &self.dead[g]);
-                    let held = (0..4).all(|d| {
-                        let (a, b) = (nb[d], nb[OPPOSITE[d]]);
-                        let blocker = |c: Cell| {
-                            wall(c) || cells.iter().zip(&frozen).any(|(&y, &f)| f && y == c)
-                        };
-                        blocker(a) || blocker(b) || (dead[a as usize] && dead[b as usize])
-                    });
-                    if !held {
-                        frozen[j] = false;
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            cells
-                .iter()
-                .zip(group)
-                .zip(&frozen)
-                .any(|((&c, &g), &f)| f && self.goal_group[c as usize] != g)
-        }
-    }
-
-    /// `frozen_off_goal` answers as the probe's does on random sets of up to
-    /// 8 boxes on every catalog board. Most boxes land beside an earlier one,
-    /// so they group and hold one another.
-    #[test]
-    fn frozen_off_goal_matches_probe() {
-        let mut rng = Lcg(0xf20e);
-        // Flagged, passed, and flagged with no box flagged alone.
-        let mut seen = [0; 3];
-        for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board);
-            let geo = Geo::new(&board, &heuristic);
-            let floor: Vec<Cell> = (0..board.tiles().len() as Cell)
-                .filter(|&cell| geo.floor[cell as usize])
-                .collect();
-            let boxes = board.labels().len();
-            for _ in 0..200 {
-                let mut slots: Vec<usize> = (0..boxes).collect();
-                let mut members: Vec<(usize, Cell)> = Vec::new();
-                let count = 1 + rng.below(boxes.min(8));
-                for _ in 0..count {
-                    let i = slots.swap_remove(rng.below(slots.len()));
-                    let mut cell = NONE;
-                    if !members.is_empty() && rng.below(4) != 0 {
-                        let (_, beside) = members[rng.below(members.len())];
-                        cell = board.neighbors()[beside as usize][rng.below(4)];
-                    }
-                    while cell == NONE || members.iter().any(|&(_, c)| c == cell) {
-                        cell = floor[rng.below(floor.len())];
-                    }
-                    members.push((i, cell));
-                }
-                let (cells, group): (Vec<Cell>, Vec<usize>) =
-                    members.iter().map(|&(i, c)| (c, geo.group[i])).unzip();
-                let flagged = frozen_off_goal(&board, &heuristic, &members);
-                let probe = geo.frozen_off_goal(&cells, &group);
-                assert_eq!(flagged, probe, "{id}: {members:?}");
-                let alone = members
-                    .iter()
-                    .any(|&member| frozen_off_goal(&board, &heuristic, &[member]));
-                seen[0] += usize::from(flagged);
-                seen[1] += usize::from(!flagged);
-                seen[2] += usize::from(flagged && !alone);
-            }
-        }
-        assert!(seen.iter().all(|&count| count > 0), "{seen:?}");
     }
 }

@@ -1,8 +1,7 @@
 //! Test-only helpers shared by the unit tests: the catalog, a seeded random
-//! source and the rooms it generates, floor component floods and the stage
-//! probe's box groups, and two exhaustive oracles: the exact remaining moves
-//! from every primitive state of a small board, and whether each canonical
-//! state of one has a solution.
+//! source and the rooms it generates, floor component floods, and two
+//! exhaustive oracles: the exact remaining moves from every primitive state
+//! of a small board, and whether each canonical state of one has a solution.
 use crate::push::canonicalize;
 use sokomind_core::{Board, Cell, MAX_BOXES, State, Step, WALL};
 use std::{
@@ -152,22 +151,6 @@ pub(crate) fn adjacent(board: &Board, cell: usize) -> [Option<usize>; 4] {
     ];
     let floor = |&next: &usize| next < tiles.len() && tiles[next] != WALL;
     steps.map(|next| next.filter(floor))
-}
-
-/// The stage probe's group of each box slot, one per run of equal labels,
-/// and of each cell's goal, `usize::MAX` off goals.
-pub(crate) fn probe_groups(board: &Board) -> (Vec<usize>, Vec<usize>) {
-    let labels = board.labels();
-    let mut group = vec![0; labels.len()];
-    for i in 1..labels.len() {
-        group[i] = group[i - 1] + usize::from(labels[i] != labels[i - 1]);
-    }
-    let mut goal_group = vec![usize::MAX; board.tiles().len()];
-    for &(goal, label) in board.goals() {
-        let i = labels.iter().position(|&l| l == label).unwrap();
-        goal_group[usize::from(goal)] = group[i];
-    }
-    (group, goal_group)
 }
 
 /// Every primitive state reachable from the start, without expanding solved
