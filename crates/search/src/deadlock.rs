@@ -529,15 +529,12 @@ mod tests {
                 }
             }
         }
-        // A Python replica of this test (pruning/replicas/freeze_replica.py,
-        // not tracked) gives 15_686 flags for seed 0x5eed, 693 from solvable
-        // parents and 2_577 with a live destination (10_658, 503 and 1_993
-        // without the dead-pair case). The bounds sit a little below, so
-        // dropping either half of the rule fails them. Applying the dead-pair
-        // case to the moved box alone (15_102, 693 and 1_993) fails only the
-        // live-destination bound, and dead_pair_holds_the_partner. No room
-        // exercises an occupied dead-pair neighbor: a rule that applies the
-        // case only between two empty cells gives the same counts.
+        // The test counts 15_686 flags, 693 from solvable parents and 2_577
+        // with a live destination (raise a bound past its count to print
+        // them). The bounds sit a little below, so dropping either half of
+        // `held`'s rule fails them: without the dead-pair case the counts
+        // are 14_833, 693 and 1_993, and without the frozen-neighbor case
+        // 15_171, 593 and 2_062.
         assert!(
             flagged >= 15_000 && from_solvable >= 650 && live_destination >= 2_450,
             "{flagged} {from_solvable} {live_destination}"
@@ -545,10 +542,8 @@ mod tests {
     }
 
     /// Every push the rule flags on an explored catalog board, from any
-    /// reachable state, leads to a state with no solution. The 4x4 rooms
-    /// above miss some geometry: an unsound variant that also holds a box
-    /// when its row is held and the cells above it and to its left are both
-    /// dead for it passes there, bounds included, and fails here.
+    /// reachable state, leads to a state with no solution: the check above,
+    /// on boards larger than its 4x4 rooms.
     #[test]
     fn flagged_catalog_pushes_leave_no_solution() {
         let (mut flagged, mut from_solvable) = (0, 0);
@@ -577,9 +572,10 @@ mod tests {
                 }
             }
         }
-        // pruning/replicas/catalog_flags.py (not tracked) gives 2_229 flags,
-        // 209 from solvable parents (1_597 and 114 without the dead-pair
-        // case), and finds 2 of the unsound variant's flags on tiny.
+        // The test counts 2_229 flags, 209 from solvable parents. Without the
+        // frozen-neighbor case the counts are 2_066 and 175, below both
+        // bounds; without the dead-pair case 2_182 and 206, which only the
+        // rooms above catch.
         assert!(
             flagged >= 2_100 && from_solvable >= 190,
             "{flagged} {from_solvable}"
@@ -588,6 +584,11 @@ mod tests {
 
     /// The shortcut for a box that lands with no box beside it answers as
     /// the full fixpoint does on every push of the explored catalog boards.
+    /// The equality also guards `held` where the two checks above cannot,
+    /// since the shortcut answers a lone box without it: an unsound variant
+    /// that also holds a box whose row is held when the cells above it and
+    /// to its left are both dead for it flags no new push in either, and
+    /// fails here on tiny.
     #[test]
     fn lone_box_shortcut_matches_the_fixpoint() {
         let (mut lone, mut lone_flags, mut grouped) = (0, 0, 0);
@@ -620,10 +621,9 @@ mod tests {
                 }
             }
         }
-        // A replica of this test counts 4_058 pushes that land the box
-        // alone, 1_545 of them flagged, and 854 beside another box; the
-        // bounds sit a little below, so the shortcut must stay the common
-        // case.
+        // The test counts 4_058 pushes that land the box alone, 1_545 of
+        // them flagged, and 854 beside another box; the bounds sit a little
+        // below, so the shortcut must stay the common case.
         assert!(
             lone >= 3_900 && lone_flags >= 1_450 && grouped >= 800,
             "{lone} {lone_flags} {grouped}"

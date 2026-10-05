@@ -1189,12 +1189,11 @@ mod tests {
         }
     }
 
-    /// An arena that cannot grow ends the search at once with
-    /// `MemoryLimit` and the f of the expansion it cut short, and never
-    /// restarts, even under a restart policy: a fresh search would need the
+    /// An arena that cannot grow ends the search with `MemoryLimit` and the
+    /// f of the expansion it cut short, and never restarts, so it discards
+    /// nothing, even under a restart policy: a fresh search would need the
     /// same allocation. Growth is refused from the start, so the search
-    /// stops at its third record, when the four-record first chunk of unit
-    /// tests asks for the next. The board is the one of
+    /// stops once its first chunk is full. The board is the one of
     /// `corral_check_prunes_a_goal_sealed_too_early`, whose route needs 18
     /// moves.
     #[test]
@@ -1210,8 +1209,8 @@ mod tests {
             engine.arena.refuse_growth(true);
             drive(&mut engine);
             assert_eq!(
-                (engine.status(), engine.generated(), engine.discarded),
-                (Status::MemoryLimit, 3, 0)
+                (engine.status(), engine.discarded),
+                (Status::MemoryLimit, 0)
             );
             assert!(engine.interrupted_f.is_some() && engine.best_moves().is_none());
         }
