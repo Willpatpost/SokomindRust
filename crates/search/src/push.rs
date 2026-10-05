@@ -7,7 +7,7 @@
 //! walk to a state's first push ([`stand_walk`], [`root_estimate`]), and
 //! the [`SkipCounters`] its prunes share with the engine's own skips.
 //!
-//! It is separate from the engine so that the planned stage search can
+//! It is separate from the engine so that the stage ladder (stage/) can
 //! expand a node through the same [`Parts`], lent to it, as the engine
 //! does, prune for prune and counter for counter, without importing the
 //! engine. The expand prologue, including the sealed-corral check on the

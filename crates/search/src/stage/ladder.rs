@@ -55,9 +55,10 @@
 //!   `CHECK_FACTOR` times the work budget, and at zero the ladder gives up.
 //!   Expansions are bounded by work already, since every queued record
 //!   came from a counted insert or a reseed, so the budget bounds the
-//!   ladder's whole time at every board size. The probe has no such budget;
-//!   `CHECK_FACTOR` is provisional until P3 measures the largest checks to
-//!   work ratio.
+//!   ladder's whole time at every board size. It is a backstop: on the
+//!   catalog at 64 MiB and at the benchmark gate, no ladder that did real
+//!   work made more than 0.575 checks per unit of work it used (job 47024),
+//!   so a factor of 4 never binds there.
 //! - Memory: `Ladder::bytes_for(cells)` heap bytes, reserved in
 //!   [`Ladder::new`] and never grown, so no unit allocates. For `MAX_CELLS`
 //!   cells it is asserted to fit `arena::ROUTE_ALLOWANCE`: every search is
@@ -97,8 +98,8 @@ const MAX_RISES: usize = 128;
 const MAX_BANS: usize = 4;
 /// The most backjumps a ladder makes.
 const MAX_BACKTRACKS: u32 = 64;
-/// The checks budget per unit of work. Provisional: P3 sets it from the
-/// largest checks to work ratio the release tests see.
+/// The checks budget per unit of work, a backstop well above the largest
+/// ratio measured (see the module docs).
 const CHECK_FACTOR: u32 = 4;
 
 const _: () = assert!(FOCUS.len() == CAPS.len());
