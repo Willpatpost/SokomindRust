@@ -80,7 +80,7 @@ use std::ops::RangeInclusive;
 /// queue entry and 8 to 16 bytes of index table, so no budget in
 /// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,601
 /// states at `MAX_BOXES` boxes on `MAX_CELLS` cells and 33,554,431 at one box
-/// (the arena test `memory_binds_a_full_limit_at_every_budget`). A search
+/// (the engine test `memory_binds_a_full_limit_at_every_budget`). A search
 /// that fills a request at this limit therefore ends with
 /// [`Status::MemoryLimit`], never [`Status::StateLimit`]. Records, the queue
 /// and the table are allocated only as the search fills them, so one that

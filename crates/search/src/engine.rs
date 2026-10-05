@@ -1,5 +1,6 @@
 use crate::{
-    SearchError, SearchStats, SolutionError, Status, StopReason,
+    MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, SearchStats, SolutionError, Status,
+    StopReason,
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node, TableCounters},
     corral::Corral,
     deadlock::Deadlock,
@@ -8,7 +9,7 @@ use crate::{
     reach::Reach,
     stage::{self, Done, Ladder},
 };
-use sokomind_core::{ACTIONS, Board, MAX_ROUTE, OPPOSITE, State};
+use sokomind_core::{ACTIONS, Board, MAX_CELLS, MAX_ROUTE, OPPOSITE, State};
 use std::ops::ControlFlow;
 
 /// What separates the modes. Everything else, from child order to pruning
@@ -324,6 +325,37 @@ enum Inserted {
     Stopped,
 }
 
+/// Budget bytes for the longest route and its letter string, `MAX_ROUTE`
+/// bytes each, which [`Engine::solution`] allocates on demand. Part of
+/// [`FIXED_SCRATCH`], and the most the stage ladder may hold.
+const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
+
+/// Budget bytes charged to every search whatever the board: the route
+/// allowance plus a 64 KiB allowance for the fixed-size scratch buffers.
+/// The stage ladder reuses the route allowance: it exists only while the
+/// search has no route and is freed before one is recorded, and
+/// `Ladder::bytes_for(MAX_CELLS)` is asserted to fit. On wasm32 linear
+/// memory never shrinks, and the route need not reuse the blocks the ladder
+/// frees, so, like the first table that `Arena::grow` frees, they can stay
+/// allocated past the budget.
+const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
+const _: () = assert!(Ladder::bytes_for(MAX_CELLS) <= ROUTE_ALLOWANCE);
+
+/// The bytes a search charges its budget besides the arena: the flood,
+/// deadlock and corral buffers and the heuristic tables per cell, plus
+/// [`FIXED_SCRATCH`]. Counted in u64, since usize is 32 bits on wasm32, and
+/// saturating, so a board too large to count never fits instead of
+/// wrapping.
+fn fixed_bytes(cells: usize, boxes: usize) -> u64 {
+    let per_cell = Reach::BYTES_PER_CELL
+        + Deadlock::BYTES_PER_CELL
+        + Corral::BYTES_PER_CELL
+        + Heuristic::bytes_per_cell(boxes);
+    (cells as u64)
+        .saturating_mul(per_cell as u64)
+        .saturating_add(FIXED_SCRATCH as u64)
+}
+
 impl Engine {
     pub(crate) fn new(
         board: Board,
@@ -336,12 +368,16 @@ impl Engine {
             .validate_state(&start)
             .map_err(SearchError::InvalidState)?;
         canonicalize(&board, &mut start);
+        if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
+            return Err(SearchError::Limits);
+        }
         let cells = board.tiles().len();
         let boxes = board.labels().len();
-        let arena = Arena::new(cells, boxes, max_states, memory_mib)?;
+        let fixed = fixed_bytes(cells, boxes);
+        let arena = Arena::new(fixed, boxes, max_states, memory_mib)?;
         let node_limit = arena.node_limit();
         let fill_at = if policy.stage {
-            Arena::capacity(cells, boxes, max_states, stage::FILL_MIB)
+            Arena::capacity(fixed, boxes, max_states, stage::FILL_MIB)
                 .map_or(node_limit, |c| c.limit.min(node_limit))
         } else {
             node_limit
@@ -958,12 +994,14 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, Policy, same};
+    use super::{Engine, Policy, fixed_bytes, same};
     use crate::{
-        SearchStats, Status, StopReason, stage,
+        MAX_STATES, MEMORY_MIB_RANGE, SearchError, SearchStats, Status, StopReason,
+        arena::Arena,
+        stage,
         testkit::{catalog, huge},
     };
-    use sokomind_core::{Board, Game};
+    use sokomind_core::{Board, Game, MAX_BOXES, MAX_CELLS};
 
     /// Small enough for debug builds. At this limit Fast finds 30 catalog
     /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
@@ -1463,6 +1501,70 @@ mod tests {
             let generated = engine.generated();
             engine.advance(1);
             assert_eq!((engine.status(), engine.generated()), (status, generated));
+        }
+    }
+
+    /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
+    /// entry and 8 to 16 bytes of table, so no budget holds a full
+    /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
+    /// where the next state would double the table, and 11,177,601 at
+    /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
+    /// bytes. Every budget is sized without allocating, through
+    /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
+    /// millions of the four-record chunks unit tests use.
+    #[test]
+    fn memory_binds_a_full_limit_at_every_budget() {
+        let shapes = [
+            (4, 1, 33_554_431),
+            (MAX_CELLS, 1, 33_554_431),
+            (4, MAX_BOXES, 11_181_644),
+            (MAX_CELLS, MAX_BOXES, 11_177_601),
+        ];
+        let top = *MEMORY_MIB_RANGE.end();
+        for (cells, boxes, fits) in shapes {
+            let fixed = fixed_bytes(cells, boxes);
+            let capacity = Arena::capacity(fixed, boxes, MAX_STATES, top).unwrap();
+            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
+        }
+        for memory_mib in MEMORY_MIB_RANGE {
+            for (cells, boxes, _) in shapes {
+                let fixed = fixed_bytes(cells, boxes);
+                let capacity = Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
+                assert!(
+                    capacity.limit < MAX_STATES,
+                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
+                );
+                assert!(capacity.bytes <= memory_mib << 20);
+            }
+        }
+    }
+
+    /// The exact edge at 64 MiB for the largest board and box count: 691,841
+    /// states fit with 24 bytes to spare, and one more scales the request.
+    #[test]
+    fn a_limit_one_past_the_budget_is_scaled_to_it() {
+        let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES);
+        let fits = Arena::new(fixed, MAX_BOXES, 691_841, 64).unwrap();
+        assert_eq!(fits.node_limit(), 691_841);
+        assert_eq!(fits.limit_status(), Status::StateLimit);
+        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
+        drop(fits);
+        let scaled = Arena::new(fixed, MAX_BOXES, 691_842, 64).unwrap();
+        assert_eq!(scaled.node_limit(), 691_841);
+        assert_eq!(scaled.limit_status(), Status::MemoryLimit);
+    }
+
+    /// A cell count too large to count in bytes never fits, on wasm32 and
+    /// 64-bit alike: the fixed bytes saturate instead of wrapping to a small
+    /// total.
+    #[test]
+    fn a_board_too_large_to_count_never_fits() {
+        let fixed = fixed_bytes(usize::MAX, MAX_BOXES);
+        for memory_mib in [*MEMORY_MIB_RANGE.start(), *MEMORY_MIB_RANGE.end()] {
+            assert_eq!(
+                Arena::capacity(fixed, MAX_BOXES, MAX_STATES, memory_mib).err(),
+                Some(SearchError::BudgetTooSmall)
+            );
         }
     }
 }

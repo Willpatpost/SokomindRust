@@ -61,9 +61,10 @@
 //!   so a factor of 4 never binds there.
 //! - Memory: `Ladder::bytes_for(cells)` heap bytes, reserved in
 //!   [`Ladder::new`] and never grown, so no unit allocates. For `MAX_CELLS`
-//!   cells it is asserted to fit `arena::ROUTE_ALLOWANCE`: every search is
-//!   charged that allowance for the route it may build, and the ladder runs
-//!   only while the search has no route, so it adds nothing to the budget.
+//!   cells it is asserted to fit the engine's `ROUTE_ALLOWANCE`: every
+//!   search is charged that allowance for the route it may build, and the
+//!   ladder runs only while the search has no route, so it adds nothing to
+//!   the budget.
 //!
 //! Lane and Line in accept have no soundness argument (see the module docs
 //! of stage.rs), so the ladder serves Fast and Quality only, and nothing it
@@ -78,14 +79,14 @@ use super::{
     words,
 };
 use crate::{
-    arena::{self, Arena},
+    arena::Arena,
     corral::Pockets,
     deadlock::{GoalReach, SinkLines},
     heuristic::{Heuristic, ParentGroup},
     push::{self, Child, Parent, Parts},
     reach::Blocks,
 };
-use sokomind_core::{Board, Cell, MAX_CELLS, State};
+use sokomind_core::{Board, Cell, State};
 use std::{collections::TryReserveError, mem::size_of};
 
 /// The inserts a stage may make past its start, by rung.
@@ -109,7 +110,6 @@ const _: () = assert!(CAPS.len() == LAST_RUNG as usize + 1);
 const _: () = assert!(MAX_RISES <= 1 << u8::BITS);
 // 16 bytes of scalars and four 8-byte bans.
 const _: () = assert!(size_of::<Frame>() == 48);
-const _: () = assert!(Ladder::bytes_for(MAX_CELLS) <= arena::ROUTE_ALLOWANCE);
 
 /// What a ban rejects. The group is the key [`group_key`] gives.
 #[derive(Clone, Copy)]
@@ -226,7 +226,7 @@ pub(crate) struct Ladder {
 impl Ladder {
     /// Heap bytes [`Ladder::new`] reserves on a board of `cells` cells: the
     /// facts, the scratch and the ladder's own two vectors.
-    const fn bytes_for(cells: usize) -> usize {
+    pub(crate) const fn bytes_for(cells: usize) -> usize {
         let row = words(cells);
         let facts = Blocks::bytes_for(cells)
             + GoalReach::bytes_for(cells)
@@ -692,8 +692,9 @@ fn tools<'a>(parts: &'a mut Parts<'_>) -> Tools<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Board, Candidate, Facts, Frame, Heuristic, Ladder, MAX_CELLS, Scratch};
+    use super::{Board, Candidate, Facts, Frame, Heuristic, Ladder, Scratch};
     use crate::testkit::huge;
+    use sokomind_core::MAX_CELLS;
     use std::mem::size_of;
 
     /// The heap bytes `ladder` holds. The facts and the scratch are

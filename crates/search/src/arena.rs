@@ -1,7 +1,4 @@
-use crate::{
-    MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status, corral::Corral,
-    deadlock::Deadlock, heuristic::Heuristic, reach::Reach,
-};
+use crate::{MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status};
 use queue::Queue;
 use sokomind_core::{Cell, MAX_BOXES, MAX_CELLS, MAX_ROUTE, NONE, State};
 use std::mem::size_of;
@@ -36,22 +33,6 @@ const _: () = assert!((MAX_ROUTE as u64) < Key::F_SAT && Key::F_SAT < G_SAT as u
 /// `MAX_CELLS`, plus at most `MAX_CELLS` for the root's keeper walk to its
 /// first push.
 pub(crate) const MAX_QUEUED_H: u32 = ((MAX_BOXES + 1) * MAX_CELLS) as u32;
-
-/// Budget bytes for the longest route and its letter string, `MAX_ROUTE`
-/// bytes each, which `solution` allocates on demand. Part of
-/// [`FIXED_SCRATCH`], and the most the stage ladder (stage.rs) may hold.
-pub(crate) const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
-
-/// Budget bytes charged to every search whatever the board: room for the
-/// longest route and its letter string, which `solution` allocates on
-/// demand, `MAX_ROUTE` bytes each, plus a 64 KiB allowance for the
-/// fixed-size scratch buffers. The stage ladder (stage.rs) reuses the route
-/// allowance: it exists only while the search has no route and is freed
-/// before one is recorded, and `Ladder::bytes_for(MAX_CELLS)` is asserted
-/// to fit. On wasm32 linear memory never shrinks, and the route need not
-/// reuse the blocks the ladder frees, so, like the first table that
-/// `Arena::grow` frees, they can stay allocated past the budget.
-const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
 
 /// Log2 of the records in a full [`Chunk`]. Unit tests use four-record
 /// chunks, so that small searches cross many chunk boundaries.
@@ -352,8 +333,12 @@ pub(crate) struct Capacity {
 }
 
 impl Arena {
+    /// An arena for `boxes` boxes under the limits, with `fixed_bytes` of
+    /// the budget already charged to the rest of the search. The limits lie
+    /// in [`MAX_STATES_RANGE`] and [`MEMORY_MIB_RANGE`]; the engine checks
+    /// them first.
     pub(crate) fn new(
-        cells: usize,
+        fixed_bytes: u64,
         boxes: usize,
         max_states: usize,
         memory_mib: usize,
@@ -361,7 +346,7 @@ impl Arena {
         let Capacity {
             limit,
             bytes: reserved_bytes,
-        } = Self::capacity(cells, boxes, max_states, memory_mib)?;
+        } = Self::capacity(fixed_bytes, boxes, max_states, memory_mib)?;
         let records = limit + 1;
         // The chunk lists, the records' and the queue's, one entry per CHUNK
         // records each, are the buffers the budget does not charge: no budget
@@ -407,25 +392,17 @@ impl Arena {
     /// bytes it would charge, allocating nothing, so a budget other than the
     /// search's own can be sized without building its arena.
     pub(crate) fn capacity(
-        cells: usize,
+        fixed_bytes: u64,
         boxes: usize,
         max_states: usize,
         memory_mib: usize,
     ) -> Result<Capacity, SearchError> {
-        if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
-            return Err(SearchError::Limits);
-        }
-        // Flood, deadlock and corral buffers and the heuristic tables per
-        // cell, plus the route, its string and the fixed scratch. Bytes are
-        // counted in u64, since usize is 32 bits on wasm32, and saturate, so
-        // a board too large to count never fits instead of wrapping.
-        let per_cell = Reach::BYTES_PER_CELL
-            + Deadlock::BYTES_PER_CELL
-            + Corral::BYTES_PER_CELL
-            + Heuristic::bytes_per_cell(boxes);
-        let fixed_bytes = (cells as u64)
-            .saturating_mul(per_cell as u64)
-            .saturating_add(FIXED_SCRATCH as u64);
+        debug_assert!(
+            MAX_STATES_RANGE.contains(&max_states) && MEMORY_MIB_RANGE.contains(&memory_mib)
+        );
+        // Bytes are counted in u64, since usize is 32 bits on wasm32, and
+        // saturate, so fixed bytes too large to count never fit instead of
+        // wrapping.
         let budget = memory_mib as u64 * 1024 * 1024;
         // A record, its box cells and a queue entry, since the queue holds at
         // most one entry per record.
@@ -910,7 +887,7 @@ mod tests {
     #[test]
     fn compact_versions_preserve_parents_and_exact_keeper_identity() {
         for count in [1, 8, MAX_BOXES] {
-            let mut arena = Arena::new(100, count, 10, 4).unwrap();
+            let mut arena = Arena::new(0, count, 10, 4).unwrap();
             let mut state = State {
                 player: 1,
                 boxes: [NONE; MAX_BOXES],
@@ -976,17 +953,16 @@ mod tests {
 
     #[test]
     fn a_budget_under_the_fixed_buffers_is_its_own_error() {
-        // The per-cell buffers of a million cells alone overflow 4 MiB.
+        // Fixed bytes that fill the budget leave room for no state.
         assert_eq!(
-            Arena::new(1 << 20, 1, 10, 4).err(),
+            Arena::new(4 << 20, 1, 10, 4).err(),
             Some(SearchError::BudgetTooSmall)
         );
-        assert_eq!(Arena::new(100, 1, 0, 4).err(), Some(SearchError::Limits));
-        // A cell count too large to count in bytes saturates instead of
-        // wrapping to a small total, on wasm32 and 64-bit alike.
+        // The most fixed bytes saturate with the states' instead of
+        // wrapping to a small total.
         for memory_mib in [*MEMORY_MIB_RANGE.start(), *MEMORY_MIB_RANGE.end()] {
             assert_eq!(
-                Arena::new(usize::MAX, MAX_BOXES, MAX_STATES, memory_mib).err(),
+                Arena::new(u64::MAX, MAX_BOXES, MAX_STATES, memory_mib).err(),
                 Some(SearchError::BudgetTooSmall)
             );
         }
@@ -994,7 +970,7 @@ mod tests {
 
     #[test]
     fn reweight_orders_the_queue_as_if_queued_at_the_new_weight() {
-        let mut arena = Arena::new(100, 1, 10, 4).unwrap();
+        let mut arena = Arena::new(0, 1, 10, 4).unwrap();
         // (g, h) per id: the order at weight 5 differs from the order at 3.
         // Re-keying reads each g from its record, so the nodes are real.
         let queued: [(u32, u32); 6] = [(0, 4), (9, 1), (4, 3), (12, 0), (7, 2), (1, 4)];
@@ -1036,7 +1012,7 @@ mod tests {
     /// records', are kept too, or the refill's pushes would find no room.
     #[test]
     fn clear_forgets_every_state_and_keeps_the_capacity() {
-        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        let mut arena = Arena::new(0, 1, 40, 4).unwrap();
         let at = |cell: usize| {
             let mut state = State {
                 player: 1,
@@ -1097,7 +1073,7 @@ mod tests {
         const LIMIT: usize = 150;
         const FINAL: usize = final_table(LIMIT + 1);
         type Current = HashMap<(Cell, [Cell; MAX_BOXES]), u32>;
-        let mut arena = Arena::new(100, 2, LIMIT, 4).unwrap();
+        let mut arena = Arena::new(0, 2, LIMIT, 4).unwrap();
         let mut rng = Lcg(0xa4e7a);
         let key = |state: &State| (state.player, state.boxes);
         // Every node inserted, by id, each state's current id, and every key
@@ -1257,7 +1233,7 @@ mod tests {
             state.boxes[..2].copy_from_slice(&[cell, cell + 1]);
             state
         };
-        let mut arena = Arena::new(100, 2, 10, 4).unwrap();
+        let mut arena = Arena::new(0, 2, 10, 4).unwrap();
         // (cell, g, parent, direction) per id: a root, a child the path
         // leaves behind, and the path's next two nodes, 0 -> 2 -> 3.
         let nodes = [(10, 0, NIL, 0), (20, 3, 0, 1), (30, 4, 0, 2), (40, 9, 2, 3)];
@@ -1317,7 +1293,7 @@ mod tests {
         assert_eq!(arena.counters.unique_states, before.0 + 1);
 
         // At a limit of 3, a path of 3 records leaves no room for a fourth.
-        let mut full = Arena::new(100, 2, 3, 4).unwrap();
+        let mut full = Arena::new(0, 2, 3, 4).unwrap();
         for (id, cell) in [10, 20, 30].into_iter().enumerate() {
             let state = at(cell);
             let (slot, _) = full.find(&state);
@@ -1345,7 +1321,7 @@ mod tests {
         for seed in 0..64 {
             let mut rng = Lcg(seed);
             // The final table from the start: 64 slots for at most 32 records.
-            let mut arena = Arena::new(100, 2, 31, 4).unwrap();
+            let mut arena = Arena::new(0, 2, 31, 4).unwrap();
             assert_eq!(arena.table.len(), final_table(32));
             for _ in 0..2 {
                 while !arena.is_full() {
@@ -1421,7 +1397,7 @@ mod tests {
         };
         let walks = |arena: &Arena| arena.resident * UNBIND_RATIO <= arena.table.len();
         let unbound = |arena: &Arena| arena.table.iter().all(|&id| id == NIL);
-        let mut arena = Arena::new(100, 2, 16_000, 4).unwrap();
+        let mut arena = Arena::new(0, 2, 16_000, 4).unwrap();
         // A chain of 40 states, ids 0 to 39, which grows the table to its
         // final size, and cheaper copies of every fourth one, ids 40 to 49,
         // off the chain.
@@ -1495,7 +1471,7 @@ mod tests {
                 arena.enqueue(1, 1, id);
             }
         };
-        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        let mut arena = Arena::new(0, 1, 40, 4).unwrap();
         assert_eq!(arena.limit_status(), Status::StateLimit);
         // The four-record first chunk of unit tests asks for the next at the
         // third insert.
@@ -1534,7 +1510,7 @@ mod tests {
         // The table grows at the 33rd insert, when more than half of its
         // first 64 slots would be bound, and frees the first one before it
         // asks for the final one.
-        let mut arena = Arena::new(100, 1, 40, 4).unwrap();
+        let mut arena = Arena::new(0, 1, 40, 4).unwrap();
         fill(&mut arena, 0..32);
         arena.refuse_growth(true);
         fill(&mut arena, 32..33);
@@ -1596,7 +1572,7 @@ mod tests {
             }
         }
         // Through the arena API, with every box cell at an extreme.
-        let mut arena = Arena::new(MAX_CELLS, MAX_BOXES, 4, 4).unwrap();
+        let mut arena = Arena::new(0, MAX_BOXES, 4, 4).unwrap();
         let mut state = State {
             player: last_cell,
             boxes: [NONE; MAX_BOXES],
@@ -1733,72 +1709,20 @@ mod tests {
         assert_eq!(Node::push_g(u32::MAX, u16::MAX), G_SAT);
     }
 
-    /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
-    /// entry and 8 to 16 bytes of table, so no budget holds a full
-    /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
-    /// where the next state would double the table, and 11,177,601 at
-    /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc). Every budget is
-    /// sized without allocating, through [`Arena::capacity`]: an arena at the
-    /// top would reserve chunk lists for millions of the four-record chunks
-    /// unit tests use.
-    #[test]
-    fn memory_binds_a_full_limit_at_every_budget() {
-        let shapes = [
-            (4, 1, 33_554_431),
-            (MAX_CELLS, 1, 33_554_431),
-            (4, MAX_BOXES, 11_181_644),
-            (MAX_CELLS, MAX_BOXES, 11_177_601),
-        ];
-        let top = *MEMORY_MIB_RANGE.end();
-        for (cells, boxes, fits) in shapes {
-            let capacity = Arena::capacity(cells, boxes, MAX_STATES, top).unwrap();
-            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
-        }
-        for memory_mib in MEMORY_MIB_RANGE {
-            for (cells, boxes, _) in shapes {
-                let capacity = Arena::capacity(cells, boxes, MAX_STATES, memory_mib).unwrap();
-                assert!(
-                    capacity.limit < MAX_STATES,
-                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
-                );
-                assert!(capacity.bytes <= memory_mib << 20);
-            }
-        }
-    }
-
     /// [`Arena::new`] takes its limit and charge from [`Arena::capacity`].
     #[test]
     fn capacity_matches_new() {
-        for (cells, boxes) in [
-            (4, 1),
-            (MAX_CELLS, 1),
-            (4, MAX_BOXES),
-            (MAX_CELLS, MAX_BOXES),
-        ] {
+        for (fixed, boxes) in [(0, 1), (3 << 20, 1), (0, MAX_BOXES), (3 << 20, MAX_BOXES)] {
             for memory_mib in [4, 16, 64] {
                 let Capacity { limit, bytes } =
-                    Arena::capacity(cells, boxes, MAX_STATES, memory_mib).unwrap();
-                let arena = Arena::new(cells, boxes, MAX_STATES, memory_mib).unwrap();
+                    Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
+                let arena = Arena::new(fixed, boxes, MAX_STATES, memory_mib).unwrap();
                 assert_eq!(
                     (arena.node_limit, arena.reserved_bytes()),
                     (limit, bytes),
-                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
+                    "{fixed} fixed bytes, {boxes} boxes, {memory_mib} MiB"
                 );
             }
         }
-    }
-
-    /// The exact edge at 64 MiB for the largest board and box count: 691,841
-    /// states fit with 24 bytes to spare, and one more scales the request.
-    #[test]
-    fn a_limit_one_past_the_budget_is_scaled_to_it() {
-        let fits = Arena::new(MAX_CELLS, MAX_BOXES, 691_841, 64).unwrap();
-        assert_eq!(fits.node_limit, 691_841);
-        assert_eq!(fits.limit_status(), Status::StateLimit);
-        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
-        drop(fits);
-        let scaled = Arena::new(MAX_CELLS, MAX_BOXES, 691_842, 64).unwrap();
-        assert_eq!(scaled.node_limit, 691_841);
-        assert_eq!(scaled.limit_status(), Status::MemoryLimit);
     }
 }
