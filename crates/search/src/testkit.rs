@@ -92,9 +92,8 @@ impl Lcg {
 /// the robot and up to two inner walls, all on distinct cells. Its draws
 /// pin the rooms of `flagged_pushes_leave_no_solution` in the deadlock
 /// tests and `corral_dead_room_states_have_no_solution` in the corral
-/// tests, both from `Lcg(0x5eed)`, and of `pruning_never_changes_a_live_run`
-/// in the engine tests, from `Lcg(0xd1ff)`; changing them swaps those
-/// boards and invalidates the Python counts all three cite.
+/// tests, both from `Lcg(0x5eed)`; changing them swaps those boards and
+/// invalidates the Python counts both cite.
 pub(crate) fn random_room(rng: &mut Lcg) -> String {
     const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
     let set = SETS[rng.below(SETS.len())];

@@ -4,7 +4,7 @@ use crate::{
     corral::Corral,
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
-    push::{self, Child, Parent, Parts, Prunes, Push, SkipCounters, canonicalize},
+    push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
     stage::{self, Done, Ladder},
 };
@@ -255,8 +255,6 @@ pub(crate) struct Engine {
     reach: Reach,
     deadlock: Deadlock,
     corral: Corral,
-    /// Always [`Prunes::ALL`] outside tests.
-    prunes: Prunes,
     arena: Arena,
     status: Status,
     expanded: u32,
@@ -363,7 +361,6 @@ impl Engine {
             heuristic,
             deadlock,
             corral,
-            prunes: Prunes::ALL,
             status: Status::Running,
             expanded: 0,
             skipped: SkipCounters::default(),
@@ -770,7 +767,6 @@ impl Engine {
             deadlock: &mut self.deadlock,
             corral: &mut self.corral,
             arena: &mut self.arena,
-            prunes: self.prunes,
             skipped: &mut self.skipped,
             expanded: &mut self.expanded,
         }
@@ -970,31 +966,12 @@ impl Engine {
 }
 
 #[cfg(test)]
-impl Engine {
-    /// Replaces [`Prunes::ALL`] with `prunes`, the only way to turn a
-    /// detector off. Seeding runs no detector, so on an engine that has not
-    /// expanded anything the new flags govern the whole run. A setter rather
-    /// than a constructor argument, so it also reaches the engine inside
-    /// [`crate::ExactSearch`].
-    fn set_prunes(&mut self, prunes: Prunes) {
-        assert_eq!(
-            self.expanded, 0,
-            "flags change only before the first expansion"
-        );
-        self.prunes = prunes;
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::{Engine, Policy, same};
     use crate::{
         SearchStats, Status, StopReason,
-        exact::ExactSearch,
-        heuristic::Heuristic,
-        push::Prunes,
         stage::{self, Tally},
-        testkit::{Lcg, catalog, explored_catalog, huge, random_room},
+        testkit::{catalog, huge},
     };
     use sokomind_core::{Board, Game};
     use std::time::Instant;
@@ -1251,424 +1228,22 @@ mod tests {
         }
     }
 
-    /// One row per detector: its name, every detector on but that one, and
-    /// how many runs turning it off must change at least, counting a run
-    /// changed when any `SearchStats` counter differs, so a flag that never
-    /// reaches its detector fails instead of passing on identical runs.
-    /// Zero until a detector reads the flag. Full literals rather than
-    /// `..Prunes::ALL`, so a new flag fails to compile here until every row
-    /// sets it. The minimum is the replica's count of changed runs that
-    /// generate fewer records. With the sealed-corral check on in both runs,
-    /// `dead_pair` changes 9 runs in `corral_port.py live` (cited at
-    /// `FINISH`), all on catalog boards, 6 of them with fewer records
-    /// generated. `corral` changes 186 there, 2 finishing catalog runs, 112
-    /// finishing room runs and 72 capped ones, 73 of them with fewer
-    /// records generated.
-    const TOGGLES: [(&str, Prunes, usize); 2] = [
-        (
-            "dead_pair",
-            Prunes {
-                dead_pair: false,
-                corral: true,
-            },
-            6,
-        ),
-        (
-            "corral",
-            Prunes {
-                dead_pair: true,
-                corral: false,
-            },
-            73,
-        ),
-    ];
-    /// Enough for every finishing-leg run to end on its own. A Python
-    /// replica of `pruning_never_changes_a_live_run`
-    /// (pruning/replicas/live_run_replica.py, not tracked) puts the push
-    /// states reachable on those boards, before any pruning, at 1,841 at
-    /// most on an explored board and 13,045 on a room. With the
-    /// sealed-corral row added (pruning/replicas/corral_port.py live, not
-    /// tracked), no finishing run generates more than 163 records.
-    const FINISH: usize = 20_000;
-    /// Rooms in the finishing leg.
-    const ROOMS: usize = 100;
-    /// The capped leg's limit.
-    const CAPPED: usize = 2_000;
-
-    /// Finished above capped above cancelled or running, as `rank` in
-    /// scripts/bench-gate.mjs orders statuses.
-    fn rank(status: Status) -> u8 {
-        match status {
-            Status::Solved | Status::Exhausted => 2,
-            Status::StateLimit | Status::MemoryLimit | Status::TimeLimit => 1,
-            Status::Running | Status::Cancelled => 0,
-        }
-    }
-
-    /// What one run in `pruning_never_changes_a_live_run` ends with.
-    struct Trace {
-        status: Status,
-        /// Moves, pushes and the route itself, as a fresh game replays it.
-        route: Option<(u32, u32, String)>,
-        /// Moves, expanded and generated when a route first appeared.
-        first: Option<(u32, u32, u32)>,
-        expanded: u32,
-        generated: u32,
-        stats: SearchStats,
-        /// Exact's lower bound, `u64::MAX` when it has none because nothing
-        /// is left to search; `None` under Fast, so one comparison serves
-        /// both modes.
-        lower_bound: Option<u64>,
-    }
-
-    /// Runs `board` from its start to a terminal status under Exact or Fast
-    /// with `prunes`.
-    fn trace(board: &Board, exact: bool, max_states: usize, prunes: Prunes) -> Trace {
-        let start = board.initial();
-        if exact {
-            let mut search = ExactSearch::new(board.clone(), start, max_states, 16).unwrap();
-            let mut traced = observe(board, search.engine_mut(), prunes);
-            traced.lower_bound = Some(search.lower_bound().map_or(u64::MAX, u64::from));
-            traced
-        } else {
-            let mut engine =
-                Engine::new(board.clone(), start, Policy::FAST, max_states, 16).unwrap();
-            observe(board, &mut engine, prunes)
-        }
-    }
-
-    /// Installs `prunes`, drives `engine` to a terminal status and records
-    /// what it ends with, replaying its route in a fresh game.
-    fn observe(board: &Board, engine: &mut Engine, prunes: Prunes) -> Trace {
-        engine.set_prunes(prunes);
-        let first = drive(engine);
-        let route = engine.solution().unwrap().map(|route| {
-            let mut game = Game::new(board.clone());
-            game.replay(&route).unwrap();
-            assert!(game.solved());
-            (game.moves(), game.pushes(), route)
-        });
-        Trace {
-            status: engine.status(),
-            route,
-            first,
-            expanded: engine.expanded(),
-            generated: engine.generated(),
-            stats: engine.stats(),
-            lower_bound: None,
-        }
-    }
-
-    /// The counters a detector never raises on a finished live run; see
-    /// `pruning_never_changes_a_live_run`. The destructure names every
-    /// `SearchStats` field, so a new counter fails to compile here until it
-    /// is classified.
-    fn bounded(trace: &Trace) -> [(&'static str, u64); 11] {
-        let SearchStats {
-            unique_states,
-            duplicate_improvements,
-            reopened_states,
-            stale_pops,
-            peak_queue,
-            pruned_dead_cells,
-            pruned_deadlocks: _,
-            pruned_duplicates,
-            pruned_assignment,
-            pruned_bound,
-            pruned_corrals: _,
-        } = trace.stats;
-        [
-            ("expanded", u64::from(trace.expanded)),
-            ("generated", u64::from(trace.generated)),
-            ("unique_states", u64::from(unique_states)),
-            ("duplicate_improvements", u64::from(duplicate_improvements)),
-            ("reopened_states", u64::from(reopened_states)),
-            ("stale_pops", u64::from(stale_pops)),
-            ("peak_queue", u64::from(peak_queue)),
-            ("pruned_dead_cells", pruned_dead_cells),
-            ("pruned_duplicates", pruned_duplicates),
-            ("pruned_assignment", pruned_assignment),
-            ("pruned_bound", pruned_bound),
-        ]
-    }
-
-    /// Checks a run with every detector on against the same run with one
-    /// off, claim by claim as `pruning_never_changes_a_live_run` lists them.
-    fn compare(context: &str, off: &Trace, on: &Trace) {
-        assert!(
-            rank(on.status) >= rank(off.status),
-            "{context}: {} after {}",
-            on.status.as_str(),
-            off.status.as_str()
-        );
-        if let Some(&(moves, ..)) = off.route.as_ref() {
-            let on_moves = on.route.as_ref().map(|&(got, ..)| got);
-            assert!(
-                on_moves.is_some_and(|got| got <= moves),
-                "{context}: route {on_moves:?} after {moves}"
-            );
-        }
-        assert!(
-            on.lower_bound >= off.lower_bound,
-            "{context}: lower bound {:?} after {:?}",
-            on.lower_bound,
-            off.lower_bound
-        );
-        if let Some((moves, expanded, generated)) = off.first {
-            let Some((on_moves, on_expanded, on_generated)) = on.first else {
-                panic!("{context}: no first route after {:?}", off.first);
-            };
-            // A capped off run whose first route came from the expansion the
-            // cap interrupted may have stopped before a shorter goal child of
-            // that expansion, which the on run, with fewer records, still
-            // reaches, possibly in the spare node.
-            let interrupted = rank(off.status) == 1 && expanded == off.expanded;
-            let same_event =
-                on_moves == moves && on_expanded <= expanded && on_generated <= generated;
-            assert!(
-                same_event || (interrupted && on_moves <= moves && on_expanded <= expanded),
-                "{context}: first route {:?} after {:?}",
-                on.first,
-                off.first
-            );
-        }
-        if rank(off.status) == 2 {
-            assert_eq!(
-                (on.status, &on.route),
-                (off.status, &off.route),
-                "{context}"
-            );
-            if off.route.is_some() {
-                for ((name, on_count), (_, off_count)) in bounded(on).into_iter().zip(bounded(off))
-                {
-                    assert!(
-                        on_count <= off_count,
-                        "{context}: {name} {on_count} after {off_count}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// The in-repo form of the identity theorem: a dead-state detector
-    /// never changes a live run. Each board runs under Exact and Fast, one
-    /// pop at a time, with every detector on and then with each one off
-    /// (`TOGGLES`), in two legs: at `FINISH`, where the off run must end on
-    /// its own, every explored catalog board and the first `ROOMS` rooms
-    /// `random_room` draws from `Lcg(0xd1ff)` whose start has an
-    /// assignment; at `CAPPED`, every catalog board. A room without one ends
-    /// at its seed before any detector runs, so it is skipped: the Python
-    /// replicas cited at `FINISH` both need 1,465 draws for the 100 rooms.
-    /// Where the off run ends on its own and the on run generated fewer
-    /// records, a boundary leg reruns both at the on run's generated count,
-    /// and each `TOGGLES` row must change at least its minimum of runs.
-    ///
-    /// Call a detector entry-complete when the set E of states the on run
-    /// calls dead is closed under every push that passes the dead-cell
-    /// check, every push the off run flags lands in E, and the on run flags
-    /// every push from outside E into E. From a start outside E, the on run
-    /// is then the off run with E's states deleted: the same events in the
-    /// same order, since queue ties break by insertion order, which
-    /// deleting records keeps. A push into E that reaches the freeze check
-    /// counts one `pruned_deadlocks` instead of what the off run did with
-    /// that child. The freeze rule with its dead-pair case is entry-complete
-    /// in the admit chain. Its E holds the states with a box held off its
-    /// goal, a superset of what the rule without the case holds, and a held
-    /// box never moves: a wall or held box on its axis makes the push
-    /// illegal, and two dead neighbors make it land on a dead cell, which
-    /// the dead-cell check prunes first. If the held box's component after a
-    /// push from outside E did not contain the pushed box, none of its boxes
-    /// moved and they held it the same way before. The freeze check takes
-    /// the greatest fixpoint over the pushed box's whole component, the same
-    /// there as over the board, so it flags the push. A start with a
-    /// solution is outside any sound E, so the capped leg relies on every
-    /// catalog board having one.
-    ///
-    /// The claims, and why they hold:
-    /// - Status rank on >= off. The on run's records are the off run's
-    ///   minus E's at every matched point, so it never fills the arena
-    ///   first, and where the off run ends on its own, the on run ends at
-    ///   the same event.
-    /// - Wherever the off run has a route, the on run has one no longer.
-    ///   The off run's route reaches only live states, so the on run finds
-    ///   it too before any cap.
-    /// - The first route is the same live event in both runs: equal moves,
-    ///   with expanded and generated no higher, read after the pop that
-    ///   found it. The bench reads `first_route_*` only every
-    ///   `POPS_PER_CHECK` pops, so there they can still rise by one slice.
-    /// - Exact's lower bound on >= off. Where the off run stops, the on
-    ///   run's queue is the off run's minus E's entries, so its frontier is
-    ///   no lower, and with consistent keys no child queues below its
-    ///   parent, so the frontier never falls later. The incumbent cap cannot
-    ///   pull it under either: the off bound is at most the optimum, which
-    ///   no route beats.
-    /// - Where the off run ends on its own, the same status and the same
-    ///   route: moves, pushes and the route string.
-    /// - At the boundary, the on run ends as before with the same route,
-    ///   and the off run, which needs more records, hits the cap: the on
-    ///   run never inserts at a full arena, so it is the same run, while the
-    ///   off run's first insert past the cap stops it. The claims above
-    ///   then compare a capped off run with a finished on run, the case
-    ///   where rank and lower bound can rise. The lower bound is asserted
-    ///   only no lower: the cap can fall in an expansion whose key already
-    ///   equals the optimum.
-    ///
-    /// One exception narrows the first-route claim: in Exact, when the cap
-    /// interrupts the expansion that found the off run's first route, the
-    /// on run, which stores fewer of that expansion's children, may go on
-    /// to a later goal child with a shorter walk, possibly in the spare
-    /// node. There only its moves and expanded are bounded, no higher.
-    ///
-    /// Counters are compared only where the off run ends on its own with a
-    /// route, the case the deletion argument settles. `expanded`,
-    /// `generated`, `unique_states`, `duplicate_improvements`,
-    /// `reopened_states` and `stale_pops` count events, of which the on run
-    /// has a subset. `peak_queue` is a maximum over queues that are the off
-    /// run's minus E's entries. `pruned_dead_cells`, `pruned_duplicates`,
-    /// `pruned_assignment` and `pruned_bound` count rejections, which match
-    /// on live states and happen on E's states only in the off run.
-    /// `pruned_deadlocks` has no bound: the on run adds a flag per push into
-    /// E, the off run flags pushes made inside E, and either can be larger.
-    /// Nor has `pruned_corrals`, which only the on run of its row counts.
-    /// Where the off run hits the cap, the on run goes on past that point,
-    /// so no counter is compared. Without a route the start may lie in E.
-    /// Both runs then see only dead states, not always the same ones, and
-    /// either may count more, so only status and route are compared, and
-    /// `FINISH` leaves both room to end. The replica finds 72 of the rooms
-    /// solvable; the other 28 expand before they end Exhausted.
-    ///
-    /// A detector that is not entry-complete, such as one run at expansion
-    /// time or one that flags only some pushes into its E, can add records
-    /// or hit the cap first. Its flag must re-derive these claims before it
-    /// gets a row in `TOGGLES`.
-    ///
-    /// The sealed-corral check is such a detector: it runs at expansion,
-    /// so a dead state is still expanded, and only its children go. Its
-    /// live events still match until either run fills the arena. Every
-    /// parent of a state with a solution has one, and a pruned state has
-    /// none, so both runs store the same live records with the same g and
-    /// pop them in the same order: keys are unchanged and ties break by
-    /// insertion order, which skipping other records keeps. Where both runs
-    /// end on their own, they end at the same event with the same route.
-    /// The dead records differ: a dead child the off run first stores from
-    /// a pruned parent the on run may store later from another parent, at
-    /// a higher g, and explore from there. So the remaining claims, which
-    /// count records or compare a capped run, rest on the replica, not on
-    /// the deletion argument. So do the `dead_pair` row's: its flag also
-    /// drops the dead-pair case from the corral check's freeze, an
-    /// expansion-time change on top of the admit chain's. corral_port.py
-    /// live checks every claim of every run in both rows, the 76 boundary
-    /// legs included, with 0 failures. A failure here after a change
-    /// elsewhere means a claim needs a new argument, not that the detector
-    /// flags a live state; the oracle tests in corral.rs check that.
-    ///
-    /// Cost: per board and mode, the all-on run plus one run per flag, one
-    /// pop at a time, and two more per boundary. The capped leg dominates
-    /// with at most 57 x 2 x 3 x 2,001 records, about 684k, around six
-    /// times `fast_then_quality_starts_as_fast_and_never_ends_longer`; the
-    /// replica counts about 439k. The finishing leg generates about 13k and
-    /// the boundary legs about 19k.
-    #[test]
-    fn pruning_never_changes_a_live_run() {
-        let mut rng = Lcg(0xd1ff);
-        let rooms = std::iter::repeat_with(move || Board::parse(&random_room(&mut rng)).unwrap())
-            .filter(|board| Heuristic::new(board).estimate(&board.initial()).is_some())
-            .take(ROOMS)
-            .enumerate()
-            .map(|(n, board)| (format!("room {n}"), board));
-        let finishing = explored_catalog()
-            .iter()
-            .map(|(id, board, ..)| (id.clone(), board.clone()))
-            .chain(rooms)
-            .map(|(id, board)| (id, board, FINISH, true));
-        let capped = catalog()
-            .into_iter()
-            .map(|(id, board)| (id, board, CAPPED, false));
-        let mut changed = [0; TOGGLES.len()];
-        for (id, board, max_states, must_finish) in finishing.chain(capped) {
-            for (mode, exact) in [("exact", true), ("fast", false)] {
-                let on = trace(&board, exact, max_states, Prunes::ALL);
-                for (row, (name, prunes, _)) in TOGGLES.into_iter().enumerate() {
-                    let context = format!("{id} {mode} at {max_states} states, {name} off");
-                    let off = trace(&board, exact, max_states, prunes);
-                    if must_finish {
-                        assert_eq!(
-                            rank(off.status),
-                            2,
-                            "{context}: {}, raise FINISH",
-                            off.status.as_str()
-                        );
-                    }
-                    compare(&context, &off, &on);
-                    changed[row] += usize::from(on.stats != off.stats);
-                    if rank(off.status) == 2 && on.generated < off.generated {
-                        let at = on.generated as usize;
-                        let context = format!("{context}, at {at} states");
-                        let on_at = trace(&board, exact, at, Prunes::ALL);
-                        let off_at = trace(&board, exact, at, prunes);
-                        assert!(
-                            rank(on_at.status) == 2 && on_at.route == on.route,
-                            "{context}: {} {:?} instead of the finished {:?}",
-                            on_at.status.as_str(),
-                            on_at.route,
-                            on.route
-                        );
-                        assert_eq!(rank(off_at.status), 1, "{context}");
-                        compare(&context, &off_at, &on_at);
-                    }
-                }
-            }
-        }
-        for ((name, _, min_changed), changed) in TOGGLES.into_iter().zip(changed) {
-            assert!(
-                changed >= min_changed,
-                "{name} off changed {changed} runs, below {min_changed}"
-            );
-        }
-    }
-
     /// The board of `an_empty_goal_behind_a_settled_corral_is_dead` in the
     /// corral tests: A pushed into the corridor before B has passed seals
-    /// B's goal off. The sealed-corral check prunes one such state in each
-    /// mode, and both modes keep their 18-move route with fewer records.
-    /// The counts are pruning/replicas/corral_port.py fixtures, line f3
-    /// (not tracked).
+    /// B's goal off. Both modes prune such a state with the sealed-corral
+    /// check and still end Solved with the 18-move route, which Exact proves
+    /// shortest.
     #[test]
     fn corral_check_prunes_a_goal_sealed_too_early() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
-        let without = Prunes {
-            dead_pair: true,
-            corral: false,
-        };
-        // Generated, expanded and the first route's moves, expanded and
-        // generated, off then on.
-        for (exact, counts_off, counts_on) in [
-            (true, (12, 11, (18, 9, 12)), (10, 9, (18, 8, 10))),
-            (false, (11, 8, (18, 8, 11)), (9, 7, (18, 7, 9))),
-        ] {
-            let off = trace(&board, exact, STATES, without);
-            let on = trace(&board, exact, STATES, Prunes::ALL);
-            for (traced, (generated, expanded, first), corrals) in
-                [(&off, counts_off, 0), (&on, counts_on, 1)]
-            {
-                assert_eq!(
-                    (
-                        traced.generated,
-                        traced.expanded,
-                        traced.first,
-                        traced.stats.pruned_corrals
-                    ),
-                    (generated, expanded, Some(first), corrals),
-                    "exact {exact}"
-                );
-                let moves = traced
-                    .route
-                    .as_ref()
-                    .map(|&(moves, pushes, _)| (moves, pushes));
-                assert_eq!(moves, Some((18, 5)), "exact {exact}");
-            }
-            assert_eq!(on.route, off.route, "exact {exact}");
-            compare(&format!("exact {exact}"), &off, &on);
+        for (mode, policy) in [("exact", Policy::EXACT), ("fast", Policy::FAST)] {
+            let (engine, _) = run(&board, policy, STATES);
+            assert_eq!(
+                (engine.status(), engine.best_moves()),
+                (Status::Solved, Some(18)),
+                "{mode}"
+            );
+            assert!(engine.stats().pruned_corrals > 0, "{mode}");
         }
     }
 

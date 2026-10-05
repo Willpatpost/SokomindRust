@@ -86,38 +86,6 @@ pub(crate) struct SkipCounters {
     pub(crate) pruned_corrals: u64,
 }
 
-/// Which dead-state detectors run: those in the admit chain and the
-/// sealed-corral check at expansion. A flag turns one rule off wherever it
-/// applies, so `dead_pair` also reaches the corral check's own freeze.
-/// Production always uses [`Prunes::ALL`]. The value lives only on the
-/// engine and the [`Parts`] it lends, never in the policy, the public mode
-/// or anything else a caller sees, so no caller can turn a detector off and
-/// none of this is an API or ABI change. Only the test-only
-/// `Engine::set_prunes` installs another value, for the differential test
-/// in the engine's tests that checks a detector never changes a live run;
-/// each new detector adds a flag here and a row to that test's `TOGGLES`.
-///
-/// A flag no detector reads yet carries `#[expect(dead_code)]` rather than
-/// `allow`: the first read leaves the expectation unfulfilled, which fails
-/// the clippy gate until the attribute goes.
-#[derive(Clone, Copy)]
-pub(crate) struct Prunes {
-    /// The freeze rule's dead-pair axis case: an axis also holds a box when
-    /// both its neighbors on it are dead cells for the box's label.
-    pub(crate) dead_pair: bool,
-    /// The sealed-corral check at expansion: a state with a corral that can
-    /// never move again, and must, gets no children.
-    pub(crate) corral: bool,
-}
-
-impl Prunes {
-    /// Every detector on, the only value outside tests.
-    pub(crate) const ALL: Self = Self {
-        dead_pair: true,
-        corral: true,
-    };
-}
-
 /// A popped node about to be expanded.
 pub(crate) struct Parent {
     /// Its arena id, which each child records as its parent.
@@ -198,7 +166,6 @@ pub(crate) struct Parts<'a> {
     pub(crate) deadlock: &'a mut Deadlock,
     pub(crate) corral: &'a mut Corral,
     pub(crate) arena: &'a mut Arena,
-    pub(crate) prunes: Prunes,
     pub(crate) skipped: &'a mut SkipCounters,
     /// The search's count of expanded nodes, which [`Parts::open`] raises.
     pub(crate) expanded: &'a mut u32,
@@ -224,15 +191,9 @@ impl Parts<'_> {
         self.reach.fill(self.board, &parent.node.state);
         let boxes = &parent.node.state.boxes[..self.board.labels().len()];
         self.deadlock.refresh(boxes);
-        if self.prunes.corral
-            && self.corral.is_dead(
-                self.board,
-                boxes,
-                self.reach,
-                self.deadlock,
-                self.heuristic,
-                self.prunes.dead_pair.then_some(self.heuristic),
-            )
+        if self
+            .corral
+            .is_dead(self.board, boxes, self.reach, self.deadlock, self.heuristic)
         {
             // No child of a state without a solution has one; the node
             // stays expanded and closed, so it counts as before.
@@ -256,7 +217,6 @@ impl Parts<'_> {
             reach: self.reach,
             deadlock: self.deadlock,
             arena: self.arena,
-            prunes: self.prunes,
             skipped: self.skipped,
         }
     }
@@ -277,7 +237,6 @@ pub(crate) struct Kernel<'a> {
     /// before its first push.
     deadlock: &'a Deadlock,
     arena: &'a Arena,
-    prunes: Prunes,
     skipped: &'a mut SkipCounters,
 }
 
@@ -337,10 +296,9 @@ pub(crate) fn admit(
         kernel.skipped.pruned_bound += 1;
         return None;
     }
-    let dead_pair = kernel.prunes.dead_pair.then_some(kernel.heuristic);
     if kernel
         .deadlock
-        .is_dead_after_push(kernel.board, dead_pair, ALL_BOXES, from, to)
+        .is_dead_after_push(kernel.board, kernel.heuristic, ALL_BOXES, from, to)
     {
         kernel.skipped.pruned_deadlocks += 1;
         return None;

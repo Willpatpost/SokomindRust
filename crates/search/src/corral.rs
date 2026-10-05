@@ -349,9 +349,7 @@ impl Corral {
     }
     /// Whether some corral of the state with `boxes` leaves no solution.
     /// `reach` must hold the state's fill and `deadlock` its refresh, as
-    /// they do in the engine's expansion before the first push. `dead_pair`
-    /// is the freeze rule's dead-pair case, as admit passes it; the
-    /// dead-cell test always uses `heuristic`.
+    /// they do in the engine's expansion before the first push.
     pub(crate) fn is_dead(
         &mut self,
         board: &Board,
@@ -359,7 +357,6 @@ impl Corral {
         reach: &Reach,
         deadlock: &Deadlock,
         heuristic: &Heuristic,
-        dead_pair: Option<&Heuristic>,
     ) -> bool {
         if reach.reached() + boxes.len() == self.floor {
             return false;
@@ -388,7 +385,7 @@ impl Corral {
             };
             if pushes[..count].iter().all(|push| {
                 heuristic.dead(push.i, push.to)
-                    || deadlock.is_dead_after_push(board, dead_pair, members, push.from, push.to)
+                    || deadlock.is_dead_after_push(board, heuristic, members, push.from, push.to)
             }) {
                 return true;
             }
@@ -708,8 +705,8 @@ mod tests {
                 corral: Corral::new(board),
             }
         }
-        /// Fills and refreshes for the state, then runs the detector with
-        /// the dead-pair case, as the engine does.
+        /// Fills and refreshes for the state, then runs the detector as the
+        /// engine does.
         fn dead(&mut self, player: Cell, boxes: &[Cell]) -> bool {
             self.reach.fill_from(&self.board, player, boxes);
             self.deadlock.refresh(boxes);
@@ -719,7 +716,6 @@ mod tests {
                 &self.reach,
                 &self.deadlock,
                 &self.heuristic,
-                Some(&self.heuristic),
             )
         }
         /// Whether the admit chain keeps the state `dead` last saw: no box
@@ -729,7 +725,7 @@ mod tests {
             boxes.iter().enumerate().all(|(i, &cell)| !h.dead(i, cell))
                 && !boxes.iter().any(|&cell| {
                     self.deadlock
-                        .is_dead_after_push(&self.board, Some(h), ALL_BOXES, cell, cell)
+                        .is_dead_after_push(&self.board, h, ALL_BOXES, cell, cell)
                 })
         }
         /// Refreshes for the state and runs a pockets check to its end, unit
@@ -1028,7 +1024,7 @@ mod tests {
         let pushed = |members| {
             checker
                 .deadlock
-                .is_dead_after_push(&board, Some(&checker.heuristic), members, a, right)
+                .is_dead_after_push(&board, &checker.heuristic, members, a, right)
         };
         assert!(!pushed(1) && pushed(ALL_BOXES));
         let solvable = solvable_states(&board);
