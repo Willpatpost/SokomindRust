@@ -43,7 +43,11 @@
 //!   live copy of the root goes into the table and the queue. The stage's
 //!   records start after it. Reseeds run only at `begin`, at each commit
 //!   and at each restart. The records they drop count toward the search's
-//!   discarded total through [`Ladder::take_dropped`].
+//!   discarded total through [`Ladder::take_dropped`]. On a sparse table,
+//!   as on a large budget, the clear walks only the bound records' runs,
+//!   at most a stage's `CAPS[2]` records past its start, so a reseed costs
+//!   about the stage's size instead of the table's; a dense table is
+//!   filled once.
 //! - Checks budget: every unit but an expansion costs one check, out of
 //!   `CHECK_FACTOR` times the work budget, and at zero the ladder gives up.
 //!   Expansions are bounded by work already, since every queued record

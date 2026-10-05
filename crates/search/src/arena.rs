@@ -72,6 +72,22 @@ const fn final_table(records: usize) -> usize {
     (records * 2).next_power_of_two()
 }
 
+/// Table slots per bound record at or above which [`Arena::unbind`] walks
+/// each bound record's run instead of filling the whole table. A fill
+/// writes every slot once, in order, at 0.1 to 0.25 ns a slot natively; a
+/// walk reads each bound record and misses the cache about once for it,
+/// 20 to 25 ns a record on huge. Probe MC1 (job 47932) timed both on every
+/// clear of production Fast on huge at 64 to 1024 MiB and on the catalog:
+/// they break even at 165 to 226 slots per bound record on tables of 2^21
+/// to 2^24 slots, so the ratio is the power of two below. A plain search's
+/// full arena binds between a quarter and a half of its table, less its
+/// superseded records, so clearing one, at the stage ladder's begin or a
+/// restart, fills. A stage inserts at most `CAPS[2]` records past its
+/// start (stage/ladder.rs), so the ladder's reseeds bind about that many at
+/// most and always walk on tables past 2^24 slots: on huge at 1024 MiB, a
+/// table of 2^25, the slowest reseed takes 2.9 ms instead of a fill's 8.2.
+const UNBIND_RATIO: usize = 128;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     pub state: State,
@@ -617,6 +633,63 @@ impl Arena {
         }
         debug_assert_eq!(bound, self.resident);
     }
+    /// Leaves every table slot [`NIL`], by one fill when the table is dense
+    /// and by [`Arena::unbind_runs`] when it is sparse (see
+    /// [`UNBIND_RATIO`]). Records, the queue and the counters are untouched.
+    fn unbind(&mut self) {
+        if self.table.is_empty() {
+            // A starved arena's failed growth freed it.
+            return;
+        }
+        if self.resident.saturating_mul(UNBIND_RATIO) > self.table.len() {
+            self.table.fill(NIL);
+        } else {
+            self.unbind_runs();
+        }
+        debug_assert!(
+            self.table.iter().all(|&id| id == NIL),
+            "a bound slot outlived unbind"
+        );
+    }
+    /// Clears each bound record's run, from its home slot to the first
+    /// [`NIL`], which clears every bound slot:
+    ///
+    /// - The bound slots hold exactly the records not superseded: a cheaper
+    ///   duplicate takes its predecessor's slot and supersedes it, and
+    ///   [`Arena::rebind`] binds exactly those records.
+    /// - Probing is linear and nothing is deleted, so every slot from a
+    ///   record's home to its own was bound when it was inserted and is
+    ///   still bound: home and slot lie in one cluster, a maximal cyclic run
+    ///   of bound slots, with the home first.
+    /// - [`Arena::insert`] grows the table once more than half of it is
+    ///   bound, and at most one later insert skips that check (the spare,
+    ///   or a starved arena's last), so a [`NIL`] exists, every walk ends,
+    ///   and each cluster's first slot, the one after a [`NIL`], holds a
+    ///   record whose home it is.
+    /// - Within a cluster, the walks done so far have cleared the suffix
+    ///   from their least home to the cluster's end: a walk from a later
+    ///   home stops at a cleared slot, and one from an earlier home clears
+    ///   up to the suffix. The cluster's first slot is some record's home,
+    ///   so the whole cluster ends up cleared, and no walk crosses a [`NIL`]
+    ///   into another cluster.
+    ///
+    /// The homes are read from the records, so this runs before any record
+    /// moves or the table is written as scratch.
+    fn unbind_runs(&mut self) {
+        let mask = self.table.len() - 1;
+        for chunk in &self.chunks {
+            for (offset, record) in chunk.records.iter().enumerate() {
+                if record.has(Record::SUPERSEDED) {
+                    continue;
+                }
+                let mut slot = hash(record.player, chunk.cells(offset, self.boxes)) & mask;
+                while self.table[slot] != NIL {
+                    self.table[slot] = NIL;
+                    slot = (slot + 1) & mask;
+                }
+            }
+        }
+    }
     pub(crate) fn node(&self, id: u32) -> Node {
         let (chunk, offset) = self.chunk(id);
         let record = chunk.records[offset];
@@ -678,8 +751,10 @@ impl Arena {
     /// and the table keep their allocations, so refilling to the size
     /// already reached allocates nothing; the limit and counters are kept,
     /// and so is a starved arena's flag when its failed growth left no
-    /// table to search.
+    /// table to search. The table is emptied by [`Arena::unbind`], while
+    /// the records it reads are still there.
     pub(crate) fn clear(&mut self) {
+        self.unbind();
         for chunk in &mut self.chunks {
             chunk.records.clear();
             chunk.box_cells.clear();
@@ -687,7 +762,6 @@ impl Arena {
         self.len = 0;
         self.resident = 0;
         self.heap.clear();
-        self.table.fill(NIL);
         self.starved = self.table.is_empty();
         #[cfg(debug_assertions)]
         {
@@ -710,8 +784,8 @@ impl Arena {
     /// Afterwards the kept path's records are detached from the table, so a
     /// caller may insert a live copy of a kept state: [`Arena::find`] on it
     /// returns no previous record. The stage ladder's reseed (stage/ladder.rs)
-    /// relies on that. Costs `O(table slots)`, for the table's refill with
-    /// [`NIL`], plus the path's length.
+    /// relies on that. Costs the path's length plus [`Arena::unbind`]: the
+    /// bound records' runs, or one fill of the table when it is dense.
     pub(crate) fn clear_keeping(&mut self, id: u32) -> Option<u32> {
         // Count the path first, so a refusal changes nothing. A parent is
         // always older than its child, since records are only ever appended.
@@ -721,14 +795,17 @@ impl Arena {
             len += 1;
             link = self.record(link).parent();
         }
-        // The table, refilled below, is the scratch for the path's old ids,
+        // The table, emptied here, is the scratch for the path's old ids,
         // root first, so nothing is allocated. It never shrinks, and the
         // path fits it unless a failed growth freed it: a path in this
         // search visits distinct states, every one bound in the table now,
-        // and a path an earlier restart kept fit the table then.
+        // and a path an earlier restart kept fit the table then. Unbinding
+        // reads every record's home, so it runs before the scratch is
+        // written or any record moves.
         if len >= self.node_limit || len > self.table.len() {
             return None;
         }
+        self.unbind();
         let mut old = id;
         for new in (0..len).rev() {
             self.table[new] = old;
@@ -757,7 +834,7 @@ impl Arena {
         self.len = len;
         self.resident = 0;
         self.heap.clear();
-        self.table.fill(NIL);
+        self.table[..len].fill(NIL);
         // The table is whole, so even a starved arena may refill.
         self.starved = false;
         #[cfg(debug_assertions)]
@@ -1234,6 +1311,136 @@ mod tests {
         assert_eq!(full.clear_keeping(1), Some(1));
     }
 
+    /// Walking each bound record's run from its home clears every bound
+    /// slot, however the clusters lie: dense tables of colliding states and
+    /// cheaper duplicates, then, after a kept path, detached records too,
+    /// with clusters that wrap past the last slot.
+    #[test]
+    fn unbind_runs_clears_every_cluster() {
+        let mut wrapped = 0;
+        for seed in 0..64 {
+            let mut rng = Lcg(seed);
+            // The final table from the start: 64 slots for at most 32 records.
+            let mut arena = Arena::new(100, 2, 31, 4).unwrap();
+            assert_eq!(arena.table.len(), final_table(32));
+            for _ in 0..2 {
+                while !arena.is_full() {
+                    // Four keepers by 40 box pairs, so draws repeat.
+                    let mut state = State {
+                        player: rng.below(4) as Cell,
+                        boxes: [NONE; MAX_BOXES],
+                    };
+                    let cell = 10 + rng.below(40) as Cell;
+                    state.boxes[..2].copy_from_slice(&[cell, cell + 50]);
+                    let (slot, found) = arena.find(&state);
+                    let g = rng.below(1000) as u32;
+                    // As in the engine, only a cheaper duplicate is stored.
+                    if found.is_some_and(|id| arena.meta(id).g <= g) {
+                        continue;
+                    }
+                    let parent = match arena.len() {
+                        0 => NIL,
+                        len => rng.below(len) as u32,
+                    };
+                    let node = Node {
+                        state,
+                        g,
+                        parent,
+                        direction: 0,
+                        h: 1,
+                    };
+                    arena.insert(node, slot);
+                }
+                let bound = arena.table.iter().filter(|&&id| id != NIL).count();
+                assert_eq!(bound, arena.resident);
+                if arena.table[0] != NIL && arena.table[arena.table.len() - 1] != NIL {
+                    wrapped += 1;
+                }
+                arena.unbind_runs();
+                assert!(arena.table.iter().all(|&id| id == NIL));
+                // Bound again, the arena keeps a path into the next round.
+                arena.rebind();
+                assert!(arena.clear_keeping(arena.len() as u32 - 1).is_some());
+            }
+        }
+        assert!(wrapped > 0);
+    }
+
+    /// On a sparse table, where clearing walks the bound runs, a kept path
+    /// and a clear still unbind every slot, so every state is new again:
+    /// with superseded records on and off the path, after a live copy of
+    /// the kept tip as the stage ladder's reseed inserts it, and on a
+    /// second kept path, whose walk passes over the first one's detached
+    /// records.
+    #[test]
+    fn clear_keeping_unbinds_superseded_and_detached() {
+        let at = |player: Cell, cell: Cell| {
+            let mut state = State {
+                player,
+                boxes: [NONE; MAX_BOXES],
+            };
+            state.boxes[..2].copy_from_slice(&[cell, cell + 50]);
+            state
+        };
+        let insert = |arena: &mut Arena, state: State, g: u32, parent: u32| {
+            let (slot, _) = arena.find(&state);
+            let node = Node {
+                state,
+                g,
+                parent,
+                direction: 0,
+                h: 1,
+            };
+            let id = arena.insert(node, slot);
+            arena.enqueue(u64::from(g) + 1, 1, id);
+            id
+        };
+        let walks = |arena: &Arena| arena.resident * UNBIND_RATIO <= arena.table.len();
+        let unbound = |arena: &Arena| arena.table.iter().all(|&id| id == NIL);
+        let mut arena = Arena::new(100, 2, 16_000, 4).unwrap();
+        // A chain of 40 states, ids 0 to 39, which grows the table to its
+        // final size, and cheaper copies of every fourth one, ids 40 to 49,
+        // off the chain.
+        for (id, cell) in (10..50).enumerate() {
+            let parent = id.checked_sub(1).map_or(NIL, |parent| parent as u32);
+            insert(&mut arena, at(1, cell), 100, parent);
+        }
+        for cell in (12..50).step_by(4) {
+            insert(&mut arena, at(1, cell), 50, 0);
+        }
+        // A cheaper copy again, id 50, supersedes a copy off the path.
+        insert(&mut arena, at(1, 12), 25, 0);
+        assert!(walks(&arena) && arena.table.len() > INITIAL_TABLE);
+        assert_eq!(arena.clear_keeping(39), Some(39));
+        assert!(unbound(&arena));
+        for cell in 10..50 {
+            assert_eq!(arena.find(&at(1, cell)).1, None);
+        }
+        // The next search starts from a live copy of the kept tip, id 40,
+        // and grows a second chain, ids 41 to 60, with cheaper copies.
+        let tip = insert(&mut arena, at(1, 49), 100, 39);
+        let mut last = tip;
+        for cell in 10..30 {
+            last = insert(&mut arena, at(2, cell), 200, last);
+        }
+        for cell in (10..30).step_by(3) {
+            insert(&mut arena, at(2, cell), 150, tip);
+        }
+        assert!(walks(&arena) && (tip, last) == (40, 60));
+        assert_eq!(arena.clear_keeping(last), Some(60));
+        assert!(unbound(&arena));
+        assert_eq!(arena.find(&at(1, 49)).1, None);
+        for cell in 10..30 {
+            assert_eq!(arena.find(&at(2, cell)).1, None);
+        }
+        for cell in 30..40 {
+            insert(&mut arena, at(3, cell), 10, NIL);
+        }
+        assert!(walks(&arena));
+        arena.clear();
+        assert!(unbound(&arena) && arena.len() == 0);
+    }
+
     /// A refused growth allocation starves the arena: it is full, at
     /// [`Status::MemoryLimit`], with every record kept. A refused chunk
     /// leaves the table whole, so a kept path or a clear lets the arena
@@ -1315,6 +1522,9 @@ mod tests {
         assert_eq!(arena.len(), 33);
         arena.clear();
         assert!(arena.starved() && arena.is_full() && arena.len() == 0);
+        // With no table and no record, a second clear has nothing to unbind.
+        arena.clear();
+        assert!(arena.starved() && arena.is_full() && arena.table.is_empty());
     }
 
     /// Every record field at its extremes, with every flag combination.
