@@ -110,7 +110,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs |
+| `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs; the bounded stage ladder (`stage.rs`, `stage/`) that Fast and Quality hand a routeless search to |
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX, bounded and rate-limited native CPU jobs, replay-verified best routes in SQLx/PostgreSQL |
@@ -223,9 +223,10 @@ reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
 heuristic change), generators, and Quality route repair. On Grand Hall (`huge`),
-which plain Fast and Quality do not route in any memory up to 256 MiB, the stage
-search finds an 812-move route (268 pushes) in about 0.95 s in both Fast and
-Quality at 64, 128 and 256 MiB on a c4-standard-32 node: every budget from 64
+which plain Fast and Quality do not route in 8M states even at the 1024 MiB cap
+(about 7.5 s; job 47772), the stage search finds an 812-move route (268 pushes)
+in about 0.95 s in both Fast and Quality at 64, 128 and 256 MiB on a
+c4-standard-32 node: every budget from 64
 MiB up stages at the same point and generates the same states first. The
 reference's own benchmark reports about 5.3 s for 893 moves on its development
 machine (Node on Windows), so the two times come from different machines.

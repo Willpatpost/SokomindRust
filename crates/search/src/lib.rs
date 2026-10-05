@@ -293,9 +293,10 @@ impl std::error::Error for SolutionError {}
 /// improved versions of existing states; unique states count table entries.
 /// A Quality search that restarts counts both runs, and the route it keeps
 /// once, so its generated records may exceed the state limit by up to one
-/// full arena. A Fast or Quality search whose arena fills without a route
-/// also counts the stage search's records, at most 2^20 more plus one per
-/// stage start.
+/// full arena. A Fast or Quality search that reaches its stage point
+/// without a route also counts the stage search's records, at most 2^20
+/// more plus one per stage start, and, when the stage search gives up below
+/// the limit, the records the plain search made before its stage point.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
     /// Distinct canonical box positions AND exact player positions indexed,
@@ -548,9 +549,9 @@ impl Search {
     /// and at once when it has already ended. A pop that expands a record
     /// floods the robot's reach once and tries every legal push from there;
     /// stale, solved and dominated pops count without expanding anything.
-    /// A Fast or Quality search whose arena fills with no route returns as
-    /// it hands over to the stage ladder, and while the ladder runs, a pop
-    /// is one ladder unit. Slicing the work this way lets a worker yield,
+    /// A Fast or Quality search that reaches its stage point with no route
+    /// returns as it hands over to the stage search, and while that runs, a
+    /// pop is one stage unit. Slicing the work this way lets a worker yield,
     /// report or stop between calls.
     pub fn advance(&mut self, pops: u32) {
         self.engine_mut().advance(pops);
