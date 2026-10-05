@@ -82,11 +82,9 @@ use std::ops::RangeInclusive;
 /// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
 /// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
 /// request at this limit therefore ends with [`Status::MemoryLimit`], never
-/// [`Status::StateLimit`]. The queue is reserved for the whole scaled limit
-/// up front, 8 bytes per state, whose unused part a native process never
-/// touches but wasm32 commits as linear memory. Records and the table are
-/// allocated only as the search fills them, so one that ends early, as on a
-/// small board, allocates little of its budget beyond the queue.
+/// [`Status::StateLimit`]. Records, the queue and the table are allocated
+/// only as the search fills them, so one that ends early, as on a small
+/// board, allocates little of its budget.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
@@ -530,7 +528,7 @@ impl Search {
     /// linear memory by whole requests rounded up to 64 KiB, even when the
     /// free space at the top of the heap falls just short, so each growth can
     /// leave up to 64 KiB more there, and up to one of the arena's record
-    /// blocks plus 128 KiB can stay unused.
+    /// blocks plus 192 KiB can stay unused.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }

@@ -118,9 +118,9 @@ fn default_ms() -> u64 {
 /// The search crate's [`MAX_STATES`](sokomind_search::MAX_STATES), which no
 /// [`MEMORY_MIB`] budget reaches, so by default `memory_mib` alone sizes a
 /// solve. The arena holds at most `min(max_states, what fits in
-/// memory_mib)` states: it reserves their queue when the search starts and
-/// grows its records and table as the search fills them, so a default solve
-/// on a small board allocates far less than its budget. `memory_mib` stays
+/// memory_mib)` states and grows its records, queue and table as the search
+/// fills them, so a default solve on a small board allocates far less than
+/// its budget. `memory_mib` stays
 /// the declared bound, and the server's search memory stays within
 /// SOLVE_CONCURRENCY times [`MEMORY_MIB`]'s top.
 fn default_states() -> usize {

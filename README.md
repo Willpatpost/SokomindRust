@@ -284,24 +284,22 @@ bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
 memory budget always binds before the state cap: on the catalog's boards 64 MiB
 holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 256 MiB 3.67-8.39M, and a
 run that fills its arena reports a memory limit. The arena holds at most the
-smaller of the state cap and what the budget holds. Its queue, 8 bytes per state
-and at most about a quarter of the budget, is reserved for that many states when
-the search starts: a native process touches only the part it uses, but in WASM
-the whole reservation is linear memory. Records grow in blocks as the search
-fills them, and the index table has two sizes: it starts at 2^16 slots
-(256 KiB), or its full size when that is smaller, and grows straight to its full
-size once more than half full. Neither passes the budget, so a small board
-allocates little beyond the queue. WASM linear memory never shrinks and keeps
-what a run frees: a run that grows its table can end up to 256 KiB past the
-budget, for the freed first table, and one that ran the stage search up to
-200,000 bytes (the route allowance) more, for the stage search's freed buffers.
+smaller of the state cap and what the budget holds. Records and their queue
+entries grow in blocks of 2^16 as the search fills them, and the index table has
+two sizes: it starts at 2^16 slots (256 KiB), or its full size when that is
+smaller, and grows straight to its full size once more than half full. None
+passes the budget, so a small board allocates little of it. WASM linear memory
+never shrinks and keeps what a run frees: a run that grows its table can end up
+to 256 KiB past the budget, for the freed first table, and one that ran the
+stage search up to 200,000 bytes (the route allowance) more, for the stage
+search's freed buffers.
 The allocator's slack comes on top. It grows linear memory by a whole request,
 rounded up to 64 KiB, even when the free space at the top of the heap falls just
-short of it, so each growth can leave up to 64 KiB more there. A chunk's record
-and box blocks can both miss before that space holds one, so up to one record
-block plus 128 KiB can stay unused. Where that slack ends depends on every
-earlier allocation, and a few hundred bytes more elsewhere can cost a whole
-block: Grand Hall at 16 MiB ends 753 KiB past its ceiling, 512 KiB past the
+short of it, so each growth can leave up to 64 KiB more there. A chunk's
+record, box, and queue blocks can each miss before that space holds one, so up
+to one record block plus 192 KiB can stay unused. Where that slack ends depends
+on every earlier allocation, and a few hundred bytes more elsewhere can cost a
+whole block: Grand Hall at 16 MiB ends 369 KiB past its ceiling, 128 KiB past the
 budget.
 An allocation refused below the budget also ends the run with a
 memory limit. The search memory metric is that ceiling, computed from buffer

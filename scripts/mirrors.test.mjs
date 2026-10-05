@@ -699,7 +699,7 @@ test("the README quotes corral.rs's CAP on the pushes a sealed corral check trie
 
 test("the README quotes arena.rs's ID_BITS and its record and queue entry sizes", () => {
   const record = read('crates/search/src/arena.rs', /size_of::<Record>\(\) == (\d+)/);
-  const entry = read('crates/search/src/arena.rs', /size_of::<Entry>\(\) == (\d+)/);
+  const entry = read('crates/search/src/arena.rs', /size_of::<Key>\(\) == (\d+)/);
   assert.equal(read('README.md', /and a (\d+)-bit arena id/), read('crates/search/src/arena.rs', /const ID_BITS: u32 = (\d+);/));
   assert.equal(read('README.md', /arena record is (\d+) bytes/), record);
   assert.equal(read('README.md', /costs a (\d+)-byte record/), record);

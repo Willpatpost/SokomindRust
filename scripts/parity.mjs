@@ -148,10 +148,11 @@ console.log(`${native.length} native/WASM cases match including proofs, routes, 
 console.log(`WASM retained linear memory: ${mib(wasm.memory.buffer.byteLength)} MiB (one reused test instance, not per-worker RSS).`);
 
 // Ultra-tiny at the full state cap and the web's default 64 MiB budget holds
-// 2,097,151 states: the arena reserves their 16 MiB queue up front and grows only
-// the records and table it fills, so the instance grows by at most that plus
-// 4 MiB, where an arena reserved whole took about 60 MiB.
-const TINY_GROWTH_CAP = (16 + 4) * MIB;
+// 2,097,151 states: the arena grows only the records, queue and table it fills,
+// so the instance grows about 2 MiB (1.94 measured), where reserving their
+// 16 MiB queue up front grew it 17.44 MiB and an arena reserved whole took about
+// 60 MiB.
+const TINY_GROWTH_CAP = 4 * MIB;
 const tiny = await freshRun('memory', 'ultra-tiny', 64);
 console.log(`parity memory: ultra-tiny growth=${mib(tiny.growth)} limit=${mib(TINY_GROWTH_CAP)}`);
 assert.equal(tiny.metrics.status, 'solved', 'parity memory: ultra-tiny/optimal');
@@ -162,7 +163,7 @@ assert(tiny.growth <= TINY_GROWTH_CAP, `parity memory: ultra-tiny grew a fresh i
 // table, at most 256 KiB, which linear memory keeps. The instance may grow by at
 // most reserved_bytes plus 2 MiB for that table, the allocator and the bindings.
 // The allocator grows memory by whole requests rounded up to 64 KiB, so up to
-// one of large's record blocks plus 128 KiB can stay unused at the top.
+// one of large's record blocks plus 192 KiB can stay unused at the top.
 const fill = await freshRun('memory-fill', 'large', 16);
 const fillCap = fill.metrics.reservedBytes + 2 * MIB;
 const fillSizes = `growth=${mib(fill.growth)} reserved=${mib(fill.metrics.reservedBytes)} limit=${mib(fillCap)}`;
