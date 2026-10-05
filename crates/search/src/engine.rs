@@ -100,14 +100,14 @@ impl Policy {
     /// rises accept rejected, sit in the table unqueued, so Quality reaches
     /// their states again only through a strictly cheaper duplicate
     /// (`reopen_closed`).
-    pub(crate) const FAST_THEN_QUALITY: Self = Self {
+    const FAST_THEN_QUALITY: Self = Self {
         then: Some(&Self::QUALITY),
         ..Self::FAST
     };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
     /// arena fills the search starts over as plain [`Self::QUALITY`],
     /// bounded by the route it has.
-    pub(crate) const QUALITY_RESTART: Self = Self {
+    const QUALITY_RESTART: Self = Self {
         restart: Some(&Self::QUALITY),
         ..Self::QUALITY
     };
@@ -490,7 +490,7 @@ impl Engine {
     /// Queue keys are `g + weight * h`, so this is a lower bound only under
     /// the exact policy's weight of 1; only [`crate::ExactSearch`] reads it.
     pub(crate) fn frontier(&self) -> u64 {
-        debug_assert_eq!(self.policy.weight, 1, "weighted keys bound nothing");
+        assert_eq!(self.policy.weight, 1, "weighted keys bound nothing");
         self.arena
             .min_f()
             .unwrap_or(u64::MAX)

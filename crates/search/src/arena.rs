@@ -74,28 +74,28 @@ const UNBIND_RATIO: usize = 128;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
-    pub state: State,
-    pub g: u32,
-    pub parent: u32,
+    pub(crate) state: State,
+    pub(crate) g: u32,
+    pub(crate) parent: u32,
     /// Direction of the push that made this node (unused at the root); the
     /// pushed box started at `state.player`.
-    pub direction: u8,
+    pub(crate) direction: u8,
     /// The state's estimate, or `u16::MAX` when it is unknown or too large
     /// and must be recomputed. Estimates depend only on the canonical
     /// state, so a cheaper duplicate reuses it. This stack value is decoded
     /// from compact storage only when an expansion or replay needs it.
-    pub h: u16,
+    pub(crate) h: u16,
 }
 
 /// A stored node without its state: all a duplicate probe or an incumbent
 /// check reads, at the cost of one record load.
 #[derive(Clone, Copy)]
 pub(crate) struct Meta {
-    pub g: u32,
+    pub(crate) g: u32,
     /// As in [`Node::h`].
-    pub h: u16,
+    pub(crate) h: u16,
     /// Expanded at least once ([`Arena::close`]).
-    pub closed: bool,
+    pub(crate) closed: bool,
 }
 
 impl Node {
@@ -229,10 +229,10 @@ fn hash(player: Cell, boxes: &[Cell]) -> usize {
 /// restarted search counts both arenas, and a kept record only once.
 #[derive(Default)]
 pub(crate) struct TableCounters {
-    pub unique_states: u32,
-    pub duplicate_improvements: u32,
-    pub reopened_states: u32,
-    pub peak_queue: u32,
+    pub(crate) unique_states: u32,
+    pub(crate) duplicate_improvements: u32,
+    pub(crate) reopened_states: u32,
+    pub(crate) peak_queue: u32,
 }
 
 /// Consecutive records and their box cells, reserved exactly when the arena
@@ -310,7 +310,11 @@ pub(crate) struct Arena {
     /// A growth allocation failed below the limit; see [`Arena::starved`].
     starved: bool,
     /// Unit tests only: every growth allocation fails, as if the allocator
-    /// refused it, so the starved path runs without exhausting memory.
+    /// refused it, so the starved path runs without exhausting memory. It is
+    /// the crate's one test hook in a production type, kept because no input
+    /// reaches that limit edge, and like the unit-test geometry above it is
+    /// compiled out of every other build, which the integration tests,
+    /// parity and the benchmark gate run.
     #[cfg(test)]
     refusing: bool,
     /// Bumped by every insert and clear, from 1. Debug builds only, like
