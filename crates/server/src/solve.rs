@@ -44,21 +44,30 @@ const _: () = assert!(*TIME_MS.start() <= DEFAULT_MS && DEFAULT_MS <= *TIME_MS.e
 /// for at most this many pops, and one atomic load and clock read per batch
 /// cost little beside them.
 const POPS_PER_CHECK: u32 = 8;
-/// Native solves take the search crate's state range as is and cap its
-/// memory range lower, so every accepted request is a valid search limit.
-/// 128 MiB holds about 1.83-4.19M states on the catalog's boards. Each
+/// Native solves take the search crate's state and memory ranges as they
+/// are, so every accepted request is a valid search limit. The server keeps
+/// its own memory range, which may only end lower, so an assert below can
+/// pin the 8-slot product the docs quote. 1024 MiB, the cap for one solve,
+/// holds about 14.68-33.55M states on the catalog's boards. Each
 /// SOLVE_CONCURRENCY slot reserves up to this cap, so solves reserve at most
-/// 128 MiB by default and 1 GiB at the 8-slot maximum,
+/// 1 GiB at the default of one slot and 8 GiB at the 8-slot maximum,
 /// [`MAX_SOLVE_CONCURRENCY`](crate::config::MAX_SOLVE_CONCURRENCY), which
-/// an assert below keeps exact. compose.yaml gives the API no memory limit;
-/// a host that sets one must allow for that on top of the process itself.
+/// that assert keeps exact. compose.yaml gives the API no memory limit; a
+/// host that sets one must allow for that on top of the process itself.
 ///
-/// README (its limits, the `POST /api/solve` defaults and the Configuration
-/// table), .env.example and the memory select in web/index.html quote this
-/// cap and its 8-slot product; change them with it.
-const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=128;
+/// README (its limits and the Configuration table), .env.example and the
+/// memory select in web/index.html quote this cap and its 8-slot product;
+/// change them with it.
+const MEMORY_MIB: RangeInclusive<usize> = *MEMORY_MIB_RANGE.start()..=1024;
 const _: () = assert!(*MEMORY_MIB.end() <= *MEMORY_MIB_RANGE.end());
-const _: () = assert!(crate::config::MAX_SOLVE_CONCURRENCY as usize * *MEMORY_MIB.end() == 1024);
+const _: () = assert!(crate::config::MAX_SOLVE_CONCURRENCY as usize * *MEMORY_MIB.end() == 8192);
+/// A solve's memory budget when the request names none, about 1.83-4.19M
+/// states on the catalog's boards. It sits below the cap, so a request that
+/// leaves it out does not reserve 1 GiB. README's `POST /api/solve` line
+/// quotes it.
+const DEFAULT_MEMORY_MIB: usize = 128;
+const _: () =
+    assert!(*MEMORY_MIB.start() <= DEFAULT_MEMORY_MIB && DEFAULT_MEMORY_MIB <= *MEMORY_MIB.end());
 
 fn limits() -> Error {
     Error::bad(format!(
@@ -108,7 +117,8 @@ pub struct Request {
     /// The state cap, within [`MAX_STATES_RANGE`]; its top by default.
     #[serde(default = "default_states")]
     max_states: usize,
-    /// The memory budget in MiB, within [`MEMORY_MIB`]; its top by default.
+    /// The memory budget in MiB, within [`MEMORY_MIB`]; [`DEFAULT_MEMORY_MIB`]
+    /// by default.
     #[serde(default = "default_memory")]
     memory_mib: usize,
 }
@@ -127,7 +137,7 @@ fn default_states() -> usize {
     sokomind_search::MAX_STATES
 }
 fn default_memory() -> usize {
-    *MEMORY_MIB.end()
+    DEFAULT_MEMORY_MIB
 }
 /// What the search proved about the shortest route, in moves.
 #[derive(Serialize)]

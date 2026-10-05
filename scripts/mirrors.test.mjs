@@ -235,10 +235,10 @@ test('the #memory select offers only budgets within MEMORY_MIB, up to its cap', 
   assert.ok(Math.min(...memory) >= floor, `#memory offers less than MEMORY_MIB_RANGE's ${floor} MiB start`);
 });
 
-test('the README, .env.example and protocol.ts quote the cap of MEMORY_MIB', () => {
+test("the README, .env.example and protocol.ts quote MEMORY_MIB's cap, and the README its default", () => {
   const cap = read('crates/server/src/solve.rs', /const MEMORY_MIB: RangeInclusive<usize> = \*MEMORY_MIB_RANGE\.start\(\)\.\.=(\d+);/);
   assert.equal(read('README.md', /(\d+) MiB accounted search storage, and/), cap);
-  assert.equal(read('README.md', /memory_mib: (\d+)\}/), cap);
+  assert.equal(read('README.md', /memory_mib: (\d+)\}/), read('crates/server/src/solve.rs', /const DEFAULT_MEMORY_MIB: usize = (\d+);/));
   assert.equal(read('README.md', /its own arena of up to (\d+) MiB/), cap);
   assert.equal(read('.env.example', /reserves up to (\d+) MiB of search storage/), cap);
   assert.equal(read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers/), cap);
@@ -595,7 +595,7 @@ test("the README and protocol.ts quote the ends of the search crate's limit rang
   const top = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = \d+\.\.=(\d+);/);
   const states = read('crates/search/src/lib.rs', /pub const MAX_STATES_RANGE: RangeInclusive<usize> = (\d+)\.\.=MAX_STATES;/);
   assert.equal(read('README.md', /accepts budgets up to (\d+) MiB/), top);
-  assert.equal(read('web/src/protocol.ts', /and (\d+) MiB, the largest the search crate accepts/), top);
+  assert.equal(read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers\s+\*\s+and both engines accept/), top);
   assert.equal(read('README.md', /state, and (\d+) MiB and cap/), floor);
   assert.equal(read('README.md', /ms, (\d+) state, and/), states);
 });

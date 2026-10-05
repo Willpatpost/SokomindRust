@@ -8,10 +8,9 @@ export const PAST_LIMIT_MESSAGE = `Position and route together exceed the ${MAX_
 /** States per search; must equal the server and arena cap (sokomind_search::MAX_STATES).
  * A state costs 28 to 36 B plus 2 B per box (record, queue entry, index table and box
  * cells), so the memory budget always binds first: on the catalog's boards 64 MiB holds
- * about 0.91-2.10M states; 128 MiB, the largest budget the #memory select offers and the
- * server accepts, 1.83-4.19M; and 1024 MiB, the largest the search crate accepts, 14.68-33.55M.
- * Every solve sends this cap, so its memory budget alone sizes the arena, which grows
- * its records, queue and table as it fills. */
+ * about 0.91-2.10M states, and 1024 MiB, the largest budget the #memory select offers
+ * and both engines accept, 14.68-33.55M. Every solve sends this cap, so its memory
+ * budget alone sizes the arena, which grows its records, queue and table as it fills. */
 export const MAX_STATES = 60_000_000;
 /** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
  * apply to `mode`; also the values of the #mode select. */

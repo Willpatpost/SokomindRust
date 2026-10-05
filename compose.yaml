@@ -31,8 +31,9 @@ services:
       # Set these in .env or the shell. One left unset arrives empty, which
       # the server reads as unset, so its defaults apply: they live only in
       # the server and README's Configuration table. Budgets apply to each
-      # API process. Recheck aggregate CPU, memory and PostgreSQL connections
-      # before adding replicas.
+      # API process, including the search storage its solve slots may reserve
+      # (.env.example gives the figures). Recheck aggregate CPU, memory and
+      # PostgreSQL connections before adding replicas.
       SOLVE_CONCURRENCY: ${SOLVE_CONCURRENCY:-}
       SOLVE_RATE_PER_MINUTE: ${SOLVE_RATE_PER_MINUTE:-}
       PROGRESS_CONCURRENCY: ${PROGRESS_CONCURRENCY:-}

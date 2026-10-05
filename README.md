@@ -275,15 +275,16 @@ carries `O`, `R` or `S` and `X`'s goal is spelled `S`; the parser rejects them
 with their row and column, like any other unsupported symbol.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
-per arena (`sokomind_search::MAX_STATES`), 128 MiB accounted search storage, and
-one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration);
-the search crate, and so the browser worker, accepts budgets up to 1024 MiB. The
-web app sends the full state cap and the budget its memory select names (16 to
-128 MiB, 64 by default) to either engine. A state costs a 12-byte record, 2
-bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
-memory budget always binds before the state cap: on the catalog's boards 64 MiB
-holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a
-run that fills its arena reports a memory limit. The arena holds at most the
+per arena (`sokomind_search::MAX_STATES`), 1024 MiB accounted search storage, and
+one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration),
+and take 128 MiB when they name no budget. The search crate, and so the browser
+worker, accepts budgets up to 1024 MiB too, so the web app sends the full state
+cap and the budget its memory select names (16 to 1024 MiB, 64 by default) to
+either engine. A state costs a 12-byte record, 2 bytes per box, an 8-byte queue
+entry, and 8 to 16 bytes of index table, so the memory budget always binds
+before the state cap: on the catalog's boards 64 MiB holds about 0.91-2.10M
+states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a run that fills its
+arena reports a memory limit. The arena holds at most the
 smaller of the state cap and what the budget holds. Records and their queue
 entries grow in blocks of 2^16 as the search fills them, and the index table has
 two sizes: it starts at 2^16 slots (256 KiB), or its full size when that is
@@ -410,7 +411,7 @@ number, stops startup before the database wait.
 | `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
-| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 128 MiB accounted search storage, so up to 1 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
+| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 1024 MiB accounted search storage, so up to 8 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
 | `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
 | `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
