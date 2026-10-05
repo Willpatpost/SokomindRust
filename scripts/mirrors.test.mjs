@@ -734,6 +734,13 @@ test("the README and reserved_bytes' doc quote arena.rs's ROUTE_ALLOWANCE, and M
   assert.equal(read('crates/search/src/lib.rs', /no route under a limit of ([\d,]+) states or more runs/), states);
 });
 
+test("the README quotes stage.rs's FILL_MIB, within which the benchmark gate and observe runs stay", () => {
+  const fill = read('crates/search/src/stage.rs', /pub\(crate\) const FILL_MIB: usize = (\d+);/);
+  assert.equal(read('README.md', /what (\d+) MiB\s+would hold/), fill);
+  assert.ok(read('benchmarks/catalog-baseline.json', /"memoryMiB": (\d+),/) <= fill);
+  assert.ok(read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: [\d_]+, memoryMiB: (\d+),/) <= fill);
+});
+
 test("the README and parity.mjs's comment quote the memory-fill case's allowance past reserved_bytes", () => {
   const allowance = read('scripts/parity.mjs', /const fillCap = fill\.metrics\.reservedBytes \+ (\d+) \* MIB;/);
   assert.equal(read('README.md', /memory ceiling plus (\d+) MiB/), allowance);

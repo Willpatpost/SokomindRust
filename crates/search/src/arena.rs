@@ -365,7 +365,7 @@ impl Arena {
         let records = limit + 1;
         // The chunk lists, the records' and the queue's, one entry per CHUNK
         // records each, are the buffers the budget does not charge: no budget
-        // holds more than 2^23 records, so each is at most 128 entries, 9 KiB
+        // holds more than 2^25 records, so each is at most 512 entries, 36 KiB
         // together, though the four-record chunks of unit tests make them far
         // longer.
         let first = records.min(CHUNK);
@@ -474,8 +474,8 @@ impl Arena {
     }
     /// Bytes the budget charges: the fixed buffers and the arena at its full
     /// limit. The arena grows toward this but never past it, so it is a
-    /// ceiling on the search's buffers, the chunk lists' few KiB aside, not
-    /// the amount allocated.
+    /// ceiling on the search's buffers, the chunk lists' 36 KiB at most
+    /// aside, not the amount allocated.
     pub(crate) fn reserved_bytes(&self) -> usize {
         self.reserved_bytes
     }
