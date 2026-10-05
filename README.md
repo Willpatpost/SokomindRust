@@ -170,29 +170,34 @@ push-only.
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
-route and never re-expands a closed node. When Fast fills an arena of a few
-thousand states or more without a route, a bounded stage search
-(`crates/search/src/stage.rs`) takes over in the same arena. From the start, it
-commits one goal-level gain at a time: a small search looks for a state above
-the current level, and the first such state that passes accept tests (open
-lanes into goals, sink-line order, keeper mobility around sink-line boxes,
-keeper-aware reach matching and sealed pockets) is committed. It backtracks
-when a level fails and ends at its first route. It is heuristic and
-incomplete, and when it gives up the search stops at the limit as before.
-Quality starts as Fast; from Fast's first route it continues in the same arena
-at `g + 3h` with reopenings, keeping the shortest verified incumbent until its
-queue empties or a limit hits. The first time the arena fills, in either phase
-and with a route or without, Quality empties it in place, keeping its route, if
-it has one, as the bound to beat, and starts over at `g + 3h` in the freed
-arena, generating up to about twice the state limit in the same memory, plus
-the stage search's inserts when it runs (32 per state of the limit, at most
-2^20). So the second phase never runs short of memory just because Fast used
-most of it, and the route never ends longer than it would have at that fill.
-When that first fill comes in the Fast phase with no route, the stage search
-runs first, and the restart keeps its route, if it finds one, as the bound.
-Only a full arena restarts it, and at most once: a route that alone fills the
-arena ends it there instead, and a time limit that hits first ends Quality in
-whichever phase it is in.
+route and never re-expands a closed node. When Fast reaches its stage point
+without a route, a bounded stage search (`crates/search/src/stage.rs`) takes
+over in the same arena. The stage point comes once the arena holds what 64 MiB
+would hold for the board, or when it fills, whichever is first, and the stage
+search needs a few thousand states there. Measured at 1 GiB, plain Fast routes
+every catalog board it routes at all before that point, so a larger budget does
+not delay the stage search. From the start, it commits one goal-level gain at a
+time: a small search looks for a state above the current level, and the first
+such state that passes accept tests (open lanes into goals, sink-line order,
+keeper mobility around sink-line boxes, keeper-aware reach matching and sealed
+pockets) is committed. It backtracks when a level fails and ends at its first
+route. It is heuristic and incomplete. When it gives up below the limit, Fast
+starts over without it and runs as the plain search would; when it gives up at a
+full arena, the search stops at the limit as before. Quality starts as Fast;
+from Fast's first route it continues in the same arena at `g + 3h` with
+reopenings, keeping the shortest verified incumbent until its queue empties or a
+limit hits. The first time the arena fills, in either phase and with a route or
+without, or the stage search ends, Quality empties it in place, keeping its
+route, if it has one, as the bound to beat, and starts over at `g + 3h` in the
+freed arena, generating up to about twice the state limit in the same memory,
+plus the stage search's inserts when it runs (32 per state at the stage point,
+at most 2^20). So the second phase never runs short of memory just because Fast
+used most of it, and the route never ends longer than it would have at that
+fill. When the Fast phase reaches its stage point with no route, the stage
+search runs first, and the restart keeps its route, if it finds one, as the
+bound. Only a full arena or the stage search's end restarts it, and at most
+once: a route that alone fills the arena ends it there instead, and a time limit
+that hits first ends Quality in whichever phase it is in.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -217,14 +222,15 @@ The objective is total remaining moves, not pushes. Not ported from the
 reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
-heuristic change), generators, and Quality route repair. On Grand Hall
-(`huge`), which plain Fast and Quality do not route in any memory up to 256 MiB,
-the stage search finds an 812-move route (268 pushes) in about 1.04 s in both
-Fast and Quality at 64 MiB on a c4-standard-32 node. The reference's own
-benchmark reports about 5.3 s for 893 moves on its development machine (Node
-on Windows), so the two times come from different machines. Quality does not
-shorten it before its limit. A larger budget routes it later (about 1.8 s at
-128 MiB, 3.4 s at 256 MiB), since the stage search waits for a full arena. The
+heuristic change), generators, and Quality route repair. On Grand Hall (`huge`),
+which plain Fast and Quality do not route in any memory up to 256 MiB, the stage
+search finds an 812-move route (268 pushes) in about 0.95 s in both Fast and
+Quality at 64, 128 and 256 MiB on a c4-standard-32 node: every budget from 64
+MiB up stages at the same point and generates the same states first. The
+reference's own benchmark reports about 5.3 s for 893 moves on its development
+machine (Node on Windows), so the two times come from different machines.
+Quality does not shorten it before its limit, which a larger budget only moves
+later (about 1.35 s at 64 MiB, 1.85 s at 128 MiB, 2.9 s at 256 MiB). The
 sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap. These were rejected, for soundness or by measurement:
 

@@ -3,9 +3,9 @@
 //! a rise must pass, the ranked candidate moves of a frame root, the boxes
 //! a stage may move, and the ladder that drives them. Steps 7 and 8 of
 //! slurm/reports/stage-port-plan.md (not tracked) landed the parts and the
-//! ladder; step 9 wired the ladder into the engine, which hands it a full
-//! arena with no route under a policy that stages (see `Policy::stage` in
-//! engine.rs).
+//! ladder; step 9 wired the ladder into the engine, which hands it the
+//! arena of a search with no route at its stage point, under a policy that
+//! stages (see `Policy::stage` in engine.rs and [`FILL_MIB`]).
 //!
 //! Accept is a heuristic filter, not a necessary condition. Sink, Matched
 //! and the pocket check only reject states with no solution, as the module
@@ -26,7 +26,8 @@
 //! the 23 boards plain Fast misses, with the moves, pushes and work that
 //! `engine::tests::staged_gate_routes_match_probe` pins. Run from the start
 //! with all of the probe's tests (job 46757), the ladder missed 3 boards
-//! plain Fast routes, so it runs only after a plain search fills its arena.
+//! plain Fast routes, so it runs only after a plain search reaches its stage
+//! point: its arena holds [`FILL_MIB`]'s capacity, or it fills.
 //! Of the accept sets the probe compared, Lane, Sink, Line, Matched and
 //! Pockets ties the same set without Sink for the most routes at both
 //! limits, and spends less time than it where it finds none (at 64 MiB the
@@ -97,19 +98,30 @@ const MAX_CANDIDATES: usize = 3 * MAX_BOXES;
 // A room's sort key packs its gate cell into 12 bits (see `rooms`).
 const _: () = assert!(MAX_CELLS <= 1 << 12);
 
-/// The fewest states a search's limit allows for the ladder to run. Below
-/// it the ladder declines, so a small limit keeps the plain search's
+/// The fewest states at the stage point for the ladder to run. Below it
+/// the ladder declines, so a small limit keeps the plain search's
 /// behavior; at it the work is [`work`]`(MIN_STATES)`, 131,072 inserts.
 pub(crate) const MIN_STATES: usize = 4096;
 
-/// The ladder's work budget, the inserts it may make, for a search limited
-/// to `node_limit` states: 32 per state, at most `2^20`. 32 per state
-/// keeps every route the probe's ladder found at the benchmark gate with
-/// these accept checks, the largest of which needed 26.4, and the cap
-/// bounds a give-up at large limits. The product saturates, so no limit
+/// The budget whose capacity sets the stage point: a staging search hands
+/// over to the ladder when its arena holds what FILL_MIB would hold for
+/// this board, or when it fills, whichever comes first. So the ladder
+/// starts at the same point, and runs the same, at every budget from
+/// FILL_MIB up, instead of waiting for a fill that grows with the budget,
+/// and a run at FILL_MIB or less stages where it did before. Plain Fast at
+/// 1 GiB on the catalog (job 47772) routes every board it routes at all
+/// within 1,211,120 states, below that board's 1,317,310 at FILL_MIB, and
+/// routes none of the rest within 8M. README quotes the value.
+pub(crate) const FILL_MIB: usize = 64;
+
+/// The ladder's work budget, the inserts it may make, for a search staged
+/// with `states` states in its arena: 32 per state, at most `2^20`. 32 per
+/// state keeps every route the probe's ladder found at the benchmark gate
+/// with these accept checks, the largest of which needed 26.4, and the cap
+/// bounds a give-up at large limits. The product saturates, so no count
 /// overflows it, and the cap makes the cast exact.
-pub(crate) fn work(node_limit: usize) -> u32 {
-    node_limit.saturating_mul(32).min(1 << 20) as u32
+pub(crate) fn work(states: usize) -> u32 {
+    states.saturating_mul(32).min(1 << 20) as u32
 }
 
 /// A candidate move of a frame root: push the box in `slot` along one
