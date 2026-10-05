@@ -339,6 +339,15 @@ pub(crate) struct Arena {
     #[cfg(debug_assertions)]
     found: std::sync::atomic::AtomicU32,
 }
+
+/// What a budget holds for a board, from [`Arena::capacity`].
+pub(crate) struct Capacity {
+    /// The node limit: the largest up to `max_states` whose buffers fit.
+    pub(crate) limit: usize,
+    /// The bytes that limit charges, [`Arena::reserved_bytes`].
+    pub(crate) bytes: usize,
+}
+
 impl Arena {
     pub(crate) fn new(
         cells: usize,
@@ -346,6 +355,62 @@ impl Arena {
         max_states: usize,
         memory_mib: usize,
     ) -> Result<Self, SearchError> {
+        let Capacity {
+            limit,
+            bytes: reserved_bytes,
+        } = Self::capacity(cells, boxes, max_states, memory_mib)?;
+        let records = limit + 1;
+        // The chunk list, one entry per CHUNK records, is the one buffer the
+        // budget does not charge: no budget holds more than 2^23 records, so
+        // it is at most 128 entries, 6 KiB, though the four-record chunks of
+        // unit tests make it far longer.
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(records.div_ceil(CHUNK))
+            .map_err(|_| SearchError::Allocation("node arena"))?;
+        chunks.push(Chunk::new(records.min(CHUNK), boxes).map_err(SearchError::Allocation)?);
+        // Every enqueue follows an insert, so heap.len() <= len <= limit + 1
+        // and this never grows. It is reserved whole because a doubling
+        // queue would briefly hold its old and new buffers at once, past the
+        // budget near the limit.
+        let mut heap = BinaryHeap::new();
+        heap.try_reserve_exact(records)
+            .map_err(|_| SearchError::Allocation("search queue"))?;
+        let table_size = final_table(records).min(INITIAL_TABLE);
+        let mut table = Vec::new();
+        table
+            .try_reserve_exact(table_size)
+            .map_err(|_| SearchError::Allocation("state table"))?;
+        table.resize(table_size, NIL);
+        Ok(Self {
+            boxes,
+            reserved_bytes,
+            scaled_down: limit < max_states,
+            node_limit: limit,
+            chunks,
+            len: 0,
+            counters: TableCounters::default(),
+            heap,
+            table,
+            resident: 0,
+            starved: false,
+            #[cfg(test)]
+            refusing: false,
+            #[cfg(debug_assertions)]
+            generation: 1,
+            #[cfg(debug_assertions)]
+            found: std::sync::atomic::AtomicU32::new(0),
+        })
+    }
+    /// The node limit [`Arena::new`] would set for these arguments and the
+    /// bytes it would charge, allocating nothing, so a budget other than the
+    /// search's own can be sized without building its arena.
+    pub(crate) fn capacity(
+        cells: usize,
+        boxes: usize,
+        max_states: usize,
+        memory_mib: usize,
+    ) -> Result<Capacity, SearchError> {
         if !MAX_STATES_RANGE.contains(&max_states) || !MEMORY_MIB_RANGE.contains(&memory_mib) {
             return Err(SearchError::Limits);
         }
@@ -390,51 +455,11 @@ impl Arena {
         if low == 0 {
             return Err(SearchError::BudgetTooSmall);
         }
-        let limit = low;
-        // At most the budget, so it and every count allocated below or by
-        // later growth fit a usize on wasm32 too.
-        let reserved_bytes = bytes_for(limit) as usize;
-        let records = limit + 1;
-        // The chunk list, one entry per CHUNK records, is the one buffer the
-        // budget does not charge: no budget holds more than 2^23 records, so
-        // it is at most 128 entries, 6 KiB, though the four-record chunks of
-        // unit tests make it far longer.
-        let mut chunks = Vec::new();
-        chunks
-            .try_reserve_exact(records.div_ceil(CHUNK))
-            .map_err(|_| SearchError::Allocation("node arena"))?;
-        chunks.push(Chunk::new(records.min(CHUNK), boxes).map_err(SearchError::Allocation)?);
-        // Every enqueue follows an insert, so heap.len() <= len <= limit + 1
-        // and this never grows. It is reserved whole because a doubling
-        // queue would briefly hold its old and new buffers at once, past the
-        // budget near the limit.
-        let mut heap = BinaryHeap::new();
-        heap.try_reserve_exact(records)
-            .map_err(|_| SearchError::Allocation("search queue"))?;
-        let table_size = final_table(records).min(INITIAL_TABLE);
-        let mut table = Vec::new();
-        table
-            .try_reserve_exact(table_size)
-            .map_err(|_| SearchError::Allocation("state table"))?;
-        table.resize(table_size, NIL);
-        Ok(Self {
-            boxes,
-            reserved_bytes,
-            scaled_down: limit < max_states,
-            node_limit: limit,
-            chunks,
-            len: 0,
-            counters: TableCounters::default(),
-            heap,
-            table,
-            resident: 0,
-            starved: false,
-            #[cfg(test)]
-            refusing: false,
-            #[cfg(debug_assertions)]
-            generation: 1,
-            #[cfg(debug_assertions)]
-            found: std::sync::atomic::AtomicU32::new(0),
+        Ok(Capacity {
+            limit: low,
+            // At most the budget, so it and every count the arena allocates
+            // fit a usize on wasm32 too.
+            bytes: bytes_for(low) as usize,
         })
     }
     /// The status of a search the full arena stops: [`Status::MemoryLimit`]
@@ -1713,20 +1738,53 @@ mod tests {
     /// entry and 8 to 16 bytes of table, so no budget holds a full
     /// `MAX_STATES`: 256 MiB holds 8,388,607 states at one box, where the
     /// next state would double the table, and 2,788,993 at `MAX_BOXES` on
-    /// `MAX_CELLS` cells (`MAX_STATES`'s doc).
+    /// `MAX_CELLS` cells (`MAX_STATES`'s doc). Every other budget is sized
+    /// without allocating, through [`Arena::capacity`].
     #[test]
     fn memory_binds_a_full_limit_at_every_budget() {
-        let top = *MEMORY_MIB_RANGE.end();
-        for (cells, boxes, fits) in [
+        let shapes = [
             (4, 1, 8_388_607),
             (MAX_CELLS, 1, 8_388_607),
             (4, MAX_BOXES, 2_793_036),
             (MAX_CELLS, MAX_BOXES, 2_788_993),
-        ] {
-            let arena = Arena::new(cells, boxes, MAX_STATES, top).unwrap();
+        ];
+        for (cells, boxes, fits) in shapes {
+            let arena = Arena::new(cells, boxes, MAX_STATES, 256).unwrap();
             assert_eq!(arena.node_limit, fits, "{cells} cells, {boxes} boxes");
             assert_eq!(arena.limit_status(), Status::MemoryLimit);
-            assert!(arena.reserved_bytes() <= top << 20);
+            assert!(arena.reserved_bytes() <= 256 << 20);
+        }
+        for memory_mib in MEMORY_MIB_RANGE {
+            for (cells, boxes, _) in shapes {
+                let capacity = Arena::capacity(cells, boxes, MAX_STATES, memory_mib).unwrap();
+                assert!(
+                    capacity.limit < MAX_STATES,
+                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
+                );
+                assert!(capacity.bytes <= memory_mib << 20);
+            }
+        }
+    }
+
+    /// [`Arena::new`] takes its limit and charge from [`Arena::capacity`].
+    #[test]
+    fn capacity_matches_new() {
+        for (cells, boxes) in [
+            (4, 1),
+            (MAX_CELLS, 1),
+            (4, MAX_BOXES),
+            (MAX_CELLS, MAX_BOXES),
+        ] {
+            for memory_mib in [4, 16, 64] {
+                let Capacity { limit, bytes } =
+                    Arena::capacity(cells, boxes, MAX_STATES, memory_mib).unwrap();
+                let arena = Arena::new(cells, boxes, MAX_STATES, memory_mib).unwrap();
+                assert_eq!(
+                    (arena.node_limit, arena.reserved_bytes()),
+                    (limit, bytes),
+                    "{cells} cells, {boxes} boxes, {memory_mib} MiB"
+                );
+            }
         }
     }
 
