@@ -13,11 +13,13 @@ const _: () = assert!(CHUNK >= 4);
 /// `4p` to `4p + 3`, so the parent of any `c` is `c / 4`. Each node's
 /// children fill one aligned group of four, which never straddles a chunk and
 /// is read with one bounds check, and the heap has half a binary heap's
-/// levels. A binary heap over these chunks, two bounds checks and a chunk
-/// lookup per access at three accesses a level, ran the observe boards
-/// 3-9% slower than the contiguous `BinaryHeap` before it; this one runs the
-/// memory-bound huge board at par and the rest 1.5-4.6% slower (job 48154),
-/// what the bounds checks cost now that the queue grows with the records.
+/// levels. Every pop passes through the levels in the first chunk, nine in
+/// production, so the sifts walk those on that chunk's slice, without a
+/// chunk lookup. A binary heap over these chunks, two bounds checks and a
+/// chunk lookup per access at three accesses a level, ran the observe boards
+/// 3-9% slower than the contiguous `BinaryHeap` before it; this heap without
+/// the first-chunk walks ran them 0.4-5.6% slower, and with them runs them
+/// from 0.9% faster to 1.9% slower (medians of three runs, job 48159).
 ///
 /// The arena adds a chunk here with each record chunk, of the
 /// same size, and every enqueue follows an insert, so the queue always has
@@ -117,7 +119,7 @@ impl Queue {
     /// Fills the hole at `at` with `key` after moving down every ancestor
     /// above `key`, up to `start`.
     fn sift_up(&mut self, start: usize, mut at: usize, key: Key) {
-        while at > start {
+        while at >= CHUNK && at > start {
             let parent = at / 4;
             let above = self.get(parent);
             if above <= key {
@@ -126,7 +128,22 @@ impl Queue {
             self.set(at, above);
             at = parent;
         }
-        self.set(at, key);
+        if at >= CHUNK {
+            self.set(at, key);
+            return;
+        }
+        // The levels in the first chunk, nine in production, on its slice.
+        let head = &mut self.chunks[0];
+        while at > start {
+            let parent = at / 4;
+            let above = head[parent];
+            if above <= key {
+                break;
+            }
+            head[at] = above;
+            at = parent;
+        }
+        head[at] = key;
     }
     /// Places `key` in the hole at `start`, whose subtrees are heaps: the
     /// hole moves down to a leaf, always to the lowest child, and `key` rises
@@ -136,37 +153,50 @@ impl Queue {
     fn sift_down_to_bottom(&mut self, start: usize, key: Key) {
         let end = self.len;
         let mut at = start;
+        // The levels in the first chunk, nine in production, on its slice;
+        // a group of siblings that leaves it lies wholly past it.
+        let head = &mut self.chunks[0];
+        loop {
+            let first = (4 * at).max(1);
+            let last = end.min(4 * at + 4);
+            if first >= last || last > head.len() {
+                break;
+            }
+            let (i, below) = lowest(&head[first..last]);
+            head[at] = below;
+            at = first + i;
+        }
         loop {
             let first = (4 * at).max(1);
             if first >= end {
                 break;
             }
-            let (lowest, below) = self.lowest_child(first, end.min(4 * at + 4));
+            let last = end.min(4 * at + 4);
+            let offset = first & (CHUNK - 1);
+            let siblings = &self.chunks[first >> CHUNK_SHIFT][offset..offset + (last - first)];
+            let (i, below) = lowest(siblings);
             self.set(at, below);
-            at = lowest;
+            at = first + i;
         }
         self.sift_up(start, at, key);
     }
-    /// The position and key of the lowest of the siblings `first..last`,
-    /// one group of four or less.
-    #[inline]
-    fn lowest_child(&self, first: usize, last: usize) -> (usize, Key) {
-        let at = first & (CHUNK - 1);
-        let siblings = &self.chunks[first >> CHUNK_SHIFT][at..at + (last - first)];
-        if let Ok(&[a, b, c, d]) = <&[Key; 4]>::try_from(siblings) {
-            let (i, x) = if b < a { (1, b) } else { (0, a) };
-            let (j, y) = if d < c { (3, d) } else { (2, c) };
-            let (k, z) = if y < x { (j, y) } else { (i, x) };
-            return (first + k, z);
-        }
-        let mut lowest = 0;
-        for (i, &key) in siblings.iter().enumerate().skip(1) {
-            if key < siblings[lowest] {
-                lowest = i;
-            }
-        }
-        (first + lowest, siblings[lowest])
+}
+
+/// The index and key of the lowest of `siblings`, one group of four or less.
+#[inline]
+fn lowest(siblings: &[Key]) -> (usize, Key) {
+    if let Ok(&[a, b, c, d]) = <&[Key; 4]>::try_from(siblings) {
+        let (i, x) = if b < a { (1, b) } else { (0, a) };
+        let (j, y) = if d < c { (3, d) } else { (2, c) };
+        return if y < x { (j, y) } else { (i, x) };
     }
+    let mut lowest = 0;
+    for (i, &key) in siblings.iter().enumerate().skip(1) {
+        if key < siblings[lowest] {
+            lowest = i;
+        }
+    }
+    (lowest, siblings[lowest])
 }
 
 #[cfg(test)]
