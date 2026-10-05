@@ -235,10 +235,10 @@ test('the #memory select offers only budgets within MEMORY_MIB, up to its cap', 
   assert.ok(Math.min(...memory) >= floor, `#memory offers less than MEMORY_MIB_RANGE's ${floor} MiB start`);
 });
 
-test('the README, .env.example and protocol.ts quote the cap of MEMORY_MIB', () => {
+test("the README, .env.example and protocol.ts quote MEMORY_MIB's cap, and the README its default", () => {
   const cap = read('crates/server/src/solve.rs', /const MEMORY_MIB: RangeInclusive<usize> = \*MEMORY_MIB_RANGE\.start\(\)\.\.=(\d+);/);
   assert.equal(read('README.md', /(\d+) MiB accounted search storage, and/), cap);
-  assert.equal(read('README.md', /memory_mib: (\d+)\}/), cap);
+  assert.equal(read('README.md', /memory_mib: (\d+)\}/), read('crates/server/src/solve.rs', /const DEFAULT_MEMORY_MIB: usize = (\d+);/));
   assert.equal(read('README.md', /its own arena of up to (\d+) MiB/), cap);
   assert.equal(read('.env.example', /reserves up to (\d+) MiB of search storage/), cap);
   assert.equal(read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers/), cap);
@@ -595,7 +595,7 @@ test("the README and protocol.ts quote the ends of the search crate's limit rang
   const top = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = \d+\.\.=(\d+);/);
   const states = read('crates/search/src/lib.rs', /pub const MAX_STATES_RANGE: RangeInclusive<usize> = (\d+)\.\.=MAX_STATES;/);
   assert.equal(read('README.md', /accepts budgets up to (\d+) MiB/), top);
-  assert.equal(read('web/src/protocol.ts', /and (\d+) MiB, the largest the search crate accepts/), top);
+  assert.equal(read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers\s+\*\s+and both engines accept/), top);
   assert.equal(read('README.md', /state, and (\d+) MiB and cap/), floor);
   assert.equal(read('README.md', /ms, (\d+) state, and/), states);
 });
@@ -699,7 +699,7 @@ test("the README quotes corral.rs's CAP on the pushes a sealed corral check trie
 
 test("the README quotes arena.rs's ID_BITS and its record and queue entry sizes", () => {
   const record = read('crates/search/src/arena.rs', /size_of::<Record>\(\) == (\d+)/);
-  const entry = read('crates/search/src/arena.rs', /size_of::<Entry>\(\) == (\d+)/);
+  const entry = read('crates/search/src/arena.rs', /size_of::<Key>\(\) == (\d+)/);
   assert.equal(read('README.md', /and a (\d+)-bit arena id/), read('crates/search/src/arena.rs', /const ID_BITS: u32 = (\d+);/));
   assert.equal(read('README.md', /arena record is (\d+) bytes/), record);
   assert.equal(read('README.md', /costs a (\d+)-byte record/), record);
@@ -732,6 +732,13 @@ test("the README and reserved_bytes' doc quote arena.rs's ROUTE_ALLOWANCE, and M
   const states = read('crates/search/src/stage.rs', /pub\(crate\) const MIN_STATES: usize = (\d+);/);
   assert.equal(read('crates/search/src/lib.rs', /under a limit of ([\d,]+) states or\s+\/\/\/ more, a bounded/), states);
   assert.equal(read('crates/search/src/lib.rs', /no route under a limit of ([\d,]+) states or more runs/), states);
+});
+
+test("the README quotes stage.rs's FILL_MIB, within which the benchmark gate and observe runs stay", () => {
+  const fill = read('crates/search/src/stage.rs', /pub\(crate\) const FILL_MIB: usize = (\d+);/);
+  assert.equal(read('README.md', /what (\d+) MiB\s+would hold/), fill);
+  assert.ok(read('benchmarks/catalog-baseline.json', /"memoryMiB": (\d+),/) <= fill);
+  assert.ok(read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: [\d_]+, memoryMiB: (\d+),/) <= fill);
 });
 
 test("the README and parity.mjs's comment quote the memory-fill case's allowance past reserved_bytes", () => {

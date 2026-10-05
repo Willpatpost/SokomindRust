@@ -26,7 +26,10 @@
 //!   in the table, neither queued nor checked, as in the probe.
 //! - Caps: a stage fails when its queue empties, when the arena holds
 //!   `CAPS[rung]` records past the stage's start or is full, or when the
-//!   work budget, the inserts the whole ladder may make, runs out.
+//!   work budget, the inserts the whole ladder may make, runs out. The
+//!   arena fills first only on a small limit: a ladder that starts below
+//!   the limit, at [`super::FILL_MIB`]'s capacity, has at least 691,841
+//!   records of room, far more than a path and `CAPS[2]`.
 //! - Bans and the culprit: when the last rung fails, the ladder backjumps.
 //!   The culprit is the latest frame `q >= 1` whose root has a box, on a
 //!   cell the failing stage's plan needs, that frame `q - 1`'s root does
@@ -43,7 +46,11 @@
 //!   live copy of the root goes into the table and the queue. The stage's
 //!   records start after it. Reseeds run only at `begin`, at each commit
 //!   and at each restart. The records they drop count toward the search's
-//!   discarded total through [`Ladder::take_dropped`].
+//!   discarded total through [`Ladder::take_dropped`]. On a sparse table,
+//!   as on a large budget, the clear walks only the bound records' runs,
+//!   at most a stage's `CAPS[2]` records past its start, so a reseed costs
+//!   about the stage's size instead of the table's; a dense table is
+//!   filled once.
 //! - Checks budget: every unit but an expansion costs one check, out of
 //!   `CHECK_FACTOR` times the work budget, and at zero the ladder gives up.
 //!   Expansions are bounded by work already, since every queued record

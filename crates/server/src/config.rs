@@ -5,7 +5,7 @@ use std::{env, error::Error, fmt::Display, ops::RangeInclusive, str::FromStr};
 
 /// SOLVE_CONCURRENCY's top. Each slot may reserve up to the top of
 /// MEMORY_MIB in crates/server/src/solve.rs, which asserts that 8 slots
-/// make 1 GiB; README and .env.example quote both numbers.
+/// make 8 GiB; README and .env.example quote both numbers.
 pub const MAX_SOLVE_CONCURRENCY: u32 = 8;
 const MAX_PROGRESS_CONCURRENCY: u32 = 32;
 const MAX_RETENTION_DAYS: i32 = 36_500;

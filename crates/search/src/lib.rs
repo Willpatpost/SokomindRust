@@ -78,15 +78,13 @@ use std::ops::RangeInclusive;
 /// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
-/// [`MEMORY_MIB_RANGE`] holds this many: 256 MiB holds 2,788,993 states at
-/// `MAX_BOXES` boxes on `MAX_CELLS` cells and 8,388,607 at one box (the arena
-/// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
-/// request at this limit therefore ends with [`Status::MemoryLimit`], never
-/// [`Status::StateLimit`]. The queue is reserved for the whole scaled limit
-/// up front, 8 bytes per state, whose unused part a native process never
-/// touches but wasm32 commits as linear memory. Records and the table are
-/// allocated only as the search fills them, so one that ends early, as on a
-/// small board, allocates little of its budget beyond the queue.
+/// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,601
+/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells and 33,554,431 at one box
+/// (the arena test `memory_binds_a_full_limit_at_every_budget`). A search
+/// that fills a request at this limit therefore ends with
+/// [`Status::MemoryLimit`], never [`Status::StateLimit`]. Records, the queue
+/// and the table are allocated only as the search fills them, so one that
+/// ends early, as on a small board, allocates little of its budget.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
@@ -96,7 +94,10 @@ pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// full [`MAX_STATES`] (see there for the per-state cost), so a larger budget
 /// raises a full limit's scaled-down state count all the way to this range's
 /// end.
-pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=256;
+pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=1024;
+// Below 4 GiB, so a budget in bytes, and every count the arena allocates
+// within it, fits a usize on wasm32.
+const _: () = assert!(*MEMORY_MIB_RANGE.end() < 4096);
 
 /// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].
 /// [`Mode::as_str`] gives its wire name: the server's `mode` field, the WASM
@@ -106,22 +107,27 @@ pub enum Mode {
     // Fast's and Quality's weights copy Policy::FAST and Policy::QUALITY in
     // engine.rs (checked by scripts/mirrors.test.mjs).
     /// Weighted A* (weight 5) that ends at its first route, however long.
-    /// When the arena fills with no route under a limit of 4,096 states or
+    /// With no route at its stage point, under a limit of 4,096 states or
     /// more, a bounded stage search takes over in the same arena and ends at
-    /// its first route; it is heuristic and incomplete, and when it gives up
-    /// or cannot run the search stops at the limit.
+    /// its first route. The stage point comes once the arena holds what
+    /// 64 MiB would hold for the board, or when it fills, whichever is
+    /// first. The stage search is heuristic and incomplete. When it gives up
+    /// below the limit, the plain search starts over without it; when it
+    /// gives up at a full arena, or cannot run, the search goes on, or stops
+    /// at the limit, as it would unstaged.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening
     /// the route until the queue empties or a limit hits. The first time the
-    /// arena fills, in either phase and with a route or without, the search
-    /// empties it but for its route, if any, which stays the bound to beat,
-    /// and starts over at weight 3. Its route never ends longer than the one
-    /// it carries into the restart, and only a route that alone fills the
-    /// arena stops it there instead. A Fast phase that fills the arena with
-    /// no route under a limit of 4,096 states or more runs Fast's stage
-    /// search first, and the restart keeps its route, if any, as the bound.
-    /// Under a smaller limit its route never ends longer than it would
-    /// without the restart.
+    /// arena fills, in either phase and with a route or without, or Fast's
+    /// stage search ends, the search empties it but for its route, if any,
+    /// which stays the bound to beat, and starts over at weight 3. Its route
+    /// never ends longer than the one it carries into the restart, and only
+    /// a route that alone fills the arena stops it there instead. A Fast
+    /// phase that reaches its stage point (see [`Mode::Fast`]) with
+    /// no route under a limit of 4,096 states or more runs the stage search
+    /// first, and the restart keeps its route, if any, as the bound. Under a
+    /// smaller limit its route never ends longer than it would without the
+    /// restart.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes.
@@ -525,7 +531,7 @@ impl Search {
     /// linear memory by whole requests rounded up to 64 KiB, even when the
     /// free space at the top of the heap falls just short, so each growth can
     /// leave up to 64 KiB more there, and up to one of the arena's record
-    /// blocks plus 128 KiB can stay unused.
+    /// blocks plus 192 KiB can stay unused.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }

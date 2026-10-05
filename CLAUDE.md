@@ -908,21 +908,20 @@ For the solver itself, require evidence that parallelism improves the relevant w
 
 # Testing expectations
 
-A solver change should normally have tests at the lowest layer capable of proving its behavior.
+Tests are weight, like any other code. Do not write them to make the work look test-driven. Write the change first, then add a test only when it is genuinely meaningful:
 
-Use:
+- it guards proof soundness, against false optimality or false unsolvability (the exact small-board, oracle, and fuzz checks);
+- it reproduces a real bug that could silently come back;
+- it checks that two things that must agree still agree: a fast path and the general algorithm, native and WASM, or a mirrored value and its source;
+- it covers a limit or overflow edge that the types cannot rule out.
 
-- unit tests for local invariants;
-- regression fixtures for known bugs;
-- boundary tests for limits;
-- differential tests when two implementations should agree;
-- replay verification for routes;
-- exact small-board checks when exhaustive verification is feasible;
-- catalog/corpus checks for broad regressions;
-- native/WASM parity tests where appropriate;
-- release-mode tests for behavior sensitive to overflow or debug assertions.
+Avoid:
 
-When fixing a bug, add a test that would have caught it.
+- tests that pin incidental numbers, such as expanded or generated counts, internal tallies, or timings;
+- test-only fields, counters, overrides, or hooks in production types;
+- a new test for every behavior change by default.
+
+Back performance and behavior claims with a measurement (the catalog example or the benchmark), recorded in the commit or the docs, not with a test that pins the numbers. Routes stay replay-verified everywhere, and the existing suite, parity, and benchmark gate run in CI.
 
 ---
 
@@ -930,17 +929,15 @@ When fixing a bug, add a test that would have caught it.
 
 Prefer this progression while developing:
 
-1. inspect the relevant code and existing tests;
+1. inspect the relevant code;
 2. make the smallest coherent change;
-3. run the narrowest relevant test;
-4. run formatting/linting/type checks as appropriate;
-5. run relevant search tests;
-6. run benchmark/parity checks for solver changes;
-7. run the broader validation suite before considering the work complete.
+3. run formatting and linting, which compile every target;
+4. measure when the change is performance-sensitive;
+5. let CI run the full suite, parity, and the benchmark gate before merging.
 
 Use the repository's existing validation tooling rather than inventing redundant command sequences.
 
-Do not skip expensive validation merely because a change "looks safe" when it affects:
+Do not merge without CI's suite, parity, and benchmark gate green merely because a change "looks safe" when it affects:
 
 - search behavior;
 - memory layout;
@@ -1086,7 +1083,7 @@ Do not:
 - add abstraction solely for abstraction's sake;
 - sacrifice readability for meaningless micro-optimizations;
 - sacrifice meaningful performance for cosmetic cleanliness;
-- change solver behavior without tests;
+- change solver behavior without evidence (replay, measurement, or the benchmark gate);
 - allow documentation describing the solver to drift away from reality.
 
 ---
@@ -1147,7 +1144,7 @@ It should normally be:
 
 - correct;
 - replay-verified;
-- tested;
+- green in CI, with new tests only where Testing expectations calls them meaningful;
 - formatted;
 - lint-clean;
 - documented where non-obvious;

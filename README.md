@@ -170,29 +170,34 @@ push-only.
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
-route and never re-expands a closed node. When Fast fills an arena of a few
-thousand states or more without a route, a bounded stage search
-(`crates/search/src/stage.rs`) takes over in the same arena. From the start, it
-commits one goal-level gain at a time: a small search looks for a state above
-the current level, and the first such state that passes accept tests (open
-lanes into goals, sink-line order, keeper mobility around sink-line boxes,
-keeper-aware reach matching and sealed pockets) is committed. It backtracks
-when a level fails and ends at its first route. It is heuristic and
-incomplete, and when it gives up the search stops at the limit as before.
-Quality starts as Fast; from Fast's first route it continues in the same arena
-at `g + 3h` with reopenings, keeping the shortest verified incumbent until its
-queue empties or a limit hits. The first time the arena fills, in either phase
-and with a route or without, Quality empties it in place, keeping its route, if
-it has one, as the bound to beat, and starts over at `g + 3h` in the freed
-arena, generating up to about twice the state limit in the same memory, plus
-the stage search's inserts when it runs (32 per state of the limit, at most
-2^20). So the second phase never runs short of memory just because Fast used
-most of it, and the route never ends longer than it would have at that fill.
-When that first fill comes in the Fast phase with no route, the stage search
-runs first, and the restart keeps its route, if it finds one, as the bound.
-Only a full arena restarts it, and at most once: a route that alone fills the
-arena ends it there instead, and a time limit that hits first ends Quality in
-whichever phase it is in.
+route and never re-expands a closed node. When Fast reaches its stage point
+without a route, a bounded stage search (`crates/search/src/stage.rs`) takes
+over in the same arena. The stage point comes once the arena holds what 64 MiB
+would hold for the board, or when it fills, whichever is first, and the stage
+search needs a few thousand states there. Measured at 1 GiB, plain Fast routes
+every catalog board it routes at all before that point, so a larger budget does
+not delay the stage search. From the start, it commits one goal-level gain at a
+time: a small search looks for a state above the current level, and the first
+such state that passes accept tests (open lanes into goals, sink-line order,
+keeper mobility around sink-line boxes, keeper-aware reach matching and sealed
+pockets) is committed. It backtracks when a level fails and ends at its first
+route. It is heuristic and incomplete. When it gives up below the limit, Fast
+starts over without it and runs as the plain search would; when it gives up at a
+full arena, the search stops at the limit as before. Quality starts as Fast;
+from Fast's first route it continues in the same arena at `g + 3h` with
+reopenings, keeping the shortest verified incumbent until its queue empties or a
+limit hits. The first time the arena fills, in either phase and with a route or
+without, or the stage search ends, Quality empties it in place, keeping its
+route, if it has one, as the bound to beat, and starts over at `g + 3h` in the
+freed arena, generating up to about twice the state limit in the same memory,
+plus the stage search's inserts when it runs (32 per state at the stage point,
+at most 2^20). So the second phase never runs short of memory just because Fast
+used most of it, and the route never ends longer than it would have at that
+fill. When the Fast phase reaches its stage point with no route, the stage
+search runs first, and the restart keeps its route, if it finds one, as the
+bound. Only a full arena or the stage search's end restarts it, and at most
+once: a route that alone fills the arena ends it there instead, and a time limit
+that hits first ends Quality in whichever phase it is in.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -217,14 +222,15 @@ The objective is total remaining moves, not pushes. Not ported from the
 reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
-heuristic change), generators, and Quality route repair. On Grand Hall
-(`huge`), which plain Fast and Quality do not route in any memory up to 256 MiB,
-the stage search finds an 812-move route (268 pushes) in about 1.04 s in both
-Fast and Quality at 64 MiB on a c4-standard-32 node. The reference's own
-benchmark reports about 5.3 s for 893 moves on its development machine (Node
-on Windows), so the two times come from different machines. Quality does not
-shorten it before its limit. A larger budget routes it later (about 1.8 s at
-128 MiB, 3.4 s at 256 MiB), since the stage search waits for a full arena. The
+heuristic change), generators, and Quality route repair. On Grand Hall (`huge`),
+which plain Fast and Quality do not route in any memory up to 256 MiB, the stage
+search finds an 812-move route (268 pushes) in about 0.95 s in both Fast and
+Quality at 64, 128 and 256 MiB on a c4-standard-32 node: every budget from 64
+MiB up stages at the same point and generates the same states first. The
+reference's own benchmark reports about 5.3 s for 893 moves on its development
+machine (Node on Windows), so the two times come from different machines.
+Quality does not shorten it before its limit, which a larger budget only moves
+later (about 1.35 s at 64 MiB, 1.85 s at 128 MiB, 2.9 s at 256 MiB). The
 sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap. These were rejected, for soundness or by measurement:
 
@@ -269,33 +275,35 @@ carries `O`, `R` or `S` and `X`'s goal is spelled `S`; the parser rejects them
 with their row and column, like any other unsupported symbol.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
-per arena (`sokomind_search::MAX_STATES`), 128 MiB accounted search storage, and
-one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration);
-the search crate, and so the browser worker, accepts budgets up to 256 MiB. The
-web app sends the full state cap and the budget its memory select names (16 to
-128 MiB, 64 by default) to either engine. A state costs a 12-byte record, 2
-bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index table, so the
-memory budget always binds before the state cap: on the catalog's boards 64 MiB
-holds about 0.91-2.10M states, 128 MiB 1.83-4.19M, and 256 MiB 3.67-8.39M, and a
-run that fills its arena reports a memory limit. The arena holds at most the
-smaller of the state cap and what the budget holds. Its queue, 8 bytes per state
-and at most about a quarter of the budget, is reserved for that many states when
-the search starts: a native process touches only the part it uses, but in WASM
-the whole reservation is linear memory. Records grow in blocks as the search
-fills them, and the index table has two sizes: it starts at 2^16 slots
-(256 KiB), or its full size when that is smaller, and grows straight to its full
-size once more than half full. Neither passes the budget, so a small board
-allocates little beyond the queue. WASM linear memory never shrinks and keeps
+per arena (`sokomind_search::MAX_STATES`), 1024 MiB accounted search storage, and
+one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration),
+and take 128 MiB when they name no budget. The search crate, and so the browser
+worker, accepts budgets up to 1024 MiB too, so the web app sends the full state
+cap and the budget its memory select names (16 to 1024 MiB, 64 by default) to
+either engine. A state costs a 12-byte record, 2 bytes per box, an 8-byte queue
+entry, and 8 to 16 bytes of index table, so the memory budget always binds
+before the state cap: on the catalog's boards 64 MiB holds about 0.91-2.10M
+states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a run that fills its
+arena reports a memory limit. The arena holds at most the smaller of the state
+cap and what the budget holds. Records and their queue entries grow in blocks of
+2^16 as the search fills them, and the index table has two sizes: it starts at
+2^16 slots (256 KiB), or its full size when that is smaller, and grows straight
+to its full size once more than half full. None passes the budget, so a small
+board allocates little of it. The grow fills the whole new table, once and early
+in the search: at 1024 MiB it takes about 16 ms on Grand Hall natively, and
+about twice that on a one-box board, whose table is twice as large. So once per
+search a WASM worker slice runs that much longer or more, and a native solve
+holds its blocking thread that long. WASM linear memory never shrinks and keeps
 what a run frees: a run that grows its table can end up to 256 KiB past the
 budget, for the freed first table, and one that ran the stage search up to
 200,000 bytes (the route allowance) more, for the stage search's freed buffers.
 The allocator's slack comes on top. It grows linear memory by a whole request,
 rounded up to 64 KiB, even when the free space at the top of the heap falls just
-short of it, so each growth can leave up to 64 KiB more there. A chunk's record
-and box blocks can both miss before that space holds one, so up to one record
-block plus 128 KiB can stay unused. Where that slack ends depends on every
-earlier allocation, and a few hundred bytes more elsewhere can cost a whole
-block: Grand Hall at 16 MiB ends 753 KiB past its ceiling, 512 KiB past the
+short of it, so each growth can leave up to 64 KiB more there. A chunk's
+record, box, and queue blocks can each miss before that space holds one, so up
+to one record block plus 192 KiB can stay unused. Where that slack ends depends
+on every earlier allocation, and a few hundred bytes more elsewhere can cost a
+whole block: Grand Hall at 16 MiB ends 369 KiB past its ceiling, 128 KiB past the
 budget.
 An allocation refused below the budget also ends the run with a
 memory limit. The search memory metric is that ceiling, computed from buffer
@@ -406,7 +414,7 @@ number, stops startup before the database wait.
 | `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
-| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 128 MiB accounted search storage, so up to 1 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
+| `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 1024 MiB accounted search storage, so up to 8 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
 | `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
 | `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
@@ -536,7 +544,9 @@ arena grows by at most its memory ceiling plus 2 MiB.
 states and 64 MiB, three times each: an observation size, recorded in
 `benchmarks/observe-reference.json` and far below the state cap so a run stays
 short (`--states` and `--memory` override it). It fails only on a false proof
-or bound, a nondeterministic run, or a crash. `test:db` runs the ignored
+or bound, a nondeterministic run, or a crash. Both it and `bench:check` run
+within the budget that sets Fast's stage point, so a run there that stages does
+so at its full arena; larger budgets stage before the arena fills. `test:db` runs the ignored
 `live_postgres_*` server tests against `SOKOMIND_TEST_DATABASE_URL`, a dedicated, disposable
 database that allows `CREATE SCHEMA`. `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
