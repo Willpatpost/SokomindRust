@@ -51,8 +51,8 @@ pub(crate) struct Policy {
     stage: bool,
     /// Whether a search that ends on its own with a route polishes it before
     /// its status is final: single-box rescheduling (polish.rs) within the
-    /// arena's share of the budget, which keeps a route only when it replays
-    /// shorter. Route-only, so never Exact's; Fast's first route stands as
+    /// arena's share of the budget, in several runs with different box
+    /// orders, which keeps a route only when it replays shorter. Route-only, so never Exact's; Fast's first route stands as
     /// found.
     polish: bool,
 }
@@ -611,11 +611,12 @@ impl Engine {
             && let Some(id) = self.incumbent
             && let Ok(route) = self.route_to(id)
         {
-            let fixed = fixed_bytes(self.board.tiles().len(), self.board.labels().len());
+            let boxes = self.board.labels().len();
+            let fixed = fixed_bytes(self.board.tiles().len(), boxes);
             let allowance = (self.arena.reserved_bytes() as u64).saturating_sub(fixed);
             self.incumbent = None;
             self.arena.release();
-            self.polish = Some(Polish::new(route, status, allowance));
+            self.polish = Some(Polish::new(route, status, allowance, boxes));
         } else {
             self.status = status;
         }

@@ -31,8 +31,8 @@ polish does not run then.
 
 ## One box's job
 
-The polisher works on one box at a time, cycling through the slots in order. A
-job for box `b`:
+The polisher works on one box at a time, cycling through the slots in the
+run's order (see Runs). A job for box `b`:
 
 1. Replays the route and records every push of the other boxes as a kept event:
    the keeper's stand, the cell the box left and its new cell, and the
@@ -59,9 +59,30 @@ expansion and replayed under the game rules. It is then cut at its first solved
 state, since a box can reach its goal before another box's last push. It
 replaces the route only if it is shorter. A job that finds nothing, runs out of
 queue, or cannot start (the box never moves, or the job does not fit in memory)
-gains nothing. The polish ends when a full cycle of jobs, one per box, has
-gained nothing. A gain restarts that count, so the polish ends only at a local
-optimum under single-box rescheduling.
+gains nothing. A run ends when a full cycle of jobs, one per box, has gained
+nothing. A gain restarts that count, so a run ends only at a local optimum
+under single-box rescheduling.
+
+## Runs
+
+Where a run ends depends on the order it visits the boxes in. Each job
+reschedules its box around the route the earlier jobs left, so another order
+takes another path, to another local optimum. On Grand Hall, 119 box orders
+took the same 812-move route to anything from 462 to 547 moves (see Measured).
+
+So the polish makes several runs. Each starts from the route the search handed
+over, the seed, and visits the slots in its own order: a first slot and a
+stride, so the run's `i`-th job takes slot `first + i × stride`, modulo the
+box count `n`. A stride coprime to `n` visits every slot once in any `n` jobs
+in a row. Run 0 takes the slots in order (first slot 0, stride 1). Later runs
+take the coprime strides in turn, then move the first slot on, so the first
+`n × φ(n)` runs all differ. The polish makes `RUNS` (8) runs, or one per such
+order on a board with fewer: one run for one box, two for two, six for three.
+
+The polish keeps the shortest route any run reaches, and a later run's route
+replaces it only when strictly shorter. It ends when every run has ended. A
+caller's stop ends it sooner and keeps the best route so far, so under a time
+limit the polish makes as many runs as fit.
 
 ## Heuristic
 
@@ -97,7 +118,9 @@ no reopenings, and its first goal pop is the model's shortest route.
 
 The polish runs in the arena's share of the budget, the bytes
 `Arena::reserved_bytes` charges beyond `fixed_bytes`, which the arena freed
-before the polish. A job charges:
+before the polish. The seed and the best route come out of it first: each is
+at most the seed's length, so a job's allowance is that share less twice the
+seed's length. A job charges:
 
 - its event list;
 - the other boxes' cells per event count;
@@ -112,8 +135,9 @@ A job that cannot hold its buffers plus `MIN_QUEUE` (1,024) entries does not
 start. A job whose queue reaches its cap ends with no gain. Every allocation
 is fallible (`try_reserve`), so an allocator refusal ends the job too, never
 the process. The route, a job's found route and a solution's letters fit in
-the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). The polisher
-never holds more than two of them at once. So `reserved_bytes` does not change.
+the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). Besides the
+seed and the best route, the polisher never holds more than two of them at
+once. So `reserved_bytes` does not change.
 On wasm32 linear memory never shrinks, and the allocator may not fit the
 polish into the arena's freed blocks, so linear memory can grow by up to the
 arena's share again (see `Search::reserved_bytes`).
@@ -122,6 +146,7 @@ arena's share again (see `Search::reserved_bytes`).
 
 A unit is one of:
 
+- starting a run: one copy of the seed;
 - starting a job: two replays of the route, plus its allocations;
 - one walk layer, which is one flood (layers are built from the last event
   down, so each tail adds the next);
@@ -167,8 +192,20 @@ polish.
 
 485 is a local optimum under single-box rescheduling. The reference's
 rescheduler alone took its Grand Hall route from 789 to 503 moves. Its best
-route, 476 moves, also needed window rewrite, eight rounds and a chosen seed.
-Those are the moves listed next.
+route, 476 moves, came from eight rounds of the same rescheduling on a chosen
+916-move seed. Its window rewrite gained nothing on Grand Hall once
+rescheduling had run.
+
+**Box order.** Job 48683, on a c4-standard-32 node, polished Grand Hall's
+812-move route in 119 box orders: first slots 0 to 16 with strides 1, 2, 3, 5,
+7, 15 and 16, through a throwaway build that set the order (Quality, 60M
+states, 64 MiB, no time limit). The runs ended between 462 and 547 moves, with
+a median of 503. Slot order gave 485, two orders gave 462 (226 pushes), and 25
+of the 119 ended below 485. Each run took 0.3 to 0.65 s after the search. The
+same build polished three of the reference's routes as seeds, in 34 orders
+each: its 503-move route reached 497 in every order, its 626-move route 465 to
+509, and its 893-move route 472 to 551. This spread is why the polish makes
+several runs (see Runs).
 
 ## Left out, for now
 
@@ -184,9 +221,10 @@ These come from the reference's Quality route repair, or were considered here:
   measurement shows jobs being skipped at the budgets that matter.
 - **Window rewrite**: re-searching short windows of the route with every box
   free. It catches what single-box rescheduling cannot: two boxes that must
-  trade order.
+  trade order. In the reference it gained nothing on Grand Hall once
+  rescheduling had run.
 - **Two-box rescheduling and goal swaps** within a label group: moves that
   single-box rescheduling cannot reach, since each job keeps its box's goal.
 - **Diverse seeds**: polishing several first routes and keeping the best. In
   the reference, the choice of seed alone moved Grand Hall between 476 and 509
-  moves.
+  moves. Runs vary the box order instead, on the one route the search has.

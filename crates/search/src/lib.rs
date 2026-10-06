@@ -13,7 +13,7 @@
 //! - [`Mode::Quality`]: Fast, then a lighter weight that keeps shortening
 //!   that route until nothing queued can beat it or a limit hits, then a
 //!   route polish that reschedules one box at a time around the others'
-//!   pushes (docs/route-polish.md).
+//!   pushes, in several box orders (docs/route-polish.md).
 //! - [`Mode::Optimal`]: admissible A*, and the only mode that yields a
 //!   [`Proof`]: that the route is shortest, that the optimum lies between
 //!   two bounds, or that no route exists.

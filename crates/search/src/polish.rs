@@ -4,8 +4,11 @@
 //! them: from the start to the goal cell the box ended on, with every walk
 //! taken as short as the boxes then allow. Its bound is the current route,
 //! so anything it finds is shorter; a found route is replayed before it is
-//! kept. Jobs cycle over the boxes until a full pass gains nothing. The
-//! design, its soundness and its memory budget are in docs/route-polish.md.
+//! kept. Jobs cycle over the boxes until a full pass gains nothing. Where
+//! that pass ends depends on the order the boxes are visited in, so the
+//! polish makes several runs from the search's route, each in its own
+//! order, and keeps the shortest route. The design, its soundness and its
+//! memory budget are in docs/route-polish.md.
 use crate::{SolutionError, Status, heuristic::Heuristic, reach::Reach, stage::filled};
 use sokomind_core::{Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State, Step};
 use std::{collections::BinaryHeap, mem::size_of};
@@ -30,55 +33,97 @@ pub(crate) fn replay(board: &Board, start: &State, route: &[u8]) -> Result<usize
     Err(SolutionError::Counters)
 }
 
-/// The polisher: the best route so far, the status the search ended with,
-/// and the box job running, if any. One [`Polish::step`] is one unit of a
-/// job, so the engine slices it by pops like the search.
+/// The most runs a polish makes. A board with few boxes has fewer box
+/// orders, and makes one run per order.
+const RUNS: usize = 8;
+
+/// The strides that visit each of `boxes` slots once per cycle: those
+/// coprime to the box count.
+fn strides(boxes: usize) -> impl Iterator<Item = usize> {
+    (1..=boxes).filter(move |&stride| gcd(stride, boxes) == 1)
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// Run `run`'s box order, as its first slot and the stride between slots.
+/// Run 0 takes the slots in order. Later runs take the coprime strides in
+/// turn, then move the first slot on, so the first `boxes * φ(boxes)` runs
+/// all differ.
+fn order(boxes: usize, run: usize) -> (usize, usize) {
+    let count = strides(boxes).count();
+    let stride = strides(boxes).nth(run % count).unwrap_or(1);
+    (run / count % boxes, stride)
+}
+
+/// The polisher: the search's route, the best route so far, the status the
+/// search ended with, and the run and box job under way. One
+/// [`Polish::step`] is one unit of a job, so the engine slices it by pops
+/// like the search.
 pub(crate) struct Polish {
-    /// Direction indices, replay-verified to reach the first solved state at
-    /// their last move.
+    /// The route the search handed over, which every run starts from.
+    seed: Vec<u8>,
+    /// The shortest route of every run so far.
+    best: Vec<u8>,
+    /// This run's route. Every route held is direction indices,
+    /// replay-verified to reach the first solved state at its last move.
     route: Vec<u8>,
     ending: Status,
     /// Bytes a job may hold: the arena's share of the budget, which the
-    /// engine released before polishing.
+    /// engine released before polishing, less the seed and the best route.
     allowance: u64,
-    /// The box slot the next job reschedules.
+    /// The run under way, from 0, and how many the polish makes.
+    run: usize,
+    runs: usize,
+    /// The box slot the next job reschedules, and the stride to the one
+    /// after it in this run's order.
     next: usize,
-    /// Jobs started since the route last got shorter, counting the one that
-    /// shortened it. A full cycle over the boxes ends the polish.
+    stride: usize,
+    /// Jobs started in this run since its route last got shorter, counting
+    /// the one that shortened it. A full cycle over the boxes ends the run.
     idle: usize,
     job: Option<Job>,
 }
 
 impl Polish {
-    pub(crate) fn new(route: Vec<u8>, ending: Status, allowance: u64) -> Self {
+    pub(crate) fn new(route: Vec<u8>, ending: Status, allowance: u64, boxes: usize) -> Self {
+        // The seed and the best route are each at most the route's length.
+        let held = 2 * route.len() as u64;
         Self {
+            seed: route.clone(),
+            best: route.clone(),
             route,
             ending,
-            allowance,
+            allowance: allowance.saturating_sub(held),
+            run: 0,
+            runs: (boxes * strides(boxes).count()).clamp(1, RUNS),
             next: 0,
+            stride: 1,
             idle: 0,
             job: None,
         }
     }
     pub(crate) fn moves(&self) -> u32 {
-        self.route.len() as u32
+        self.best.len() as u32
     }
     pub(crate) fn route(&self) -> &[u8] {
-        &self.route
+        &self.best
     }
     /// The status the search ended with before polishing.
     pub(crate) fn ending(&self) -> Status {
         self.ending
     }
-    /// Drops the running job; the route stays the best so far.
+    /// Drops the running job; the best route stays.
     pub(crate) fn stop(&mut self) {
         self.job = None;
     }
-    /// Runs one unit: starts the next box's job, or advances the running
-    /// one. A job that finds a shorter route ends, and its route replaces
-    /// this one once replay confirms it, cut at its first solved state.
-    /// True once every box's job in a full cycle gained nothing; every
-    /// later call returns true again.
+    /// Runs one unit: starts the next run from the seed, starts the next
+    /// box's job, or advances the running one. A job that finds a shorter
+    /// route ends, and its route replaces the run's once replay confirms
+    /// it, cut at its first solved state. True once every run has ended,
+    /// each with a full cycle of jobs that gained nothing; every later call
+    /// returns true again.
     pub(crate) fn step(
         &mut self,
         board: &Board,
@@ -89,11 +134,18 @@ impl Polish {
         let boxes = board.labels().len();
         let Some(job) = &mut self.job else {
             if self.idle >= boxes {
-                return true;
+                if self.run + 1 >= self.runs {
+                    return true;
+                }
+                self.run += 1;
+                self.route.clone_from(&self.seed);
+                (self.next, self.stride) = order(boxes, self.run);
+                self.idle = 0;
+                return false;
             }
             self.idle += 1;
             let slot = self.next;
-            self.next = (slot + 1) % boxes;
+            self.next = (slot + self.stride) % boxes;
             // A box that never moves, or whose job does not fit the
             // allowance, gets no job and counts as idle.
             self.job = Job::new(board, heuristic, start, &self.route, slot, self.allowance);
@@ -117,6 +169,9 @@ impl Polish {
                     route.truncate(n);
                     self.route = route;
                     self.idle = 1;
+                    if self.route.len() < self.best.len() {
+                        self.best.clone_from(&self.route);
+                    }
                 }
             }
         }

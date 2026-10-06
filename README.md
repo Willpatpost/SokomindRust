@@ -195,8 +195,10 @@ its own with a route, at an empty queue or a limit, it polishes the route
 before it reports (`crates/search/src/polish.rs`): one box at a time, a small
 A* keeps every other box's pushes in their order and searches for a shorter
 schedule of that box's own pushes among them, every walk as short as the boxes
-then allow. A route is kept only when it replays shorter, and the polish ends
-once a full pass over the boxes gains nothing. It runs in the arena's share of
+then allow. A route is kept only when it replays shorter. A run ends once a
+full pass over the boxes gains nothing, and where it ends depends on the order
+it visits them in, so the polish makes up to eight runs from the search's
+route, each in its own box order, and keeps the shortest. It runs in the arena's share of
 the budget after the arena frees its records, so the reserved bytes do not
 change; `docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
