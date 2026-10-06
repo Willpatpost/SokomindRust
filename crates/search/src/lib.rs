@@ -63,6 +63,7 @@ mod heuristic;
 mod proof;
 mod push;
 mod reach;
+mod sides;
 mod stage;
 #[cfg(test)]
 mod testkit;

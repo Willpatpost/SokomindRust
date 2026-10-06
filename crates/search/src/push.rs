@@ -287,7 +287,7 @@ pub(crate) fn admit(
         to,
         stand,
     } = push;
-    if kernel.heuristic.dead(i, to) {
+    if kernel.heuristic.dead_after(i, to, d) {
         kernel.skipped.pruned_dead_cells += 1;
         return None;
     }
@@ -326,7 +326,7 @@ pub(crate) fn admit(
     let Some(h) = known.or_else(|| {
         kernel
             .heuristic
-            .child_estimate(parent_h, parent_group, &parent.node.state, i, to)
+            .child_estimate(parent_h, parent_group, &parent.node.state, i, to, d)
     }) else {
         kernel.skipped.pruned_assignment += 1;
         return None;
@@ -350,7 +350,7 @@ pub(crate) fn admit(
         let occupied = |cell: Cell| cell == to || (cell != from && kernel.reach.blocked(cell));
         // Pushing the same box on again starts from `from`.
         let ahead = kernel.board.neighbors()[to as usize][d];
-        let onward = ahead != NONE && !occupied(ahead) && !kernel.heuristic.dead(i, ahead);
+        let onward = ahead != NONE && !occupied(ahead) && !kernel.heuristic.dead_after(i, ahead, d);
         if !onward
             && stand_walk(kernel.board, kernel.heuristic, from, boxes, occupied, need) >= need
         {
@@ -396,8 +396,9 @@ pub(crate) fn root_estimate(
 /// The Manhattan distance from `player` to the nearest stand of a
 /// statically legal push, or 0 when there is none. Pushing box `j` in
 /// direction `e` is statically legal when the cell ahead of it and the
-/// stand behind it are floor that `occupied` leaves free, and the cell
-/// ahead is not dead for the box. The first push of every route from an
+/// stand behind it are floor that `occupied` leaves free, and the box is
+/// not [`dead_after`](Heuristic::dead_after) the push, which reads only the
+/// cell ahead and the direction. The first push of every route from an
 /// unsolved state is one of these, made with exactly these boxes, so the
 /// walk to its stand bounds the route's walking moves, which the
 /// assignment's pushes do not count. Callers skip solved states.
@@ -433,7 +434,7 @@ fn stand_walk(
                 || stand == NONE
                 || occupied(ahead)
                 || occupied(stand)
-                || heuristic.dead(j, ahead)
+                || heuristic.dead_after(j, ahead, e)
             {
                 continue;
             }
@@ -597,7 +598,7 @@ mod tests {
                         assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
                     }
                     let ahead = board.neighbors()[to as usize][d];
-                    if ahead != NONE && !occupied(ahead) && !heuristic.dead(i, ahead) {
+                    if ahead != NONE && !occupied(ahead) && !heuristic.dead_after(i, ahead, d) {
                         assert_eq!(exact, 0, "{id} at {:?}", states[child]);
                         onward += 1;
                     }
