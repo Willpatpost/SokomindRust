@@ -1,8 +1,7 @@
 //! The stage ladder: the frames, stages and backjumps that run the stage
 //! units inside the search's arena. Ports the probe's `run`, `stage`,
-//! `stage_expand` and `fail` (slurm/probes/p4b.rs, not tracked), as
-//! section 4.5 of slurm/reports/stage-port-plan.md (not tracked) restates
-//! them; section 4.8 lists the differences from the probe.
+//! `stage_expand` and `fail`; docs/stage-ladder.md lists where the port
+//! differs from the probe.
 //!
 //! A frame is a root, a state on the arena's kept path, with its level
 //! (see `rooms`). Frame 0 is the start. A stage searches from the top

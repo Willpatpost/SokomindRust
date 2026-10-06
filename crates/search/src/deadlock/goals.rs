@@ -399,11 +399,11 @@ mod tests {
         (blocks, table)
     }
 
-    /// A port of the stage probe's `reaches` (slurm/probes/p4b.rs 291, not
-    /// tracked) on its own floods: one forward search per state over the
-    /// whole board. `comp[x]` numbers the floor components left once `x` is
-    /// blocked, and state `(x, k)`, at `base[x] + k`, has in `reach` the
-    /// goal columns one box from `x` reaches alone with the keeper in `k`.
+    /// A port of the stage probe's `reaches` on its own floods: one forward
+    /// search per state over the whole board. `comp[x]` numbers the floor
+    /// components left once `x` is blocked, and state `(x, k)`, at
+    /// `base[x] + k`, has in `reach` the goal columns one box from `x`
+    /// reaches alone with the keeper in `k`.
     struct Probe {
         comp: Vec<Vec<usize>>,
         base: Vec<usize>,

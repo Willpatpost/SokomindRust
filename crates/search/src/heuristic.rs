@@ -480,10 +480,10 @@ mod tests {
         }
     }
 
-    /// The stage probe's `pull` (slurm/probes/p4b.rs, not tracked) with
-    /// nothing blocked: the cells from which one box reaches `goal` by
-    /// pushes, the keeper ignored. A cell joins when the cell beyond it,
-    /// where the keeper stands to push it toward `goal`'s side, is floor.
+    /// The stage probe's `pull` with nothing blocked: the cells from which
+    /// one box reaches `goal` by pushes, the keeper ignored. A cell joins
+    /// when the cell beyond it, where the keeper stands to push it toward
+    /// `goal`'s side, is floor.
     fn pull(board: &Board, goal: Cell) -> Vec<bool> {
         let neighbors = board.neighbors();
         let mut seen = vec![false; neighbors.len()];

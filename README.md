@@ -131,6 +131,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `migrations`, `deploy` | Database schema and NGINX configuration |
 | `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |
 | `benchmarks` | Reviewed benchmark baselines (see Validation) |
+| `docs` | Design notes for the stage ladder and the sealed-corral check: why each looks the way it does, and the measurements behind it |
 | `Dockerfile`, `compose.yaml` | Images and the full stack (see Full stack with Docker) |
 | `.github/workflows/ci.yml` | CI (see Validation) |
 
@@ -183,7 +184,9 @@ keeper mobility around sink-line boxes, keeper-aware reach matching and sealed
 pockets) is committed. It backtracks when a level fails and ends at its first
 route. It is heuristic and incomplete. When it gives up below the limit, Fast
 starts over without it and runs as the plain search would; when it gives up at a
-full arena, the search stops at the limit as before. Quality starts as Fast;
+full arena, the search stops at the limit as before. `docs/stage-ladder.md`
+records how its accept tests, stage point and budgets were chosen and measured.
+Quality starts as Fast;
 from Fast's first route it continues in the same arena at `g + 3h` with
 reopenings, keeping the shortest verified incumbent until its queue empties or a
 limit hits. The first time the arena fills, in either phase and with a route or
@@ -233,7 +236,8 @@ machine (Node on Windows), so the two times come from different machines.
 Quality does not shorten it before its limit, which a larger budget only moves
 later (about 1.35 s at 64 MiB, 1.85 s at 128 MiB, 2.9 s at 256 MiB). The
 sealed-corral check covers the reference's corral deadlock check, at the same
-six-push cap. These were rejected, for soundness or by measurement:
+six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
+and what it measured. These were rejected, for soundness or by measurement:
 
 - PI-corral successor restriction and corral ordering: push-objective
   techniques that gave false proofs under the move objective in the sister
