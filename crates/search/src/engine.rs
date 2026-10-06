@@ -1162,11 +1162,10 @@ mod tests {
     /// limit; the restarted Quality run still finds expert-maze, 65 moves
     /// after 2,000 records in all, where Fast given 10,000 states needs
     /// 2,920 records for a 79-move route. A Python replica of the engine
-    /// with the sealed-corral check (pruning/replicas/corral_port.py, not
-    /// tracked) gives these counts. Its extension with Quality's phases and
-    /// restart (pruning/replicas/quality_restart.py, not tracked) has Fast
-    /// then Quality fill the arena with 14 of Fast's 30 routes, and Quality
-    /// start over with each, shortening 2.
+    /// with the sealed-corral check gave these counts. Extended with
+    /// Quality's phases and restart, it had Fast then Quality fill the arena
+    /// on 14 of the 30 boards Fast routes, and Quality start over carrying
+    /// each route, shortening 2 (docs/pruning.md).
     #[test]
     fn quality_restarts_once_when_the_arena_first_fills() {
         let (mut rescued, mut carried, mut shortened) = (Vec::new(), 0, 0);
@@ -1405,10 +1404,10 @@ mod tests {
     }
 
     /// A staged search's records stay within the bound that keeps every
-    /// counter in u32 (section 4.6 of slurm/reports/stage-port-plan.md, not
-    /// tracked): two arenas of at most L + 1 records, the ladder's work, and
-    /// one live copy of a root per reseed, at most 12,870 of them. The
-    /// counter identities hold across the ladder's reseeds.
+    /// counter in u32 (docs/stage-ladder.md, Counter width): two arenas of
+    /// at most L + 1 records, the ladder's work, and one live copy of a root
+    /// per reseed, at most 12,870 of them. The counter identities hold
+    /// across the ladder's reseeds.
     #[test]
     fn staged_generated_bound() {
         let mut engine = fresh_on_huge(Policy::FAST, STAGED);

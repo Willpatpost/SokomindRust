@@ -92,7 +92,7 @@ impl Lcg {
 /// pin the rooms of `flagged_pushes_leave_no_solution` in the deadlock
 /// tests and `corral_dead_room_states_have_no_solution` in the corral
 /// tests, both from `Lcg(0x5eed)`; changing them swaps those boards and
-/// invalidates the Python counts both cite.
+/// invalidates the counts both document.
 pub(crate) fn random_room(rng: &mut Lcg) -> String {
     const SETS: [&[u8]; 4] = [b"AaBb", b"AaBbCc", b"XSXSAa", b"XXXSSS"];
     let set = SETS[rng.below(SETS.len())];

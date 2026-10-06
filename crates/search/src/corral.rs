@@ -25,12 +25,12 @@
 //! A corral with no empty cell is skipped, a choice of scope and cost: its
 //! boxes all border the keeper's region, and judging such corrals too flags
 //! far more states but no more that the admit chain keeps (the census in
-//! pruning/t2-census.json, not tracked, finds the same 1,276 and 620 kept
-//! flags on the rooms and the catalog tested below either way). When the
-//! reached cells and the boxes cover every floor cell, every corral is
-//! such a one, so the scan is skipped outright. A corral with more than
-//! [`CAP`] potential pushes is skipped too, which bounds the freeze work
-//! per expansion; one with none is always judged.
+//! docs/pruning.md finds the same 1,276 and 620 kept flags on the rooms
+//! and the catalog tested below either way). When the reached cells and
+//! the boxes cover every floor cell, every corral is such a one, so the
+//! scan is skipped outright. A corral with more than [`CAP`] potential
+//! pushes is skipped too, which bounds the freeze work per expansion; one
+//! with none is always judged.
 //!
 //! The pocket check, `pockets_begin` and then one `pockets_step` unit at a
 //! time, asks a deeper question for the stage ladder. A pocket is a
@@ -47,9 +47,9 @@
 //! sequence that ends with every member on a goal, since the other boxes
 //! only obstruct, and a dead cell or a freeze over fewer boxes is dead with
 //! more. The check ports the stage probe's `pockets_ok` and `pocket_dead`
-//! (slurm/probes/p4b.rs 358-466, not tracked) with the same verdicts: a
-//! pocket with more than [`POCKET_BOXES`] members, or whose search would
-//! queue more than [`POCKET_NODES`] states, counts as alive.
+//! with the same verdicts: a pocket with more than [`POCKET_BOXES`]
+//! members, or whose search would queue more than [`POCKET_NODES`] states,
+//! counts as alive.
 use crate::{
     deadlock::{Deadlock, frozen_off_goal},
     heuristic::Heuristic,
@@ -753,10 +753,10 @@ mod tests {
                 }
             }
         }
-        /// The probe's `pockets_ok` (p4b.rs 358-394) over plain vectors and
-        /// a breadth-first flood of its own, with at most `boxes` members
-        /// per searched pocket and `nodes` pops per search: the pops of the
-        /// first dead pocket's search, or `None` when none is dead.
+        /// The probe's `pockets_ok` over plain vectors and a breadth-first
+        /// flood of its own, with at most `boxes` members per searched
+        /// pocket and `nodes` pops per search: the pops of the first dead
+        /// pocket's search, or `None` when none is dead.
         fn reference(&self, state: &State, boxes: usize, nodes: usize) -> Option<usize> {
             let (board, tiles) = (&self.board, self.board.tiles());
             let mut occupant: Vec<Option<usize>> = vec![None; tiles.len()];
@@ -799,12 +799,11 @@ mod tests {
             }
             None
         }
-        /// The probe's `pocket_dead` (p4b.rs 411-466) over plain vectors:
-        /// the pops of the members' search when the pocket is dead, `None`
-        /// when some state lets the keeper in or has every member on a goal
-        /// of its label, or a pop passes `nodes`. Each member keeps its own
-        /// slot, and a key sorts its (group, cell) pairs, as the probe's
-        /// does.
+        /// The probe's `pocket_dead` over plain vectors: the pops of the
+        /// members' search when the pocket is dead, `None` when some state
+        /// lets the keeper in or has every member on a goal of its label, or
+        /// a pop passes `nodes`. Each member keeps its own slot, and a key
+        /// sorts its (group, cell) pairs, as the probe's does.
         fn pocket_dead(
             &self,
             state: &State,
@@ -940,10 +939,9 @@ mod tests {
     /// door and the room below are one corral with both boxes, empty cells
     /// and no potential push, and its boxes are off their goals. Neither
     /// box is on a dead cell or frozen, so the admit chain alone keeps the
-    /// state. The Python port of this module
-    /// (`pruning/replicas/corral_port.py fixtures`, not tracked, line f1)
-    /// finds 5 reachable states, one per keeper cell, all flagged and none
-    /// solvable.
+    /// state. It has 5 reachable states, one per keeper cell, all flagged
+    /// and none solvable, as the census's Python ports found
+    /// (docs/pruning.md).
     #[test]
     fn sealed_corral_is_dead() {
         let board = Board::parse(SEALED).unwrap();
@@ -965,7 +963,7 @@ mod tests {
     /// A check that starts with exactly `MAX_BOXES` epochs left runs
     /// without zeroing the stamps and spends one; the next one, with fewer
     /// left, zeroes them and starts over at epoch 1. Both see the same
-    /// corral (`corral_port.py wrap`).
+    /// corral.
     #[test]
     fn epochs_restart_before_they_wrap() {
         let board = Board::parse(SEALED).unwrap();
@@ -980,10 +978,9 @@ mod tests {
     }
 
     /// Audit F-001: none of the board's 10 reachable states is flagged, so
-    /// the exact policy still finds 3 (`corral_port.py fixtures`, line
-    /// f2). The board guards the reported false proof but cannot catch its
-    /// cause: freezing over every box flags none of its states either;
-    /// `a_box_outside_the_corral_is_floor` does.
+    /// the exact policy still finds 3. The board guards the reported false
+    /// proof but cannot catch its cause: freezing over every box flags none
+    /// of its states either; `a_box_outside_the_corral_is_floor` does.
     #[test]
     fn a_corral_with_a_live_push_survives() {
         let board = Board::parse(CROSSING).unwrap();
@@ -1049,8 +1046,8 @@ mod tests {
     /// the admit chain keeps 27 of the states; the detector flags all but
     /// the 9 with B at (2,3), the 18 kept ones with B at (2,2) or (2,4)
     /// among them. B at (2,3) joins A's corral, its sideways pushes are
-    /// live, and it blocks A's stand. The counts are `corral_port.py
-    /// fixtures`, line f3.
+    /// live, and it blocks A's stand. The census's Python ports found the
+    /// same counts (docs/pruning.md).
     #[test]
     fn an_empty_goal_behind_a_settled_corral_is_dead() {
         let board = Board::parse(SETTLED).unwrap();

@@ -1,11 +1,10 @@
-//! The Stage Ladder, ported from the P4b stage probe (slurm/probes/p4b.rs,
-//! not tracked): the rooms and levels that define a rise, the accept checks
-//! a rise must pass, the ranked candidate moves of a frame root, the boxes
-//! a stage may move, and the ladder that drives them. Steps 7 and 8 of
-//! slurm/reports/stage-port-plan.md (not tracked) landed the parts and the
-//! ladder; step 9 wired the ladder into the engine, which hands it the
-//! arena of a search with no route at its stage point, under a policy that
-//! stages (see `Policy::stage` in engine.rs and [`FILL_MIB`]).
+//! The Stage Ladder, ported from the P4b stage probe that
+//! docs/stage-ladder.md describes: the rooms and levels that define a rise,
+//! the accept checks a rise must pass, the ranked candidate moves of a
+//! frame root, the boxes a stage may move, and the ladder that drives them.
+//! The engine hands the ladder the arena of a search with no route at its
+//! stage point, under a policy that stages (see `Policy::stage` in
+//! engine.rs and [`FILL_MIB`]).
 //!
 //! Accept is a heuristic filter, not a necessary condition. Sink, Matched
 //! and the pocket check only reject states with no solution, as the module
@@ -18,27 +17,16 @@
 //! Quality only, and nothing here may feed a proof, a bound or a prune of
 //! the exact search.
 //!
-//! The accept set and the trigger come from measurements of the probe on
-//! all 57 catalog boards (jobs 46757 and 46758, one thread). At the
-//! production budget (64 MiB, 60M states) plain Fast routes 40 boards, and
-//! the ladder, started on its full arena, routes 10 of the other 17, Grand
-//! Hall among them. At the benchmark gate's 20,000 states it routes 16 of
-//! the 23 boards plain Fast misses, with the probe's moves and pushes,
-//! which benchmarks/catalog-baseline.json records. Run from the start
-//! with all of the probe's tests (job 46757), the ladder missed 3 boards
-//! plain Fast routes, so it runs only after a plain search reaches its stage
-//! point: its arena holds [`FILL_MIB`]'s capacity, or it fills.
-//! Of the accept sets the probe compared, Lane, Sink, Line, Matched and
-//! Pockets ties the same set without Sink for the most routes at both
-//! limits, and spends less time than it where it finds none (at 64 MiB the
-//! least of any set): with Sink the ladder gives up on gen-v2-340048 in
-//! 430 ms at 64 MiB instead of spending its whole work budget, 1,492 ms.
-//! Three of the probe's tests were dropped. A relaxed push reach test and a
-//! pull coverage test added no route on any board, and of the tests the
-//! probe checked on plain Fast's routes (all but Lane, which depends on the
-//! frame root) they were the only ones to reject a state. A keeper mobility
-//! test that ignores sink lines rejects nothing Line does not, and dropping
-//! it changed no run.
+//! The accept set, the stage point and the budgets come from measurements
+//! of the probe on all 57 catalog boards, which docs/stage-ladder.md
+//! records with the jobs behind them. At the production budget (64 MiB,
+//! 60M states) plain Fast routes 40 boards, and the ladder routes 10 of the
+//! other 17, Grand Hall among them. At the benchmark gate's 20,000 states
+//! it routes 16 of the 23 boards plain Fast misses, which
+//! benchmarks/catalog-baseline.json records. Run from the start, the ladder
+//! missed 3 boards plain Fast routes, so it runs only after a plain search
+//! reaches its stage point: its arena holds [`FILL_MIB`]'s capacity, or it
+//! fills.
 //!
 //! The work comes in units of `O(cells)` each (a push search, a flood or a
 //! cell scan, a constant number of times), so a caller can stop between any
