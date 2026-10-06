@@ -52,7 +52,8 @@ pub(crate) struct Policy {
     /// Whether a search that ends on its own with a route polishes it before
     /// its status is final: single-box rescheduling (polish.rs) within the
     /// arena's share of the budget, in several runs with different box
-    /// orders, which keeps a route only when it replays shorter. Route-only, so never Exact's; Fast's first route stands as
+    /// orders, then box pairs, which keeps a route only when it replays
+    /// shorter. Route-only, so never Exact's; Fast's first route stands as
     /// found.
     polish: bool,
 }
@@ -776,9 +777,10 @@ impl Engine {
         //   ladder; a full arena may instead start it over or end it, and so
         //   may a solved push.
         // - polish: once a polishing search has ended with a route, a pop is
-        //   one polish unit instead: starting a box's job, one of its setup
-        //   layers, or one of its pops. When a full cycle over the boxes
-        //   gains nothing, the search ends with the status it stopped on.
+        //   one polish unit instead: starting a run or a job, one of a job's
+        //   setup layers, or one of its pops. When the last run has ended
+        //   and a full pass over the pairs gains nothing, the search ends
+        //   with the status it stopped on.
         if self.staging.is_some() {
             pops = self.advance_staged(pops);
             if self.status != Status::Running || self.staging.is_some() {

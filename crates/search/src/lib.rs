@@ -13,7 +13,7 @@
 //! - [`Mode::Quality`]: Fast, then a lighter weight that keeps shortening
 //!   that route until nothing queued can beat it or a limit hits, then a
 //!   route polish that reschedules one box at a time around the others'
-//!   pushes, in several box orders (docs/route-polish.md).
+//!   pushes, in several box orders, then two at a time (docs/route-polish.md).
 //! - [`Mode::Optimal`]: admissible A*, and the only mode that yields a
 //!   [`Proof`]: that the route is shortest, that the optimum lies between
 //!   two bounds, or that no route exists.
@@ -134,9 +134,10 @@ pub enum Mode {
     /// queue or a limit, then polishes it before its status is final: one
     /// box at a time, it searches for a shorter schedule of that box's
     /// pushes around the other boxes' pushes, keeping a route only when it
-    /// replays shorter, until a full pass over the boxes gains nothing
-    /// (docs/route-polish.md). The polish runs within the arena's share of
-    /// the budget, after the arena has freed its records.
+    /// replays shorter, in several box orders, then two boxes at a time,
+    /// until a full pass over the pairs gains nothing (docs/route-polish.md).
+    /// The polish runs within the arena's share of the budget, after the
+    /// arena has freed its records.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes.

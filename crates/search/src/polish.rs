@@ -39,12 +39,11 @@ pub(crate) fn replay(board: &Board, start: &State, route: &[u8]) -> Result<usize
 /// The most runs a polish makes. A board with few boxes has fewer box
 /// orders, and makes one run per order.
 const RUNS: usize = 8;
-/// The most box pairs the pair phase frees, nearest first (see [`pairs`]).
-const PAIRS: usize = 16;
 /// The most expansions one pair job makes. A pair's nodes multiply by the
 /// second box's cells, so a pair job could otherwise run on a large board
-/// for far longer than every single-box job together.
-const PAIR_POPS: usize = 1 << 18;
+/// for far longer than every single-box job together. On Grand Hall every
+/// pair job ends within it, found or exhausted (docs/route-polish.md).
+const PAIR_POPS: usize = 1 << 20;
 
 /// The strides that visit each of `boxes` slots once per cycle: those
 /// coprime to the box count.
@@ -66,9 +65,9 @@ fn order(boxes: usize, run: usize) -> (usize, usize) {
     (run / count % boxes, stride)
 }
 
-/// The box pairs the pair phase frees, at most [`PAIRS`]: those whose boxes
-/// end `route` nearest each other first, by Manhattan distance, ties in
-/// slot order. Boxes that end close are the likeliest to gain from trading
+/// Every box pair, in the order the pair phase frees them: those whose
+/// boxes end `route` nearest each other first, by Manhattan distance, ties
+/// in slot order. Boxes that end close are the likeliest to gain from trading
 /// order or goals. Empty when the allocator refuses.
 fn pairs(board: &Board, start: &State, route: &[u8]) -> Vec<[usize; 2]> {
     let boxes = board.labels().len();
@@ -90,7 +89,6 @@ fn pairs(board: &Board, start: &State, route: &[u8]) -> Vec<[usize; 2]> {
     }
     pairs.extend((0..boxes).flat_map(|a| (a + 1..boxes).map(move |b| [a, b])));
     pairs.sort_unstable_by_key(|&pair| (apart(pair), pair));
-    pairs.truncate(PAIRS);
     pairs
 }
 
