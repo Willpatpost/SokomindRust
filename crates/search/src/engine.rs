@@ -762,7 +762,9 @@ impl Engine {
             return Popped::Skip;
         };
         let node = &parent.node;
-        if self.board.solved(&node.state) {
+        // Every queued h is admissible, so 0 for a solved state, and testing
+        // it first skips the box scan on nearly every pop.
+        if parent.queued_h == 0 && self.board.solved(&node.state) {
             if self.best_moves().is_none_or(|best| node.g < best) {
                 self.incumbent = Some(parent.index);
             }
@@ -1506,7 +1508,7 @@ mod tests {
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
     /// entry and 8 to 16 bytes of table, so no budget holds a full
     /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
-    /// where the next state would double the table, and 11,177,601 at
+    /// where the next state would double the table, and 11,177,698 at
     /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
     /// bytes. Every budget is sized without allocating, through
     /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
@@ -1517,7 +1519,7 @@ mod tests {
             (4, 1, 33_554_431),
             (MAX_CELLS, 1, 33_554_431),
             (4, MAX_BOXES, 11_181_644),
-            (MAX_CELLS, MAX_BOXES, 11_177_601),
+            (MAX_CELLS, MAX_BOXES, 11_177_698),
         ];
         let top = *MEMORY_MIB_RANGE.end();
         for (cells, boxes, fits) in shapes {
@@ -1538,18 +1540,18 @@ mod tests {
         }
     }
 
-    /// The exact edge at 64 MiB for the largest board and box count: 691,841
-    /// states fit with 24 bytes to spare, and one more scales the request.
+    /// The exact edge at 64 MiB for the largest board and box count: 691,938
+    /// states fit with 68 bytes to spare, and one more scales the request.
     #[test]
     fn a_limit_one_past_the_budget_is_scaled_to_it() {
         let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES);
-        let fits = Arena::new(fixed, MAX_BOXES, 691_841, 64).unwrap();
-        assert_eq!(fits.node_limit(), 691_841);
+        let fits = Arena::new(fixed, MAX_BOXES, 691_938, 64).unwrap();
+        assert_eq!(fits.node_limit(), 691_938);
         assert_eq!(fits.limit_status(), Status::StateLimit);
-        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
+        assert_eq!(fits.reserved_bytes(), (64 << 20) - 68);
         drop(fits);
-        let scaled = Arena::new(fixed, MAX_BOXES, 691_842, 64).unwrap();
-        assert_eq!(scaled.node_limit(), 691_841);
+        let scaled = Arena::new(fixed, MAX_BOXES, 691_939, 64).unwrap();
+        assert_eq!(scaled.node_limit(), 691_938);
         assert_eq!(scaled.limit_status(), Status::MemoryLimit);
     }
 

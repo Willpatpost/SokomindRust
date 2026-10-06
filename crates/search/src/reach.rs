@@ -6,49 +6,58 @@
 mod blocks;
 
 pub(crate) use blocks::Blocks;
-use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
+use sokomind_core::{Board, Cell, MAX_CELLS, NONE, OPPOSITE, State};
 use std::mem::size_of;
 
-/// Keeper-reachability flood with epoch stamps: fills cost only the cells
-/// they actually visit, and never reset their buffers between calls.
+/// Keeper-reachability flood with epoch-tagged marks: fills cost only the
+/// cells they actually visit, and zero their marks only when the 16-bit
+/// epoch wraps, once every 65,535 fills.
 pub(crate) struct Reach {
-    distances: Vec<u16>,
-    stamps: Vec<u32>,
+    /// Per cell, the epoch of the last fill that marked it in the high 16
+    /// bits and its distance in that fill in the low 16, `NONE` for a
+    /// blocked cell, so one load says whether and how far the last fill
+    /// reached it. One array instead of separate stamp and distance arrays
+    /// saves 2 bytes per cell, and each mark written and distance read
+    /// touches one cache line instead of two.
+    marks: Vec<u32>,
+    /// The current fill's epoch, in the high 16 bits.
     epoch: u32,
     queue: Vec<Cell>,
 }
+/// One epoch step; the bits below it hold a distance.
+const EPOCH: u32 = 1 << 16;
+const DISTANCE: u32 = EPOCH - 1;
+// A distance is under MAX_CELLS, so adding 1 to a mark never carries into
+// the epoch, and NONE stays free as the blocked sentinel.
+const _: () = assert!(MAX_CELLS < NONE as usize);
 impl Reach {
-    /// Distances, stamps and the queue.
-    pub(crate) const BYTES_PER_CELL: usize =
-        size_of::<u16>() + size_of::<u32>() + size_of::<Cell>();
+    /// The marks and the queue.
+    pub(crate) const BYTES_PER_CELL: usize = size_of::<u32>() + size_of::<Cell>();
     /// An empty flood over a board of `cells` cells, allocated once.
     pub(crate) fn new(cells: usize) -> Self {
         Self {
-            distances: vec![NONE; cells],
-            stamps: vec![0; cells],
+            marks: vec![0; cells],
             epoch: 0,
             queue: Vec::with_capacity(cells),
         }
     }
-    /// Starts a flood: bumps the epoch so every stamp is stale, zeroing the
-    /// stamps when it wraps, then stamps the blocked cells and queues the
+    /// Starts a flood: bumps the epoch so every mark is stale, zeroing the
+    /// marks when it wraps, then marks the blocked cells and queues the
     /// keeper.
     fn begin(&mut self, player: Cell, blocked: &[Cell]) {
-        self.epoch = self.epoch.wrapping_add(1);
+        self.epoch = self.epoch.wrapping_add(EPOCH);
         if self.epoch == 0 {
-            self.stamps.fill(0);
-            self.epoch = 1;
+            self.marks.fill(0);
+            self.epoch = EPOCH;
         }
         self.queue.clear();
-        // Blocked cells are stamped without a distance, which blocks the
-        // flood and, in a fill of a state, marks its box cells occupied for
-        // push generation.
+        // Blocked cells are marked with no distance, which blocks the flood
+        // and, in a fill of a state, marks its box cells occupied for push
+        // generation.
         for &cell in blocked {
-            self.stamps[cell as usize] = self.epoch;
-            self.distances[cell as usize] = NONE;
+            self.marks[cell as usize] = self.epoch | u32::from(NONE);
         }
-        self.stamps[player as usize] = self.epoch;
-        self.distances[player as usize] = 0;
+        self.marks[player as usize] = self.epoch;
         self.queue.push(player);
     }
     /// Floods every cell the player reaches in `state`, its boxes blocked.
@@ -57,7 +66,7 @@ impl Reach {
     }
     /// Floods every cell `player` reaches with the `blocked` cells as walls
     /// for this flood alone, such as a state's boxes or only some of them.
-    /// The player is stamped after the blocked cells, so it must not be one;
+    /// The player is marked after the blocked cells, so it must not be one;
     /// afterwards [`Self::blocked`] reads exactly those cells and
     /// [`Self::distance`] gives `NONE` for each.
     pub(crate) fn fill_from(&mut self, board: &Board, player: Cell, blocked: &[Cell]) {
@@ -65,13 +74,14 @@ impl Reach {
         self.begin(player, blocked);
         let mut head = 0;
         while head < self.queue.len() {
-            let cell = self.queue[head];
+            let cell = self.queue[head] as usize;
             head += 1;
-            for d in 0..4 {
-                let next = board.neighbors()[cell as usize][d];
-                if next != NONE && self.stamps[next as usize] != self.epoch {
-                    self.stamps[next as usize] = self.epoch;
-                    self.distances[next as usize] = self.distances[cell as usize] + 1;
+            // Each neighbor the fill reaches from `cell` is one step further
+            // in the same epoch.
+            let mark = self.marks[cell] + 1;
+            for next in board.neighbors()[cell] {
+                if next != NONE && self.marks[next as usize] & !DISTANCE != self.epoch {
+                    self.marks[next as usize] = mark;
                     self.queue.push(next);
                 }
             }
@@ -80,8 +90,9 @@ impl Reach {
     /// Walking distance from the player to `cell` in the last fill, `NONE`
     /// for a blocked cell or one the player cannot reach.
     pub(crate) fn distance(&self, cell: Cell) -> u16 {
-        if self.stamps[cell as usize] == self.epoch {
-            self.distances[cell as usize]
+        let mark = self.marks[cell as usize];
+        if mark & !DISTANCE == self.epoch {
+            (mark & DISTANCE) as u16
         } else {
             NONE
         }
@@ -89,10 +100,10 @@ impl Reach {
     /// Whether `cell` was blocked in the last fill, which in a fill of a
     /// state means it held a box.
     pub(crate) fn blocked(&self, cell: Cell) -> bool {
-        self.stamps[cell as usize] == self.epoch && self.distances[cell as usize] == NONE
+        self.marks[cell as usize] == self.epoch | u32::from(NONE)
     }
     /// How many cells the last fill reached, the player's included. The
-    /// queue holds each reached cell once, and blocked cells are stamped but
+    /// queue holds each reached cell once, and blocked cells are marked but
     /// never queued.
     pub(crate) fn reached(&self) -> usize {
         self.queue.len()
@@ -129,7 +140,7 @@ impl Reach {
 
 #[cfg(test)]
 mod tests {
-    use super::Reach;
+    use super::{DISTANCE, EPOCH, Reach};
     use crate::testkit::{Lcg, catalog, random_room};
     use sokomind_core::{Board, Cell, NONE, Step, WALL};
     use std::collections::VecDeque;
@@ -169,15 +180,16 @@ mod tests {
         assert_eq!(reach.reached(), walks);
     }
 
-    /// The fill after epoch `u32::MAX` wraps: it zeroes every stamp and
-    /// restarts at epoch 1, so neither the stamps an old flood left at 1 nor
-    /// the walls still at 0 from `new` pass for reached or box cells.
+    /// The fill after the last epoch wraps: it zeroes every mark and
+    /// restarts at the first epoch, so neither the marks an old flood left
+    /// there nor the walls still at 0 from `new` pass for reached or box
+    /// cells.
     #[test]
-    fn epoch_wrap_clears_stale_stamps() {
+    fn epoch_wrap_clears_stale_marks() {
         let board = Board::parse(ROOM).unwrap();
         let start = board.initial();
         // Walk around to box B and push it right, so the old flood measures
-        // from another cell and stamps a box on a cell that is floor now.
+        // from another cell and marks a box on a cell that is floor now.
         let mut other = start;
         for d in [1, 1, 1, 3, 0, 3] {
             assert!(board.step(&mut other, d).is_some(), "direction {d}");
@@ -186,11 +198,11 @@ mod tests {
         let cells = board.tiles().len();
         let mut reach = Reach::new(cells);
         reach.fill(&board, &other);
-        assert_eq!(reach.epoch, 1);
-        // Skip the 2^32 - 2 fills between, leaving the old stamps in place.
-        reach.epoch = u32::MAX;
+        assert_eq!(reach.epoch, EPOCH);
+        // Skip the 2^16 - 2 fills between, leaving the old marks in place.
+        reach.epoch = !DISTANCE;
         reach.fill(&board, &start);
-        assert_eq!(reach.epoch, 1, "the fill wrapped the epoch");
+        assert_eq!(reach.epoch, EPOCH, "the fill wrapped the epoch");
         let mut fresh = Reach::new(cells);
         fresh.fill(&board, &start);
         for cell in 0..cells {
@@ -208,7 +220,7 @@ mod tests {
 
     /// `fill_from` against a plain breadth-first search on every catalog
     /// board and 200 random rooms, with one flood reused across each board's
-    /// trials so stale stamps would show: from the start with nothing
+    /// trials so stale marks would show: from the start with nothing
     /// blocked, from the start with its boxes blocked (through `fill`), then
     /// from random floor cells with random other floor cells blocked, from
     /// all of them down to about one in six. Every cell's distance and
