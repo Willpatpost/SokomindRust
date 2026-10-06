@@ -464,10 +464,13 @@ original), and the validate script, whose step list must match `ci.yml`'s,
 and need no WASM build. `bench:check` runs `crates/search/examples/catalog.rs` on
 every catalog puzzle in every mode at the baseline's 20,000 states and 64 MiB
 and compares the results with `benchmarks/catalog-baseline.json`. It fails on a
-false proof or bound, a regression (rules in `scripts/bench-gate.mjs`), a route,
-proof, status or bound improvement the baseline does not record yet (so that a
-later loss back to the old value cannot pass), or a changed catalog, never on
-timings; `npm run bench:update` rewrites the baseline after review.
+false proof or bound, a hard regression (a longer or lost route, a lost proof,
+or an Optimal status or bound that drops; rules in `scripts/bench-gate.mjs`),
+or a changed catalog, never on timings. Soft findings (counts past tolerance,
+more reserved bytes, a Fast or Quality status drop) and improvements the
+baseline does not record yet are reported without failing; `npm run
+bench:update` rewrites the baseline after review, so later runs are held to
+the gains.
 `test:parity` builds the WASM package and runs the native corpus again, at the
 catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each

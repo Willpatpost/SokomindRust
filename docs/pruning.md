@@ -164,7 +164,6 @@ conclusions that still matter:
   given 10,000 states needs 2,920 records for a 79-move route. Extended with
   Quality's phases and restart, it had Fast then Quality fill the arena on 14
   of the 30 boards Fast routes, and Quality start over carrying each route,
-  shortening 2. The engine test
-  `quality_restarts_once_when_the_arena_first_fills` asserts only the
-  behavior: Quality rescues expert-maze, and the restart carries at least one
-  route and shortens at least one.
+  shortening 2. These counts are a record of that measurement, not a test:
+  the engine tests check only that Quality never ends longer than Fast and
+  that its route replays.

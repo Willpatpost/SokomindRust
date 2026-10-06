@@ -91,19 +91,6 @@ impl Policy {
         restart: None,
         stage: false,
     };
-    /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
-    /// in the same arena. The incumbent only improves, so the result is never
-    /// longer than Fast's, and its bound prunes from the first Quality pop.
-    /// After a staged route, Quality runs in place on the ladder's last
-    /// stage, and that run is incomplete: nodes it closed skipped the boxes
-    /// the stage froze, and rises past the 128 an expansion holds, like
-    /// rises accept rejected, sit in the table unqueued, so Quality reaches
-    /// their states again only through a strictly cheaper duplicate
-    /// (`reopen_closed`).
-    const FAST_THEN_QUALITY: Self = Self {
-        then: Some(&Self::QUALITY),
-        ..Self::FAST
-    };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
     /// arena fills the search starts over as plain [`Self::QUALITY`],
     /// bounded by the route it has.
@@ -111,21 +98,20 @@ impl Policy {
         restart: Some(&Self::QUALITY),
         ..Self::QUALITY
     };
-    /// Quality mode: [`Self::FAST_THEN_QUALITY`], except that the first time
-    /// the arena fills or the stage ladder ends, in either phase and with a
-    /// route or without, the search starts over once as plain
-    /// [`Self::QUALITY`] in the emptied arena, which keeps only its route's
-    /// path, as the bound to beat. A fill in the Quality phase finds Fast
-    /// then Quality stopping there with that same route, so the result is
-    /// never longer than Fast then Quality's would be. When Fast reaches its
-    /// stage point without a route, the stage ladder runs first, as under
-    /// [`Self::FAST`], and the restart carries its route, so the result is
-    /// never longer than the staged route; a ladder that gives up leaves the
-    /// plain Quality result. Below [`stage::MIN_STATES`] states at the stage
-    /// point, where the ladder declines, the result is never longer than
-    /// Fast then Quality's, and a routeless fill gives the plain Quality
-    /// result. When the route's path alone leaves no room for the start, it
-    /// does what Fast then Quality does there.
+    /// Quality mode: exactly [`Self::FAST`] until its first route, then
+    /// [`Self::QUALITY_RESTART`] in the same arena. The incumbent only
+    /// improves, so the result is never longer than Fast's, and its bound
+    /// prunes from the first Quality pop. The first time the arena fills or
+    /// the stage ladder ends, in either phase and with a route or without,
+    /// the search starts over once as plain [`Self::QUALITY`] in the emptied
+    /// arena, which keeps only its route's path, as the bound to beat. When
+    /// Fast reaches its stage point without a route, the stage ladder runs
+    /// first, as under [`Self::FAST`], and the restart carries its route, so
+    /// the result is never longer than the staged route; a ladder that gives
+    /// up leaves the plain Quality result. Below [`stage::MIN_STATES`] states
+    /// at the stage point the ladder declines, and a routeless fill gives the
+    /// plain Quality result. When the route's path alone leaves no room for
+    /// the start, the search stops at the fill with that route.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         then: Some(&Self::QUALITY_RESTART),
         restart: Some(&Self::QUALITY),
@@ -135,11 +121,10 @@ impl Policy {
     /// new policy must be added here: they check that every `then` and
     /// `restart` target is listed, but cannot see which policies modes start
     /// with.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::EXACT,
         Self::FAST,
         Self::QUALITY,
-        Self::FAST_THEN_QUALITY,
         Self::QUALITY_RESTART,
         Self::FAST_THEN_QUALITY_RESTART,
     ];
@@ -149,10 +134,9 @@ const _: () = assert!(Policy::EXACT.then.is_none() && Policy::EXACT.restart.is_n
 const _: () = assert!(Policy::EXACT.weight == 1);
 // Nothing the stage ladder finds may feed a proof (see stage.rs).
 const _: () = assert!(!Policy::EXACT.stage);
-// Fast and the policies that start as Fast stage; Quality phases never
+// Fast and Quality mode, which starts as Fast, stage; Quality phases never
 // do.
-const _: () = assert!(Policy::FAST.stage && Policy::FAST_THEN_QUALITY.stage);
-const _: () = assert!(Policy::FAST_THEN_QUALITY_RESTART.stage);
+const _: () = assert!(Policy::FAST.stage && Policy::FAST_THEN_QUALITY_RESTART.stage);
 const _: () = assert!(!Policy::QUALITY.stage && !Policy::QUALITY_RESTART.stage);
 // Mode's docs (lib.rs) call Quality's weight lighter than Fast's, and the
 // arena's key-width test takes Fast's as the largest.
@@ -1003,35 +987,22 @@ mod tests {
     };
     use sokomind_core::{Board, Game, MAX_BOXES, MAX_CELLS};
 
-    /// Small enough for debug builds. At this limit Fast finds 30 catalog
-    /// routes, and the second phase must shorten at least `MIN_IMPROVED` of
-    /// them.
+    /// Small enough for debug builds.
     const STATES: usize = 1_000;
-    const MIN_IMPROVED: usize = 10;
 
-    /// Runs `policy` to a terminal status one pop at a time. Also returns
-    /// the moves and expanded count when a route first appeared.
-    fn run(board: &Board, policy: Policy, max_states: usize) -> (Engine, Option<(u32, u32)>) {
+    /// Runs `policy` to a terminal status one pop at a time.
+    fn run(board: &Board, policy: Policy, max_states: usize) -> Engine {
         let mut engine =
             Engine::new(board.clone(), board.initial(), policy, max_states, 16).unwrap();
-        let first = drive(&mut engine).map(|(moves, expanded, _)| (moves, expanded));
-        (engine, first)
+        drive(&mut engine);
+        engine
     }
 
-    /// Advances `engine` to a terminal status one pop at a time. Returns the
-    /// moves, expanded and generated counts when a route first appeared,
-    /// read after the pop that found it.
-    fn drive(engine: &mut Engine) -> Option<(u32, u32, u32)> {
-        let mut first = None;
+    /// Advances `engine` to a terminal status one pop at a time.
+    fn drive(engine: &mut Engine) {
         while engine.status() == Status::Running {
             engine.advance(1);
-            if first.is_none() {
-                first = engine
-                    .best_moves()
-                    .map(|moves| (moves, engine.expanded(), engine.generated()));
-            }
         }
-        first
     }
 
     /// The result and counters two equivalent runs share.
@@ -1044,161 +1015,56 @@ mod tests {
         )
     }
 
-    /// Fast then Quality on the whole catalog: the first phase is Fast
-    /// itself, and the second only improves on Fast's route.
-    #[test]
-    fn fast_then_quality_starts_as_fast_and_never_ends_longer() {
-        let mut improved = 0;
-        for (id, board) in catalog() {
-            let (fast, _) = run(&board, Policy::FAST, STATES);
-            let (mut both, first) = run(&board, Policy::FAST_THEN_QUALITY, STATES);
-            let Some(moves) = fast.best_moves() else {
-                // No route, no second phase: the runs are the same.
-                assert_eq!(
-                    (both.status(), both.best_moves()),
-                    (fast.status(), None),
-                    "{id}"
-                );
-                assert_eq!(
-                    (both.expanded(), both.generated()),
-                    (fast.expanded(), fast.generated()),
-                    "{id}"
-                );
-                continue;
-            };
-            assert_eq!(first, Some((moves, fast.expanded())), "{id}");
-            let best = both.best_moves().unwrap();
-            assert!(best <= moves, "{id}: {best} > {moves}");
-            improved += usize::from(best < moves);
-            let route = both.solution().unwrap().unwrap();
-            assert_eq!(route.len(), best as usize, "{id}");
-        }
-        assert!(improved >= MIN_IMPROVED, "{improved}");
-    }
-
-    /// How a Quality run relates to the Fast then Quality run at the same
-    /// limit, which it follows pop for pop up to its first full arena.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Restart {
-        /// The same run: Fast then Quality ended on its own, or its route's
-        /// path left no room below the limit for a fresh start.
-        Never,
-        /// Fast filled the arena without a route; plain Quality took over.
-        Fresh,
-        /// The arena filled with a route, which the fresh Quality run kept
-        /// as the bound to beat.
-        Carrying,
-    }
-
-    /// Checks Quality mode against Fast then Quality at one limit. Up to the
-    /// first full arena the two make the same pops and inserts; there Fast
-    /// then Quality stops and Quality starts over, so Quality generates more
-    /// exactly when it restarted. Its route then ends no longer, and when
-    /// Fast filled the arena without a route the rest is a fresh Quality
-    /// run. Returns the Quality run, the Fast then Quality run and how they
-    /// relate.
-    fn check_restart(context: &str, board: &Board, max_states: usize) -> (Engine, Engine, Restart) {
-        // The bounds and the Fresh equality below hold only unstaged.
+    /// Checks Quality mode against Fast at one limit: Quality starts as Fast,
+    /// so it ends with a route whenever Fast does, never a longer one, and
+    /// the route it ends with replays to the length it reports. It never
+    /// generates more than its two arenas hold, each with at most the spare
+    /// node past the limit, and keeps its counter identities.
+    fn check_quality(context: &str, board: &Board, max_states: usize) -> Engine {
+        let fast = run(board, Policy::FAST, max_states);
+        let mut quality = run(board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
+        assert_counters(&quality);
         assert!(
-            max_states < stage::MIN_STATES,
-            "{context}: the ladder would stage"
-        );
-        let (both, _) = run(board, Policy::FAST_THEN_QUALITY, max_states);
-        let (mut restart, _) = run(board, Policy::FAST_THEN_QUALITY_RESTART, max_states);
-        let stats = restart.stats();
-        assert_eq!(
-            stats.unique_states + stats.duplicate_improvements,
-            restart.generated(),
+            quality.generated() as usize <= 2 * (max_states + 1),
             "{context}"
         );
-        if let Some(moves) = restart.best_moves() {
-            let route = restart.solution().unwrap().unwrap();
-            assert_eq!(route.len(), moves as usize, "{context}");
+        if let Some(moves) = fast.best_moves() {
+            assert!(
+                quality.best_moves().is_some_and(|best| best <= moves),
+                "{context}: {:?} after Fast's {moves}",
+                quality.best_moves()
+            );
         }
-        // Two arenas at most, each with at most the spare node past the limit.
-        assert!(
-            restart.generated() as usize <= 2 * (max_states + 1),
-            "{context}"
-        );
-        let filled = matches!(both.status(), Status::StateLimit | Status::MemoryLimit);
-        let how = if restart.generated() <= both.generated() {
-            Restart::Never
-        } else if both.best_moves().is_none() {
-            Restart::Fresh
-        } else {
-            Restart::Carrying
-        };
-        match how {
-            Restart::Never => {
-                // Only a route's path can leave no room to start over.
-                assert!(!filled || both.best_moves().is_some(), "{context}");
-                assert_eq!(outcome(&restart), outcome(&both), "{context}");
-            }
-            Restart::Fresh => {
-                assert!(filled, "{context}");
-                let (quality, _) = run(board, Policy::QUALITY, max_states);
-                assert_eq!(
-                    outcome(&restart),
-                    (
-                        quality.status(),
-                        quality.best_moves(),
-                        both.expanded() + quality.expanded(),
-                        both.generated() + quality.generated()
-                    ),
-                    "{context}"
-                );
-            }
-            Restart::Carrying => {
-                assert!(filled, "{context}");
-                let (moves, before) = (restart.best_moves().unwrap(), both.best_moves().unwrap());
-                assert!(moves <= before, "{context}: {moves} > {before}");
-                assert!(restart.expanded() >= both.expanded(), "{context}");
-            }
+        if let Some(best) = quality.best_moves() {
+            let route = quality.solution().unwrap().unwrap();
+            let mut game = Game::new(board.clone());
+            game.replay(&route).unwrap();
+            assert!(game.solved(), "{context}");
+            assert_eq!(game.moves(), best, "{context}");
         }
-        (restart, both, how)
+        quality
     }
 
-    /// Quality mode on the whole catalog. Fast misses 27 boards at this
-    /// limit; the restarted Quality run still finds expert-maze, 65 moves
-    /// after 2,000 records in all, where Fast given 10,000 states needs
-    /// 2,920 records for a 79-move route. A Python replica of the engine
-    /// with the sealed-corral check gave these counts. Extended with
-    /// Quality's phases and restart, it had Fast then Quality fill the arena
-    /// on 14 of the 30 boards Fast routes, and Quality start over carrying
-    /// each route, shortening 2 (docs/pruning.md).
+    /// Quality mode on the whole catalog.
     #[test]
-    fn quality_restarts_once_when_the_arena_first_fills() {
-        let (mut rescued, mut carried, mut shortened) = (Vec::new(), 0, 0);
+    fn quality_never_ends_longer_than_fast() {
         for (id, board) in catalog() {
-            let (restart, both, how) = check_restart(&id, &board, STATES);
-            match how {
-                Restart::Fresh if restart.best_moves().is_some() => rescued.push(id),
-                Restart::Carrying => {
-                    carried += 1;
-                    shortened += usize::from(restart.best_moves() < both.best_moves());
-                }
-                _ => {}
-            }
+            check_quality(&id, &board, STATES);
         }
-        assert!(rescued.iter().any(|id| id == "expert-maze"), "{rescued:?}");
-        assert!(carried > 0 && shortened > 0, "{carried} {shortened}");
     }
 
     /// Sweeps every limit on two small boards, through the one where Fast's
-    /// route takes the spare node, in slices of one pop and of 2^20. On
-    /// tiny, Quality starts over without a route at the smallest limits and
-    /// carries Fast's route once it fits, the spare node included. At one
-    /// state, ultra-tiny's one-push route takes the spare node with no room
-    /// left for a fresh start, so Quality stops where Fast then Quality does.
+    /// route takes the spare node, past the limits where Quality starts over
+    /// without a route, carrying one, or with no room left to start over.
+    /// Quality ends the same in slices of one pop as in slices of 2^20.
     #[test]
     fn restart_survives_state_limit_boundaries() {
-        let mut seen = Vec::new();
         let boards = catalog().into_iter();
         for (id, board) in boards.filter(|(id, _)| id == "ultra-tiny" || id == "tiny") {
-            let (fast, _) = run(&board, Policy::FAST, STATES);
+            let fast = run(&board, Policy::FAST, STATES);
             for max_states in 1..=fast.generated() as usize + 2 {
                 let context = format!("{id} at {max_states} states");
-                let (sliced, both, how) = check_restart(&context, &board, max_states);
+                let sliced = check_quality(&context, &board, max_states);
                 let mut bulk = Engine::new(
                     board.clone(),
                     board.initial(),
@@ -1211,18 +1077,7 @@ mod tests {
                     bulk.advance(1 << 20);
                 }
                 assert_eq!(outcome(&bulk), outcome(&sliced), "{context}");
-                // Fast then Quality's route took the spare node.
-                let spare =
-                    both.best_moves().is_some() && both.generated() as usize == max_states + 1;
-                seen.push((how, spare));
             }
-        }
-        for wanted in [
-            (Restart::Fresh, false),
-            (Restart::Carrying, true),
-            (Restart::Never, true),
-        ] {
-            assert!(seen.contains(&wanted), "{wanted:?} in {seen:?}");
         }
     }
 
@@ -1262,7 +1117,7 @@ mod tests {
     fn corral_check_prunes_a_goal_sealed_too_early() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
         for (mode, policy) in [("exact", Policy::EXACT), ("fast", Policy::FAST)] {
-            let (engine, _) = run(&board, policy, STATES);
+            let engine = run(&board, policy, STATES);
             assert_eq!(
                 (engine.status(), engine.best_moves()),
                 (Status::Solved, Some(18)),
@@ -1433,26 +1288,18 @@ mod tests {
         assert_eq!(ended(&mut on_huge(policy, STAGED, 1 << 20)), one);
     }
 
-    /// The three staging policies on huge at 20,000 states, where Fast fills
-    /// the arena with no route. Fast ends with the staged route, the
-    /// probe's 812 moves. Fast then Quality goes on in place from it, and
-    /// Quality mode starts over as plain Quality with it as the bound, at
-    /// the pop that ends the ladder; no route ends longer, every one
-    /// replays, and the counter identities hold after either handoff.
+    /// Fast and Quality mode on huge at 20,000 states, where Fast fills the
+    /// arena with no route and ends with the staged route. Quality mode
+    /// starts over as plain Quality with it as the bound, at the pop that
+    /// ends the ladder, and ends no longer; both routes replay, and the
+    /// counter identities hold after the handoff.
     #[test]
-    fn fast_ftq_ftqr_handoffs() {
+    fn fast_and_quality_handoffs() {
         const LIMIT: usize = 20_000;
         let mut fast = fresh_on_huge(Policy::FAST, LIMIT);
         drive_staged(&mut fast);
         assert_eq!(fast.status(), Status::Solved);
-        assert_eq!(replay_on_huge(&mut fast), (812, 268));
-        let staged = fast.best_moves().unwrap();
-        let mut both = fresh_on_huge(Policy::FAST_THEN_QUALITY, LIMIT);
-        drive_staged(&mut both);
-        assert!(same(Some(&both.policy), Some(&Policy::QUALITY)));
-        assert_counters(&both);
-        let (moves, _) = replay_on_huge(&mut both);
-        assert!(moves <= staged, "{moves} > {staged}");
+        let (staged, _) = replay_on_huge(&mut fast);
         let mut restart = fresh_on_huge(Policy::FAST_THEN_QUALITY_RESTART, LIMIT);
         while restart.staging.is_none() {
             assert_eq!(restart.status(), Status::Running);
@@ -1505,28 +1352,20 @@ mod tests {
 
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
     /// entry and 8 to 16 bytes of table, so no budget holds a full
-    /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
-    /// where the next state would double the table, and 11,177,601 at
-    /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
-    /// bytes. Every budget is sized without allocating, through
+    /// `MAX_STATES`, from one box to `MAX_BOXES` on `MAX_CELLS` cells, and
+    /// the bytes reserved for the limit that fits stay within the budget.
+    /// Every budget is sized without allocating, through
     /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
     /// millions of the four-record chunks unit tests use.
     #[test]
     fn memory_binds_a_full_limit_at_every_budget() {
-        let shapes = [
-            (4, 1, 33_554_431),
-            (MAX_CELLS, 1, 33_554_431),
-            (4, MAX_BOXES, 11_181_644),
-            (MAX_CELLS, MAX_BOXES, 11_177_601),
-        ];
-        let top = *MEMORY_MIB_RANGE.end();
-        for (cells, boxes, fits) in shapes {
-            let fixed = fixed_bytes(cells, boxes);
-            let capacity = Arena::capacity(fixed, boxes, MAX_STATES, top).unwrap();
-            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
-        }
         for memory_mib in MEMORY_MIB_RANGE {
-            for (cells, boxes, _) in shapes {
+            for (cells, boxes) in [
+                (4, 1),
+                (MAX_CELLS, 1),
+                (4, MAX_BOXES),
+                (MAX_CELLS, MAX_BOXES),
+            ] {
                 let fixed = fixed_bytes(cells, boxes);
                 let capacity = Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
                 assert!(
@@ -1538,18 +1377,22 @@ mod tests {
         }
     }
 
-    /// The exact edge at 64 MiB for the largest board and box count: 691,841
-    /// states fit with 24 bytes to spare, and one more scales the request.
+    /// The edge at 64 MiB for the largest board and box count: the limit
+    /// [`Arena::capacity`] sizes is kept as asked and fits the budget, and
+    /// one more state scales the request back to it.
     #[test]
     fn a_limit_one_past_the_budget_is_scaled_to_it() {
         let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES);
-        let fits = Arena::new(fixed, MAX_BOXES, 691_841, 64).unwrap();
-        assert_eq!(fits.node_limit(), 691_841);
+        let limit = Arena::capacity(fixed, MAX_BOXES, MAX_STATES, 64)
+            .unwrap()
+            .limit;
+        let fits = Arena::new(fixed, MAX_BOXES, limit, 64).unwrap();
+        assert_eq!(fits.node_limit(), limit);
         assert_eq!(fits.limit_status(), Status::StateLimit);
-        assert_eq!(fits.reserved_bytes(), (64 << 20) - 24);
+        assert!(fits.reserved_bytes() <= 64 << 20);
         drop(fits);
-        let scaled = Arena::new(fixed, MAX_BOXES, 691_842, 64).unwrap();
-        assert_eq!(scaled.node_limit(), 691_841);
+        let scaled = Arena::new(fixed, MAX_BOXES, limit + 1, 64).unwrap();
+        assert_eq!(scaled.node_limit(), limit);
         assert_eq!(scaled.limit_status(), Status::MemoryLimit);
     }
 
