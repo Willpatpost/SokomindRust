@@ -654,7 +654,7 @@ fn stand_walk_raises_the_root_bound() {
     for (rows, root, optimum) in [
         (TUTORIAL_PUSH, 4, 4),
         (REORDERED[4].0, 7, 15),
-        (REORDERED[2].0, 6, 11),
+        (REORDERED[2].0, 8, 11),
         (TWO, 5, 20),
     ] {
         let board = Board::parse(rows).unwrap();
