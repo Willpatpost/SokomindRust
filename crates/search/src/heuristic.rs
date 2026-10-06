@@ -209,7 +209,8 @@ fn push_distances(
     // 1 + `most`, so the spots waiting at once span fewer distances than
     // there are buckets. Spots in one bucket share a distance, so their
     // order does not matter.
-    let mut buckets: Vec<Vec<Spot>> = vec![Vec::new(); usize::from(most) + 2];
+    let span = usize::from(most) + 2;
+    let mut buckets: Vec<Vec<Spot>> = vec![Vec::new(); span];
     for (column, &(goal, _)) in columns.iter().enumerate() {
         let at = |spot: Spot| spot as usize * goals + column;
         for side in 0..stride {
@@ -220,7 +221,7 @@ fn push_distances(
         let mut waiting = stride;
         let mut distance = 0;
         while waiting > 0 {
-            let bucket = distance % buckets.len();
+            let bucket = distance % span;
             while let Some(spot) = buckets[bucket].pop() {
                 waiting -= 1;
                 // Queued again since at a lower distance.
@@ -238,7 +239,7 @@ fn push_distances(
                     let next = (distance + cost(stand)).min(usize::from(MAX_DISTANCE)) as u16;
                     if next < distances[at(before)] {
                         distances[at(before)] = next;
-                        buckets[usize::from(next) % buckets.len()].push(before);
+                        buckets[usize::from(next) % span].push(before);
                         waiting += 1;
                     }
                 }
