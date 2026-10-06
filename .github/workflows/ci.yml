@@ -63,20 +63,6 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        # compose.yaml's db image (checked by scripts/mirrors.test.mjs).
-        image: postgres:18-alpine
-        env:
-          POSTGRES_PASSWORD: test-only
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      SOKOMIND_TEST_DATABASE_URL: postgres://postgres:test-only@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -119,7 +105,6 @@ jobs:
       # Reuses the native records bench:check just wrote instead of rerunning the corpus.
       - run: node scripts/parity.mjs --native target/bench/catalog.json
       - run: npm run bench:observe
-      - run: npm run test:db
       # Browsers are cached per runner image and Playwright version: Playwright
       # downloads a build per OS release, and the runner's ImageOS (ubuntu24, for
       # example) names it. The system packages they need are not cached, so a
@@ -234,10 +219,7 @@ jobs:
             status=1
           fi
           exit $status
-      # compose.yaml refuses to load without POSTGRES_PASSWORD; any value will do.
       - name: Check compose.yaml
-        env:
-          POSTGRES_PASSWORD: ci
         run: docker compose config --quiet
       # The nginx image and conf path come from the Dockerfile's web stage, so this
       # tests what that image runs. --add-host stands in for compose's network,
@@ -280,15 +262,11 @@ jobs:
       # "Full stack with Docker" starts it, with .env copied from .env.example
       # (so deploy-changes lists that file), except that compose.override.yaml,
       # which compose merges over compose.yaml by default, runs the images built
-      # above instead of building them again. --wait returns once db is healthy
-      # and api and web are running. Every check goes through nginx's published
-      # port, so between them they cover:
-      # - /api/health reporting persistence: nginx's upstream finds the api
-      #   container, and the API reached PostgreSQL with compose's credentials
-      #   and ran its migrations.
+      # above instead of building them again. --wait returns once api and web
+      # are running. Every check goes through nginx's published port, so between
+      # them they cover:
+      # - /api/health answering ok: nginx's upstream finds the api container.
       # - One small /api/solve: the native search, within the server's limits.
-      # - A progress save, then a read of it: a write and a read through the
-      #   migrated schema.
       # - The app shell at /, and the WASM served as application/wasm, the type
       #   the browser's streaming compile needs.
       - name: Start the compose stack
@@ -324,30 +302,23 @@ jobs:
               exit 1
             fi
           }
-          # The API answers only once it has migrated the database, so poll
-          # (nginx's health_limit allows 2 requests a second).
+          # A running api container may not be listening yet, so poll
+          # (nginx's health_limit allows 2 requests a second). jq -e also fails
+          # an empty body, so a failed curl keeps the loop going.
           deadline=$((SECONDS + 90))
-          until [ "$(curl -fs --max-time 5 "$base/api/health" | jq .persistence)" = true ]; do
+          until curl -fs --max-time 5 "$base/api/health" | jq -e '.status == "ok"' > /dev/null; do
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::/api/health did not report persistence through nginx within 90 s"
+              echo "::error::/api/health did not answer ok through nginx within 90 s"
               exit 1
             fi
             sleep 1
           done
-          expect 200 '.status == "ok" and .persistence == true' "$base/api/health"
           # The catalog's ultra-tiny board, solved by one push down: solve_body in
           # crates/server/src/tests/mod.rs, which the router tests send.
           expect 200 '.status == "solved" and .route == "D" and .proof.kind == "optimal"' \
             -H 'Content-Type: application/json' \
             -d '{"rows":["OOOOO","O R O","O A O","O a O","OOOOO"],"mode":"optimal","time_ms":1000,"max_states":1000,"memory_mib":4}' \
             "$base/api/solve"
-          # 32 hex digits in the x-profile-id header, as crates/server/src/progress.rs
-          # requires (checked by scripts/mirrors.test.mjs).
-          profile=0123456789abcdef0123456789abcdef
-          expect 200 '.saved == true and .improved == true' \
-            -H 'Content-Type: application/json' -H "x-profile-id: $profile" \
-            -d '{"route":"D"}' "$base/api/progress/ultra-tiny"
-          expect 200 '.route == "D" and .moves == 1' -H "x-profile-id: $profile" "$base/api/progress/ultra-tiny"
           curl -fsS --max-time 15 -o "$RUNNER_TEMP/index.html" "$base/"
           # The start of web/index.html's title (checked by scripts/mirrors.test.mjs).
           if ! grep -q '<title>Sokomind' "$RUNNER_TEMP/index.html"; then
@@ -370,7 +341,7 @@ jobs:
           docker compose ps --all
           docker compose logs --no-color --timestamps
       # Also after a failed check or a cancellation, once the stack was started.
-      - name: Stop the compose stack and delete its volume
+      - name: Stop the compose stack
         if: always() && steps.compose-up.outcome != 'skipped'
         timeout-minutes: 2
-        run: docker compose down --volumes
+        run: docker compose down

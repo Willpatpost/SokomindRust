@@ -7,9 +7,9 @@ import { bindInput } from './input.ts';
 import * as storage from './storage.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
-import { decodeSnapshot } from './transport.ts';
+import { decodeHealth, decodeSnapshot } from './transport.ts';
 import { Playback } from './playback.ts';
-import { CUSTOM_PUZZLE_ID, ProgressClient } from './progress.ts';
+import { Progress } from './progress.ts';
 import { statusText } from './verdict.ts';
 
 interface Puzzle {
@@ -47,6 +47,9 @@ const message = (value: string) => setText('message', value);
 const setStatus = (value: string) => setText('search-status', value);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
+/** The id of a puzzle loaded from pasted rows. Its best is stored with those rows, so it shows
+ * only while the same rows are loaded again. */
+const CUSTOM_PUZZLE_ID = 'custom';
 const customPuzzle = (text: string): Puzzle => ({
   id: CUSTOM_PUZZLE_ID,
   title: 'Your puzzle',
@@ -81,12 +84,7 @@ const playback = new Playback(
     if (blocked) message('Replay was blocked.');
   },
 );
-const progress = new ProgressClient({
-  verify,
-  show: showBest,
-  status: value => setText('storage', value),
-  connected: persistence => setText('connection', persistence ? 'PostgreSQL connected' : 'Native solver connected'),
-});
+const progress = new Progress({ verify, show: showBest, status: value => setText('storage', value) });
 
 function updateButtons() {
   const busy = solver.busy;
@@ -158,7 +156,6 @@ function changed() {
   const actions = game.actions();
   progress.session(actions);
   progress.keep(actions, state.moves, state.pushes);
-  void progress.sync(actions);
 }
 function load(puzzle: Puzzle, actions = '') {
   const text = puzzle.rows.join('\n');
@@ -338,8 +335,16 @@ async function start() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') saveSession();
   });
-  // Static hosting needs no backend. A server that is busy, restarting or not
-  // yet started is asked again with backoff until it reports persistence.
-  await progress.probe();
+  void probeServer();
+}
+/** Labels the page when /api/health answers, so the native solver can run. Static hosting has no
+ * API: a 404, an app page instead of JSON, or no answer leaves Browser mode on show. */
+async function probeServer() {
+  try {
+    const response = await fetch('/api/health');
+    if (response.ok && decodeHealth(await response.json())) setText('connection', 'Native solver connected');
+  } catch {
+    /* No API here; the browser solver still works. */
+  }
 }
 start().catch(error => message(`Could not start WebAssembly: ${errorMessage(error)}. Run npm run wasm and reload.`));

@@ -2,7 +2,6 @@ import {
   MAX_ROUTE,
   STATUSES,
   type Metrics,
-  type ProgressRecord,
   type Proof,
   type SearchStatus,
   type SearchUpdate,
@@ -12,12 +11,12 @@ import {
 } from './protocol.ts';
 
 type ObjectValue = Record<string, unknown>;
-function object(value: unknown, name = 'solver response'): ObjectValue {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${name}`);
+function object(value: unknown): ObjectValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid solver response');
   return value as ObjectValue;
 }
-function counter(value: unknown, name: string, what = 'solver'): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid ${what} ${name}`);
+function counter(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid solver ${name}`);
   return value;
 }
 const optionalCounter = (value: unknown, name: string) => (value == null ? undefined : counter(value, name));
@@ -26,10 +25,10 @@ function status(value: unknown): SearchStatus {
   if (known === undefined) throw new Error('Unknown solver status');
   return known;
 }
-function route(value: unknown, what = 'solver'): string | undefined {
+function route(value: unknown): string | undefined {
   if (value == null) return undefined;
   // The letters of sokomind_core::ACTIONS (crates/core/src/lib.rs), checked by scripts/mirrors.test.mjs.
-  if (typeof value !== 'string' || value.length > MAX_ROUTE || !/^[UDLR]*$/.test(value)) throw new Error(`Invalid ${what} route`);
+  if (typeof value !== 'string' || value.length > MAX_ROUTE || !/^[UDLR]*$/.test(value)) throw new Error('Invalid solver route');
   return value;
 }
 function proof(value: unknown): Proof {
@@ -212,31 +211,10 @@ export function nativeErrorText(status: number, error: string | undefined): stri
   const text = `Server returned HTTP ${status}`;
   return status === 429 ? `${text}. The browser solver still works: set Run on to This browser.` : text;
 }
-/** GET /api/health's `persistence`, or undefined when the reply is not an object (as when a host
- * without the API serves an app page or an empty body); an array or an object without
- * `persistence: true` reports false. The key is the one api::health sends (crates/server/src/api.rs,
- * checked by scripts/mirrors.test.mjs). */
-export function decodeHealth(value: unknown): boolean | undefined {
-  return value && typeof value === 'object' ? (value as { persistence?: unknown }).persistence === true : undefined;
-}
-/** POST /api/progress/{id}'s `improved`: whether the route replaced the stored best. */
-export function decodeSaveReply(value: unknown): boolean {
-  const v = object(value, 'progress response');
-  if (typeof v.improved !== 'boolean') throw new Error('Invalid progress response');
-  return v.improved;
-}
-/** GET /api/progress/{id}'s stored best. The counts are the server's claim: the caller replays the
- * route and compares them before keeping it. */
-export function decodeProgress(value: unknown): ProgressRecord {
-  const v = object(value, 'progress record'),
-    stored = route(v.route, 'progress');
-  if (typeof v.puzzle_id !== 'string' || stored === undefined) throw new Error('Invalid progress record');
-  return {
-    puzzleId: v.puzzle_id,
-    route: stored,
-    moves: counter(v.moves, 'moves', 'progress'),
-    pushes: counter(v.pushes, 'pushes', 'progress'),
-  };
+/** Whether a GET /api/health reply is api::health's `{"status": "ok"}` (crates/server/src/api.rs,
+ * checked by scripts/mirrors.test.mjs); a host without the API serves an app page or nothing. */
+export function decodeHealth(value: unknown): boolean {
+  return !!value && typeof value === 'object' && (value as { status?: unknown }).status === 'ok';
 }
 /** A failed response's JSON `error` text, or undefined when its body carries none. The key is
  * api::Error's in crates/server/src/api.rs (checked by scripts/mirrors.test.mjs). */

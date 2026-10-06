@@ -29,15 +29,15 @@ COPY crates/server/Cargo.toml crates/server/
 RUN for crate in core search wasm; do mkdir -p crates/$crate/src && echo '//! Stub.' > crates/$crate/src/lib.rs; done \
     && mkdir -p crates/server/src && printf '//! Stub.\nfn main() {}\n' > crates/server/src/main.rs
 
-# The server's sources; the wasm crate keeps its stub.
+# The server's sources; the wasm crate keeps its stub. data/ is left out, as
+# only test code includes it: a non-test include_str! of data/ in core, search
+# or server must add COPY data data here.
 FROM stubs AS server-build
 RUN cargo build --locked --release -p sokomind-server \
     && find target -name '*sokomind*' -prune -exec rm -rf {} +
 COPY crates/core crates/core
 COPY crates/search crates/search
 COPY crates/server crates/server
-COPY data data
-COPY migrations migrations
 RUN cargo build --locked --release -p sokomind-server
 
 FROM debian:${DEBIAN_RELEASE}-slim AS server

@@ -31,10 +31,6 @@ use std::{
 ///   shutdown finish, since graceful shutdown waits for in-flight requests.
 /// - deploy/nginx.conf: `proxy_read_timeout 40s` outlasts the page's wait,
 ///   so nginx never cuts off an answer the page still expects.
-///
-/// Health follows the same rule: HEALTH_TIMEOUT, 900 ms in
-/// crates/server/src/api.rs, stays under the page's 1.5 s HEALTH_TIMEOUT_MS
-/// in web/src/progress.ts.
 const TIME_MS: RangeInclusive<u64> = 10..=30_000;
 /// A solve's time budget when the request names none. README's
 /// `POST /api/solve` line quotes it.

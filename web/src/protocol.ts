@@ -68,13 +68,5 @@ export interface SearchUpdate {
 }
 /** What the worker posts: search updates, or the error that ended the search. */
 export type WorkerReply = SearchUpdate | { type: 'error'; message: string };
-/** GET /api/progress/{id} as decoded by transport's decodeProgress: the profile's
- * stored best (Record in crates/server/src/progress.rs), with the server's counts. */
-export interface ProgressRecord {
-  puzzleId: string;
-  route: string;
-  moves: number;
-  pushes: number;
-}
 /** The text shown for a caught value: an Error's message, or anything else as a string. */
 export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

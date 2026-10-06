@@ -1,4 +1,4 @@
-//! Per-client rate limits for saves and native solves.
+//! Per-client rate limits for native solves.
 use crate::client::prefix;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 /// (see [`RateLimiter`]).
 const MAX_TRACKED: usize = 65_536;
 
-/// Fixed-window per-client limiter for saves and native solves. Anonymous
-/// profile rows are otherwise unbounded (anyone can invent 32-hex profile
-/// IDs), and one client could otherwise hold the solver slots.
+/// Fixed-window per-client limiter for native solves, so one client cannot
+/// hold the solver slots.
 ///
 /// The map is hard-bounded so attacker addresses cannot grow it without
 /// limit. Stale windows are swept at most once per window; while the map is
@@ -53,7 +52,7 @@ impl RateLimiter {
     fn allow_at(&self, ip: IpAddr, now: Instant) -> bool {
         let key = key(ip);
         // Nothing panics while holding the lock, but a poisoned limiter must
-        // never fail every later save and solve; its windows stay usable.
+        // never fail every later solve; its windows stay usable.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Windows { clients, swept } = &mut *state;
         if now.saturating_duration_since(*swept) >= self.window {

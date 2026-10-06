@@ -128,32 +128,6 @@ test('the #seconds select offers only budgets within TIME_MS', () => {
   assert.ok(Math.max(...seconds) * 1000 <= top, `#seconds offers more than TIME_MS's ${top} ms top`);
 });
 
-test("the server's HEALTH_TIMEOUT stays under the page's HEALTH_TIMEOUT_MS", () => {
-  const server = read('crates/server/src/api.rs', /const HEALTH_TIMEOUT: Duration = Duration::from_millis\((\d+)\);/);
-  const page = read('web/src/progress.ts', /const HEALTH_TIMEOUT_MS = (\d+);/);
-  assert.ok(server < page, `HEALTH_TIMEOUT ${server} ms must stay under HEALTH_TIMEOUT_MS ${page} ms`);
-});
-
-test('progress.ts, solve.rs and the README quote HEALTH_TIMEOUT', () => {
-  const timeout = read('crates/server/src/api.rs', /const HEALTH_TIMEOUT: Duration = Duration::from_millis\((\d+)\);/);
-  assert.equal(read('web/src/progress.ts', /the server's (\d+) ms HEALTH_TIMEOUT/), timeout);
-  assert.equal(read('crates/server/src/solve.rs', /HEALTH_TIMEOUT, (\d+) ms in/), timeout);
-  assert.equal(read('README.md', /probe \((\d+) ms deadline\)/), timeout);
-});
-
-test("api.rs and solve.rs quote the page's HEALTH_TIMEOUT_MS", () => {
-  const timeout = read('web/src/progress.ts', /const HEALTH_TIMEOUT_MS = (\d+);/);
-  assert.equal(read('crates/server/src/api.rs', /the page's ([\d.]+) s HEALTH_TIMEOUT_MS/) * 1000, timeout);
-  assert.equal(read('crates/server/src/solve.rs', /the page's ([\d.]+) s HEALTH_TIMEOUT_MS/) * 1000, timeout);
-});
-
-test('the README quotes HEALTH_TTL', () => {
-  assert.equal(
-    read('README.md', /reused for (\d+) s/),
-    read('crates/server/src/api.rs', /const HEALTH_TTL: Duration = Duration::from_secs\((\d+)\);/),
-  );
-});
-
 test("the README quotes nginx's request rates and bursts", () => {
   assert.equal(
     read('README.md', /limits `\/api\/` to (\d+)\s+requests per second/),
@@ -179,7 +153,7 @@ test("CI's health poll stays within nginx's health_limit rate", () => {
 
 test('every 429 text a solve can get names the browser solver, which errorText shows as sent', () => {
   const texts = [
-    text('crates/server/src/api.rs', /&self\.solve_slots,\s+"([^"]*)"/),
+    text('crates/server/src/api.rs', /fn solve_permit[\s\S]*?Error::too_many\("([^"]*)"\)/),
     text('crates/server/src/solve.rs', /peer,\s+"([^"]*)"/),
     text('deploy/nginx.conf', /"error":"([^"]*)"/),
   ];
@@ -193,38 +167,14 @@ test("nginx, transport.ts and the README use the key of api.rs's error body", ()
   assert.equal(text('README.md', /Every API error body is `\{"(\w+)":/), key);
 });
 
-test("decodeHealth reads the key of api.rs's health reply", () => {
-  assert.equal(
-    text('web/src/transport.ts', /\(value as \{ \w+\?: unknown \}\)\.(\w+) === true/),
-    text('crates/server/src/api.rs', /"status": "ok", "(\w+)": persistence/),
+test("decodeHealth reads api.rs's health reply, which CI's smoke test polls for", () => {
+  const [key, value] = [/json!\(\{ "(\w+)": "\w+" \}\)/, /json!\(\{ "\w+": "(\w+)" \}\)/].map(pattern =>
+    text('crates/server/src/api.rs', pattern),
   );
-});
-
-test('the README quotes SAVES_PER_MINUTE', () => {
-  assert.equal(read('README.md', /\): (\d+) saves and/), read('crates/server/src/api.rs', /const SAVES_PER_MINUTE: u32 = (\d+);/));
-});
-
-test('the README quotes the database timeouts and retry window', () => {
-  assert.equal(
-    read('README.md', /each gets ([\d.]+) s\)/) * 1000,
-    read('crates/server/src/database.rs', /const EXECUTION_TIMEOUT: Duration = Duration::from_millis\((\d+)\);/),
-  );
-  assert.equal(
-    read('README.md', /fail with 503 after (\d+) s/),
-    read('crates/server/src/database.rs', /const ACQUIRE_TIMEOUT: Duration = Duration::from_secs\((\d+)\);/),
-  );
-  assert.equal(
-    read('README.md', /stop a statement after ([\d.]+) s/) * 1000,
-    read('crates/server/src/database.rs', /const STATEMENT_TIMEOUT: Duration = Duration::from_millis\((\d+)\);/),
-  );
-  assert.equal(
-    read('README.md', /lock wait\s+after (\d+) ms/),
-    read('crates/server/src/database.rs', /const LOCK_TIMEOUT: Duration = Duration::from_millis\((\d+)\);/),
-  );
-  assert.equal(
-    read('README.md', /for about (\d+) seconds; authentication/),
-    read('crates/server/src/database.rs', /const RETRY_WINDOW: Duration = Duration::from_secs\((\d+)\);/),
-  );
+  assert.equal(text('web/src/transport.ts', /\(value as \{ (\w+)\?: unknown \}\)\.\w+ === '\w+'/), key);
+  assert.equal(text('web/src/transport.ts', /\(value as \{ \w+\?: unknown \}\)\.\w+ === '(\w+)'/), value);
+  assert.equal(text('.github/workflows/ci.yml', /jq -e '\.(\w+) == "\w+"'/), key);
+  assert.equal(text('.github/workflows/ci.yml', /jq -e '\.\w+ == "(\w+)"'/), value);
 });
 
 test('the #memory select offers only budgets within MEMORY_MIB, up to its cap', () => {
@@ -263,34 +213,6 @@ test("the README quotes the Dockerfile's BIND_ADDR", () => {
   assert.equal(text('README.md', /the Docker image sets `([\d.:]+)`/), text('Dockerfile', /ENV BIND_ADDR=([\d.:]+)/));
 });
 
-test("the README's Configuration table quotes config.rs's DATABASE_* defaults", () => {
-  assert.equal(
-    text('README.md', /\| `DATABASE_HOST` \| `(\w+)` \|/),
-    text('crates/server/src/config.rs', /part\("DATABASE_HOST", "(\w+)"\)/),
-  );
-  assert.equal(
-    text('README.md', /\| `DATABASE_PORT` \| `(\d+)` \|/),
-    text('crates/server/src/config.rs', /part\("DATABASE_PORT", "(\d+)"\)/),
-  );
-  assert.equal(
-    text('README.md', /\| `DATABASE_USER` \| `(\w+)` \|/),
-    text('crates/server/src/config.rs', /part\("DATABASE_USER", "(\w+)"\)/),
-  );
-  assert.equal(
-    text('README.md', /\| `DATABASE_NAME` \| `(\w+)` \|/),
-    text('crates/server/src/config.rs', /part\("DATABASE_NAME", "(\w+)"\)/),
-  );
-});
-
-test("config.rs's DATABASE_* defaults name compose's db service, user and database", () => {
-  assert.equal(
-    text('crates/server/src/config.rs', /part\("DATABASE_HOST", "(\w+)"\)/),
-    text('compose.yaml', /services:\s+(\w+):\s+image: postgres:/),
-  );
-  assert.equal(text('crates/server/src/config.rs', /part\("DATABASE_USER", "(\w+)"\)/), text('compose.yaml', /POSTGRES_USER: (\w+)/));
-  assert.equal(text('crates/server/src/config.rs', /part\("DATABASE_NAME", "(\w+)"\)/), text('compose.yaml', /POSTGRES_DB: (\w+)/));
-});
-
 test("the README's SOLVE_CONCURRENCY row quotes config.rs's default and range", () => {
   assert.equal(
     read('README.md', /\| `SOLVE_CONCURRENCY` \| `(\d+)` \|/),
@@ -321,85 +243,11 @@ test("the README's SOLVE_RATE_PER_MINUTE row quotes config.rs's default and rang
   );
 });
 
-test("the README's PROGRESS_CONCURRENCY row quotes config.rs's default and range", () => {
-  assert.equal(
-    read('README.md', /\| `PROGRESS_CONCURRENCY` \| `(\d+)` \|/),
-    read('crates/server/src/config.rs', /"PROGRESS_CONCURRENCY", \d+\.\.=MAX_PROGRESS_CONCURRENCY, (\d+)\)/),
-  );
-  assert.equal(
-    read('README.md', /progress reads and saves, (\d+)\.\.\d+;/),
-    read('crates/server/src/config.rs', /"PROGRESS_CONCURRENCY", (\d+)\.\.=MAX_PROGRESS_CONCURRENCY/),
-  );
-  assert.equal(
-    read('README.md', /progress reads and saves, \d+\.\.(\d+);/),
-    read('crates/server/src/config.rs', /const MAX_PROGRESS_CONCURRENCY: u32 = (\d+);/),
-  );
-});
-
-test("the README's DB_POOL_SIZE row quotes the range of config.rs's pool_size", () => {
-  const progress = read('crates/server/src/config.rs', /const MAX_PROGRESS_CONCURRENCY: u32 = (\d+);/);
-  const spare = read('crates/server/src/config.rs', /let range = \d+\.\.=MAX_PROGRESS_CONCURRENCY \+ (\d+);/);
-  assert.equal(
-    read('README.md', /connections, (\d+)\.\.\d+:/),
-    read('crates/server/src/config.rs', /let range = (\d+)\.\.=MAX_PROGRESS_CONCURRENCY \+ \d+;/),
-  );
-  assert.equal(read('README.md', /connections, \d+\.\.(\d+):/), progress + spare);
-});
-
-test("the README's PROGRESS_RETENTION_DAYS row quotes config.rs's default and range", () => {
-  assert.equal(
-    read('README.md', /\| `PROGRESS_RETENTION_DAYS` \| `(\d+)` \|/),
-    read('crates/server/src/config.rs', /"PROGRESS_RETENTION_DAYS", \d+\.\.=MAX_RETENTION_DAYS, (\d+)\)/),
-  );
-  assert.equal(
-    read('README.md', /\| (\d+) keeps progress forever/),
-    read('crates/server/src/config.rs', /"PROGRESS_RETENTION_DAYS", (\d+)\.\.=MAX_RETENTION_DAYS/),
-  );
-  assert.equal(
-    read('README.md', /forever; \d+\.\.(\d+) deletes/),
-    read('crates/server/src/config.rs', /const MAX_RETENTION_DAYS: i32 = ([\d_]+);/),
-  );
-});
-
-test("the README's PROGRESS_RETENTION_BATCH_SIZE row quotes config.rs's default and range", () => {
-  assert.equal(
-    read('README.md', /\| `PROGRESS_RETENTION_BATCH_SIZE` \| `(\d+)` \|/),
-    read('crates/server/src/config.rs', /"PROGRESS_RETENTION_BATCH_SIZE", \d+\.\.=\d+, (\d+)\)/),
-  );
-  assert.equal(
-    read('README.md', /one short transaction each, (\d+)\.\.\d+;/),
-    read('crates/server/src/config.rs', /"PROGRESS_RETENTION_BATCH_SIZE", (\d+)\.\.=/),
-  );
-  assert.equal(
-    read('README.md', /one short transaction each, \d+\.\.(\d+);/),
-    read('crates/server/src/config.rs', /"PROGRESS_RETENTION_BATCH_SIZE", \d+\.\.=(\d+),/),
-  );
-});
-
-test('the README and .env.example quote RETENTION_MAX_BATCHES and its products with the batch sizes', () => {
-  const batches = read('crates/server/src/database.rs', /pub const RETENTION_MAX_BATCHES: usize = (\d+);/);
-  const size = read('crates/server/src/config.rs', /"PROGRESS_RETENTION_BATCH_SIZE", \d+\.\.=\d+, (\d+)\)/);
-  const top = read('crates/server/src/config.rs', /"PROGRESS_RETENTION_BATCH_SIZE", \d+\.\.=(\d+),/);
-  assert.equal(read('README.md', /runs at most (\d+) batches/), batches);
-  assert.equal(read('README.md', /deletes at most (\d+) times this many records per sweep/), batches);
-  assert.equal(read('README.md', /\(([\d,]+) at the default/), batches * size);
-  assert.equal(read('README.md', /at the default, ([\d,]+) at \d+\)/), batches * top);
-  assert.equal(read('README.md', /at the default, [\d,]+ at (\d+)\)/), top);
-  assert.equal(read('README.md', /runs all (\d+) full/), batches);
-  assert.equal(read('.env.example', /runs at most (\d+) batches per hourly sweep/), batches);
-  assert.equal(read('.env.example', /deletes at most\s+#\s+(\d+) times this many/), batches);
-});
-
 test("nginx, .env.example and the README quote compose's default TRUSTED_SUBNET", () => {
   const subnet = text('compose.yaml', /\$\{TRUSTED_SUBNET:-([\d.\/]+)\}/);
   assert.equal(text('deploy/nginx.conf', /# set_real_ip_from ([\d.\/]+);/), subnet);
   assert.equal(text('.env.example', /Commented or empty, it is ([\d.\/]+);/), subnet);
   assert.equal(text('README.md', /pins its network to `([\d.\/]+)`/), subnet);
-});
-
-test("CI's database service and the README use compose's PostgreSQL image", () => {
-  assert.equal(text('.github/workflows/ci.yml', /image: (postgres:[\w.-]+)/), text('compose.yaml', /image: (postgres:[\w.-]+)/));
-  assert.equal(read('README.md', /with a PostgreSQL (\d+)\s+service/), read('compose.yaml', /image: postgres:(\d+)/));
 });
 
 test('the web image exposes the port nginx listens on', () => {
@@ -429,17 +277,14 @@ test("the README quotes compose's published web port", () => {
 });
 
 test("the page's API paths are main.rs's routes", () => {
-  const progress = text('crates/server/src/main.rs', /"([\w\/]+)\{id\}",\s+get\(progress::get\)/);
   assert.equal(
-    text('web/src/progress.ts', /this\.request\('([\w\/]+)'/),
+    text('web/src/main.ts', /await fetch\('([\w\/]+)'\)/),
     text('crates/server/src/main.rs', /\.route\("([\w\/]+)", get\(api::health\)\)/),
   );
   assert.equal(
     text('web/src/solver-client.ts', /this\.request\('([\w\/]+)'/),
     text('crates/server/src/main.rs', /\.route\("([\w\/]+)", post\(solve::solve\)\)/),
   );
-  assert.equal(text('web/src/progress.ts', /request\(`([\w\/]+)\$\{[^`]*`, \{\s+method/), progress);
-  assert.equal(text('web/src/progress.ts', /request\(`([\w\/]+)\$\{[^`]*`, \{\s+headers/), progress);
 });
 
 test("nginx's exact location is main.rs's health route", () => {
@@ -449,35 +294,11 @@ test("nginx's exact location is main.rs's health route", () => {
   );
 });
 
-test('progress.ts, the README and CI send the profile header progress.rs reads', () => {
-  const header = text('crates/server/src/progress.rs', /\.get\("([\w-]+)"\)/);
-  assert.equal(text('web/src/progress.ts', /'content-type': 'application\/json', '([\w-]+)': this\.profile!/), header);
-  assert.equal(text('web/src/progress.ts', /headers: \{ '([\w-]+)': this\.profile! \}/), header);
-  assert.equal(text('README.md', /endpoints require `([\w-]+)`/), header);
-  assert.equal(text('.github/workflows/ci.yml', /-H "([\w-]+): \$profile" \\/), header);
-});
-
-test("the migration, storage.ts, the README and CI agree with progress.rs's profile token length", () => {
-  const length = read('crates/server/src/progress.rs', /if value\.len\(\) != (\d+) \|\|/);
-  assert.equal(read('migrations/0002_progress_fingerprint.sql', /profile ~ '\^\[0-9a-fA-F\]\{(\d+)\}\$'/), length);
-  assert.equal(read('web/src/storage.ts', /\/\^\[a-f0-9\]\{(\d+)\}\$\/\.test/), length);
-  assert.equal(read('web/src/storage.ts', /new Uint8Array\((\d+)\)/) * 2, length);
-  assert.equal(read('README.md', /random (\d+)-hex token/), length);
-  assert.equal(text('.github/workflows/ci.yml', /\sprofile=([0-9a-f]+)\s/).length, length);
-});
-
 test("CI's smoke solve sends solve_body, the router tests' request", () => {
   assert.deepEqual(
     JSON.parse(text('.github/workflows/ci.yml', /-d '(\{"rows"[^']*)'/)),
     JSON.parse(text('crates/server/src/tests/mod.rs', /json!\((\{"rows"[\s\S]*?\})\)/)),
   );
-});
-
-test("CI's smoke rows are the catalog's rows for the puzzle CI saves progress for", () => {
-  const id = text('.github/workflows/ci.yml', /-d '\{"route":"D"\}' "\$base\/api\/progress\/([\w-]+)"/);
-  const smoke = JSON.parse(text('.github/workflows/ci.yml', /-d '(\{"rows"[^']*)'/));
-  const puzzles = /** @type {{ id: string, rows: string[] }[]} */ (JSON.parse(source('data/puzzles.json')));
-  assert.deepEqual(smoke.rows, puzzles.find(puzzle => puzzle.id === id)?.rows);
 });
 
 test("the README's catalog size is data/puzzles.json's length", () => {
@@ -500,13 +321,6 @@ test("the worker's and the catalog example's pop batches equal solve.rs's POPS_P
   const pops = read('crates/server/src/solve.rs', /const POPS_PER_CHECK: u32 = (\d+);/);
   assert.equal(read('web/src/solver.worker.ts', /const POPS_PER_ADVANCE = (\d+);/), pops);
   assert.equal(read('crates/search/examples/catalog.rs', /const POPS_PER_CHECK: u32 = (\d+);/), pops);
-});
-
-test('the README quotes MAX_SAVED_ROUTE', () => {
-  assert.equal(
-    read('README.md', /Saved routes are capped at ([\d,]+) moves/),
-    read('crates/server/src/progress.rs', /const MAX_SAVED_ROUTE: usize = ([\d_]+);/),
-  );
 });
 
 test("package.json's engines, validate.mjs and the README quote .node-version's Node", () => {
@@ -559,9 +373,8 @@ test("protocol.ts's MAX_ROUTE equals sokomind_core::MAX_ROUTE", () => {
   );
 });
 
-test('the migration and the README quote MAX_ROUTE', () => {
+test('the README quotes MAX_ROUTE', () => {
   const max = read('crates/core/src/game.rs', /pub const MAX_ROUTE: usize = ([\d_]+);/);
-  assert.equal(read('migrations/0002_progress_fingerprint.sql', /length\(route\) <= (\d+)/), max);
   assert.equal(read('README.md', /Routes\s+are limited to ([\d,]+) moves/), max);
   assert.equal(read('README.md', /route over the ([\d,]+)-move replay limit/), max);
   assert.equal(read('README.md', /stop at the ([\d,]+)-move replay limit/), max);
@@ -607,13 +420,11 @@ test("the README quotes the #memory select's range and default", () => {
   assert.equal(read('README.md', /MiB, (\d+) by default\)/), read('web/index.html', /<option value="(\d+)" selected>/));
 });
 
-test("protocol.ts, transport.ts and the migration use sokomind_core::ACTIONS's letters", () => {
+test("protocol.ts and transport.ts use sokomind_core::ACTIONS's letters", () => {
   const actions = text('crates/core/src/lib.rs', /pub const ACTIONS: &\[u8; 4\] = b"([A-Z]+)";/);
   const route = text('web/src/transport.ts', /!\/\^\[([A-Z]+)\]\*\$\/\.test\(value\)/);
-  const check = text('migrations/0002_progress_fingerprint.sql', /route !~ '\[\^([A-Z]+)\]'/);
   assert.equal(text('web/src/protocol.ts', /export const ACTIONS = '([A-Z]+)';/), actions);
   assert.equal([...route].toSorted().join(''), [...actions].toSorted().join(''));
-  assert.equal([...check].toSorted().join(''), [...actions].toSorted().join(''));
 });
 
 test("the direction pad's data-direction values index ACTIONS by each button's label", () => {
@@ -622,14 +433,6 @@ test("the direction pad's data-direction values index ACTIONS by each button's l
   assert.equal(actions[read('web/index.html', /data-direction="(\d)" aria-label="Move down"/)], 'D');
   assert.equal(actions[read('web/index.html', /data-direction="(\d)" aria-label="Move left"/)], 'L');
   assert.equal(actions[read('web/index.html', /data-direction="(\d)" aria-label="Move right"/)], 'R');
-});
-
-test("the migration and the README match the format of board.rs's fingerprint", () => {
-  const prefix = text('crates/core/src/board.rs', /format!\("([\w-]+):\{hash:\d+x\}"\)/);
-  const digits = read('crates/core/src/board.rs', /\{hash:0(\d+)x\}/);
-  assert.equal(text('migrations/0002_progress_fingerprint.sql', /fingerprint ~ '\^([\w-]+):/), prefix);
-  assert.equal(read('migrations/0002_progress_fingerprint.sql', /fingerprint ~ '\^[\w-]+:\[0-9a-f\]\{(\d+)\}\$'/), digits);
-  assert.equal(text('README.md', /\(`([\w-]+):\{fnv1a\}`/), prefix);
 });
 
 test("protocol.ts's MODES, the #mode select and the README name the modes of Mode::as_str", () => {
@@ -773,12 +576,4 @@ test("the README quotes the benchmark baseline's, catalog example's and observe 
 test("the README's fixture count is search.rs's fixtures", () => {
   const fixtures = items('crates/search/tests/search.rs', /fixtures! \{([\s\S]*?)\r?\n    \}/, /^ {8}(\w+): "/gm);
   assert.equal(read('README.md', /(\d+) boards whose independent/), fixtures.length);
-});
-
-test("the README quotes ProgressClient's probe backoff", () => {
-  assert.equal(
-    read('README.md', /asks again after (\d+) s and doubles/) * 1000,
-    read('web/src/progress.ts', /const PROBE_FIRST_MS = (\d+),/),
-  );
-  assert.equal(read('README.md', /wait up to (\d+) minutes/) * 60000, read('web/src/progress.ts', /PROBE_MAX_MS = ([\d_]+);/));
 });

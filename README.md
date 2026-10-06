@@ -2,13 +2,13 @@
 
 A small Rust/WASM port of `SokomindSolver`: its 57 catalog puzzles, labeled
 box rules, keyboard/touch play, undo, restart, route replay, custom board import,
-browser session/best-route storage, worker search, and optional native search and
-PostgreSQL persistence. No frontend framework and no JavaScript game-rule duplicate.
+browser session/best-route storage, worker search, and optional native search.
+No frontend framework and no JavaScript game-rule duplicate.
 
 ## Run locally
 
 Requires Node 24.14+, Rust 1.98.1, and a native linker (Visual Studio C++ Build
-Tools on Windows). PostgreSQL is optional for local play/search.
+Tools on Windows).
 `rust-toolchain.toml` pins the Rust version, and `.node-version` the exact Node
 that CI and the Docker image use (24.14.0), which is also the floor
 `package.json`'s `engines` gives.
@@ -26,14 +26,7 @@ Open the Vite URL (normally `http://127.0.0.1:5173`). In another terminal:
 npm run server
 ```
 
-The server answers only `/api`, which the Vite dev server proxies to it. For server
-persistence, export `DATABASE_URL` (see Configuration) before starting the
-server. Example PowerShell:
-
-```powershell
-$env:DATABASE_URL = 'postgres://sokomind:your-password@127.0.0.1:5432/sokomind'
-npm.cmd run server
-```
+The server answers only `/api`, which the Vite dev server proxies to it.
 
 This checkout also supports project-local tools in `.tools/cargo`, `.tools/rustup`,
 and `.tools/bin`; the npm scripts discover them automatically. `.tools` is ignored.
@@ -45,15 +38,11 @@ page reload. `npm run build` creates `web/dist` for NGINX.
 
 ## Full stack with Docker
 
-Copy `.env.example` to `.env`, choose a PostgreSQL password, then run
-`docker compose up --build`. Open `http://127.0.0.1:8080`. To change a budget,
-rate or retention setting (see Configuration), uncomment it in `.env`; compose
-passes one left commented or empty as an empty value, which the server reads as
-unset, so its default applies. PostgreSQL reads `POSTGRES_PASSWORD` only when it
-initializes the empty named database volume: to change the password later, also
-change it in the database (`ALTER ROLE sokomind PASSWORD ...`), or the API cannot
-log in and keeps restarting. Only NGINX publishes a port, and only on
-`127.0.0.1`. NGINX is required in front of the API binary: it serves the web
+Run `docker compose up --build`. Open `http://127.0.0.1:8080`. To change a
+budget or rate setting (see Configuration), copy `.env.example` to `.env` and
+uncomment it there; compose passes one left commented or empty as an empty
+value, which the server reads as unset, so its default applies. Only NGINX
+publishes a port, and only on `127.0.0.1`. NGINX is required in front of the API binary: it serves the web
 app and adds gzip and the headers and limits described under HTTP. The image
 pins NGINX 1.30. NGINX looks the `api` container up again about every 10
 seconds and keeps idle connections to it open for reuse, so it follows a
@@ -69,18 +58,17 @@ proxy before exposing this beyond localhost; when that proxy forwards to this
 NGINX, also enable the commented `real_ip` block in `deploy/nginx.conf` so
 NGINX's and the API's rate limits see real clients.
 
-Upgrading a database created before migration `0002` deletes every saved server
-route: `0002` drops and recreates the `progress` table to key it by layout
-fingerprint. If you need the old rows, back them up with `pg_dump` before the
-upgraded API first starts, because it migrates at startup. Browsers keep their
-profile token and local best routes, but the server only receives a route when
-that browser solves the puzzle again; opening a puzzle in a page loaded after
-the upgrade and letting Replay best play to the end re-uploads its local best.
+Compose no longer runs PostgreSQL: best routes live only in each browser. A
+stack created before then still has a `db` container, which keeps running until
+`docker compose up --remove-orphans` (or `down --remove-orphans`) removes it,
+and a `postgres-data` volume that nothing reads. The volume keeps the old saved
+routes until `docker volume rm` deletes it; `docker volume ls` shows its name,
+which Compose prefixes with the project name.
 
 Compose pins its network to `172.16.57.0/24` (`TRUSTED_SUBNET` in `.env` changes
 it), the range the API trusts (see `TRUSTED_PROXIES` under Configuration). After
 upgrading a stack created before the pin, or changing `TRUSTED_SUBNET`, run
-`docker compose down` once before `up` (the database volume is kept) so Compose
+`docker compose down` once before `up` so Compose
 recreates the network with the new subnet. Were the old network left in place,
 NGINX's address would fall outside `TRUSTED_PROXIES` and every client would share
 one rate-limit bucket.
@@ -113,7 +101,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs; the bounded stage ladder (`stage.rs`, `stage/`) that Fast and Quality hand a routeless search to |
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
-| `crates/server` | Axum/Tokio HTTP API behind NGINX, bounded and rate-limited native CPU jobs, replay-verified best routes in SQLx/PostgreSQL |
+| `crates/server` | Axum/Tokio HTTP API behind NGINX: bounded and rate-limited native CPU jobs |
 | `web/src/main.ts` | Entry: loads the catalog and the WASM game, then wires input, board, solver, playback, and progress |
 | `web/src/board.ts` | `BoardView` canvas renderer |
 | `web/src/input.ts` | On-screen buttons, board swipes, and keyboard bindings |
@@ -121,14 +109,14 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `web/src/solver-client.ts` | `SolverClient`: one search in the browser worker or on `/api/solve`, with a watchdog and cancellation; replays every route it receives and checks the proof against it |
 | `web/src/solver.worker.ts` | Module worker that runs `WasmSearch` in short slices and posts throttled progress and routes |
 | `web/src/verdict.ts` | The search status line: what is proven about the route on show, then how the search ended |
-| `web/src/progress.ts` | `ProgressClient`: `/api/health` probing and server progress reads and saves |
-| `web/src/storage.ts` | `localStorage` session, local best routes, and profile token |
+| `web/src/progress.ts` | `Progress`: the selected puzzle's session and replay-verified best route |
+| `web/src/storage.ts` | `localStorage` session and best routes |
 | `web/src/transport.ts` | Validating decoders for worker replies, `/api` replies, and the WASM snapshot and metrics ABI; the `/api/solve` request encoder |
 | `web/src/protocol.ts` | Constants and message types that mirror the Rust side |
 | `web/src/scheduler.ts` | Injectable clock, so tests can drive time |
 | `web/index.html`, `web/src/style.css` | Page markup and styles |
-| `data/puzzles.json` | Reference catalog snapshot, shared by frontend, backend, and benchmark corpus |
-| `migrations`, `deploy` | Database schema and NGINX configuration |
+| `data/puzzles.json` | Reference catalog snapshot, shared by frontend, tests, and benchmark corpus |
+| `deploy` | NGINX configuration |
 | `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |
 | `benchmarks` | Reviewed benchmark baselines (see Validation) |
 | `docs` | Design notes for the stage ladder and the sealed-corral check: why each looks the way it does, and the measurements behind it |
@@ -321,13 +309,10 @@ add latency.
 
 ## HTTP
 
-* `GET /api/health` — `{status: "ok", persistence: bool}`: API and persistence
-  availability. `persistence` comes from a `SELECT 1` probe (900 ms deadline)
-  whose answer is reused for 1 s and which takes no progress slot, so busy saves
-  do not read as persistence being off. Requests that arrive while a probe runs
-  answer from the previous probe instead of waiting, so those that race the
-  server's first probe report `false` even with the database up; the web app
-  asks again (below) and picks persistence up then.
+* `GET /api/health` — `{status: "ok"}` whenever the API answers. The web app
+  asks once at startup and shows "Native solver connected" when that reply
+  arrives; otherwise "Browser mode" stays on show. Either way, both engines
+  remain selectable.
 * `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 60000000, memory_mib: 128}`.
   Only `rows` and `mode` are required; the values shown are the defaults. The
   limits start at 10 ms, 1 state, and 4 MiB and cap as under Layout and
@@ -336,49 +321,27 @@ add latency.
   cover only the moves after `actions` and are null without a route; `proof` is
   null or `{kind, lower_bound, upper_bound}`, with no bounds for `unsolvable`;
   `stats` holds the search counters by name.
-* `GET /api/progress/{id}` — one saved route, `{puzzle_id, moves, pushes, route}`.
-* `POST /api/progress/{id}` — `{route: "UDLR..."}`; server replay counts moves and
-  pushes and checks completion, then atomically keeps a better moves/pushes pair
-  (fewer moves, then fewer pushes). The reply is `{saved: true, improved: bool}`,
-  where `improved` says whether this route was stored.
 
-Progress endpoints require `x-profile-id`, a browser-generated random 32-hex token.
-This is an anonymous local profile capability, not an account/login system. Losing
-browser storage loses the profile token. Custom puzzles stay local. No database
-credentials or SQL cross into the frontend. Saved routes are capped at 10,000 moves.
-
-The web app calls the progress endpoints only after `/api/health` has reported
-`persistence: true`. Until it does, the app asks again after 2 s and doubles the
-wait up to 5 minutes, so a server that was busy, restarting, or started after the
-page was opened is picked up once it answers. A 404, or a 200 reply that is not
-JSON (static hosting), stops the probing. Once the server has answered for a
-route, by replying to its save or returning it as the stored best, the page does
-not post that route for that puzzle again until it is reloaded, even when Replay
-best solves the puzzle with it again; a save that failed or was rejected is
-posted again on the next solve.
+Progress never reaches the server: the browser keeps each puzzle's session and
+best route in `localStorage`, and replays a stored best before it shows or
+compares it, so a route altered in storage cannot claim counts it does not reach.
 
 Every API error body is `{"error": "..."}` (NGINX's own 413 and 5xx pages are
-not): 400 invalid input, a missing or malformed profile, a route that does not
-replay or solve, out-of-range solve limits, a memory budget too small for the
-board, or a solve position plus route over the 100,000-move replay limit; 404
-unknown endpoint, catalog puzzle, or saved route; 405 wrong method; 408 a JSON
+not): 400 invalid input, `actions` that do not replay, out-of-range solve
+limits, a memory budget too small for the board, or a solve position plus route
+over the 100,000-move replay limit; 404 unknown endpoint; 405 wrong method; 408 a JSON
 body not received within 10 seconds (on a direct run: NGINX reads each whole body
 before it passes a request on); 413 a body over 128 KiB; 415 a missing or
-non-JSON content type; 422 JSON of the wrong shape; 429 rate limited, or solver
-or progress busy; 503 PostgreSQL not configured or unreachable, a database
-operation that timed out (each gets 2.5 s) or deadlocked with a concurrent one
-(both say to retry later), or a failed search allocation; 500 a server bug.
-Both progress endpoints check in the same order: profile and request shape (400),
-catalog puzzle (404), PostgreSQL (503), progress slot (429 busy); a save then
-checks its rate limit (429) before it replays the route.
+non-JSON content type; 422 JSON of the wrong shape; 429 rate limited or solver
+busy; 503 a failed search allocation; 500 a server bug. A solve checks its request
+shape (400), then takes a solve slot (429 busy), then charges its rate limit
+(429), and only then parses the board and replays `actions` (400).
 
-Rate limits are per client address (an IPv4 address or an IPv6 /64): 60 saves and
+The rate limit is per client address (an IPv4 address or an IPv6 /64):
 `SOLVE_RATE_PER_MINUTE` solves per minute. A solve that finds every
-`SOLVE_CONCURRENCY` slot taken, or a progress request that finds every
-`PROGRESS_CONCURRENCY` slot taken, gets 429 at once; nothing queues. A busy answer
-does not count against the rate limit, nor does a save turned away before replay
-(bad profile, over-long route, unknown puzzle, no PostgreSQL) or a solve with
-out-of-range limits or an unknown mode. The binary has no
+`SOLVE_CONCURRENCY` slot taken gets 429 at once; nothing queues. A busy answer
+does not count against the rate limit, nor does a solve with out-of-range limits
+or an unknown mode. The binary has no
 connection cap and no idle or header timeout (axum gives hyper no timer), and it
 sends no security headers: NGINX, which must sit in front of it, bounds slow
 clients and open connections and adds `X-Content-Type-Options: nosniff` and
@@ -386,10 +349,6 @@ clients and open connections and adds `X-Content-Type-Options: nosniff` and
 requests per second per address (burst 20) and answers excess with a JSON 429;
 `/api/health` has its own budget of 2 per second (burst 10) instead, so polling it
 never drains the `/api/` limit.
-
-Stored progress is keyed by layout fingerprint (`puzzle-v1:{fnv1a}`, identical to
-the reference): a changed catalog layout starts fresh records instead of returning
-routes that no longer replay.
 
 The binary serves only `/api`; any other path is a JSON 404. NGINX serves the web
 app: unknown paths get the app shell, web-app files outside `/assets/` carry
@@ -401,41 +360,18 @@ rebuild.
 
 The server reads these environment variables. Empty counts as unset. The defaults
 below are the server's and are written nowhere else: compose sets
-`DATABASE_PASSWORD` and `TRUSTED_PROXIES` and passes the budget, rate and
-retention settings through from `.env`, where they start commented out. The
-settings with a range clamp an out-of-range value and replace a non-number with
-the default, each with a warning. A negative value counts as a non-number, except
-for the two retention settings, which clamp it. A value too large for the server
-to parse also counts as a non-number. Every other invalid value, such as a
-malformed `TRUSTED_PROXIES` entry or a `DATABASE_PORT` that is not a port
-number, stops startup before the database wait.
+`TRUSTED_PROXIES` and passes the budget and rate settings through from `.env`,
+where they start commented out. The settings with a range clamp an out-of-range
+value and replace a non-number with the default, each with a warning. A negative
+value, or one too large for the server to parse, counts as a non-number. A
+malformed `TRUSTED_PROXIES` entry stops startup.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BIND_ADDR` | `127.0.0.1:3000` | Listen address (the Docker image sets `0.0.0.0:3000`) |
-| `DATABASE_URL` | unset | Full `postgres://` URL; wins when set. A remote database can require TLS, e.g. `?sslmode=require`: sqlx's `tls-rustls-ring` feature trusts the bundled webpki roots, so the image needs no CA certificates |
-| `DATABASE_PASSWORD` | unset | Without `DATABASE_URL`, enables persistence using the parts below; passed as-is, so any characters are safe. With neither set, persistence is off |
-| `DATABASE_HOST` | `db` | Used with `DATABASE_PASSWORD` |
-| `DATABASE_PORT` | `5432` | Used with `DATABASE_PASSWORD` |
-| `DATABASE_USER` | `sokomind` | Used with `DATABASE_PASSWORD` |
-| `DATABASE_NAME` | `sokomind` | Used with `DATABASE_PASSWORD` |
 | `SOLVE_CONCURRENCY` | `1` | Concurrent native solves, 1..8; each reserves its own arena of up to 1024 MiB accounted search storage, so up to 8 GiB at 8. Compose sets the API no memory limit; a host that sets one must allow for this on top of the process |
 | `SOLVE_RATE_PER_MINUTE` | `20` | Solves per client address per minute, 1..600 |
-| `PROGRESS_CONCURRENCY` | `4` | Concurrent progress reads and saves, 1..32; one more gets 429 at once |
-| `DB_POOL_SIZE` | `PROGRESS_CONCURRENCY` + 1 | PostgreSQL connections, 1..33: one per progress slot plus a spare for the health probe and the retention sweep. A smaller pool logs a warning at startup; saves can then wait for a connection and fail with 503 after 1 s |
-| `PROGRESS_RETENTION_DAYS` | `0` | 0 keeps progress forever; 1..36500 deletes records whose best route was stored longer ago (equal or worse saves do not refresh it), at startup and hourly |
-| `PROGRESS_RETENTION_BATCH_SIZE` | `500` | Records deleted per retention batch, one short transaction each, 1..5000; a sweep runs at most 20 batches, so each API process deletes at most 20 times this many records per sweep (10,000 at the default, 100,000 at 5000). A sweep that runs all 20 full logs that it reached its cap; any expired records left wait for the next sweep |
 | `TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses or CIDRs whose `X-Forwarded-For` is believed; empty trusts none |
-
-libpq's `PG*` variables (such as `PGSSLMODE`) also apply as defaults. Migrations run
-at startup, before the request pool opens, on one connection of their own that is
-closed afterwards. Request connections stop a statement after 1.5 s or a lock wait
-after 500 ms; the migration connection sets both limits to 0, overriding role,
-database and `PGOPTIONS` defaults, so a long migration, or a replica waiting for
-another's migration lock, delays startup instead of failing it. At startup the API
-retries only transient connection failures, for about 30 seconds; authentication
-failures (SQLSTATE 28P01/28000), a missing database (3D000), and other
-non-transient errors fail immediately.
 
 When the peer is a trusted proxy, the client is the rightmost untrusted
 `X-Forwarded-For` entry; an unparseable entry ends the walk at the last trusted
@@ -456,8 +392,7 @@ CI (`.github/workflows/ci.yml`) runs these on pushes to `main`, on pull
 requests, and on demand (`workflow_dispatch`); a push or pull request that
 changes only `LICENSE` starts no run, but a README-only one does, because
 `test:scripts` checks the values this README copies. The first five run on
-Ubuntu and Windows and the rest, after `npm ci`, on Ubuntu with a PostgreSQL 18
-service. Every job names its runner image exactly (`ubuntu-24.04`,
+Ubuntu and Windows and the rest, after `npm ci`, on Ubuntu. Every job names its runner image exactly (`ubuntu-24.04`,
 `windows-2025-vs2026`) rather than a `-latest` label, and those that run Node
 use the version `.node-version` pins, which is also the `engines` floor, so no
 separate floor job exists. It builds the WASM package once and checks parity
@@ -466,11 +401,6 @@ against the native records `bench:check` wrote. Dependabot
 actions and the npm and Cargo dependencies, each release after a 7-day
 cooldown, and CI checks them like any other; the Rust toolchain, Node version,
 Docker base tags, `wasm-bindgen`, and `@types/node` beyond patches move by hand.
-`Cargo.lock` contains sqlx's optional MySQL and SQLite drivers, though they
-are never compiled, because the sqlx `migrate` and `macros` features the
-server enables name them only through weak `dep?/feature` references, which
-Cargo locks anyway (rust-lang/cargo#10801), so `cargo audit` may
-false-positive on their crates.
 
 ```sh
 npm run fmt:check
@@ -486,15 +416,13 @@ npm run bench:check
 npm run build
 npm run test:parity
 npm run bench:observe
-npm run test:db
 npm run test:browser
 ```
 
 `npm run validate` runs the same steps locally, in CI's order and with its single
 WASM build, then prints a line per step: PASS or FAIL with its duration, or SKIP
 with the reason. It skips every step after a failure; `--keep-going` runs them
-all. `--quick` skips `bench:observe`, `test:db` and `test:browser`, and `test:db`
-is a SKIP, never a PASS, while `SOKOMIND_TEST_DATABASE_URL` is unset. It exits 1
+all. `--quick` skips `bench:observe` and `test:browser`. It exits 1
 when a step failed and 2 on an unknown option or argument, and must be started
 through npm: `npm run validate -- --quick`. Windows PowerShell 5.1 drops a bare
 `--`, so quote it there: `npm run validate '--' --quick`. It runs neither
@@ -555,9 +483,7 @@ states and 64 MiB, three times each: an observation size, recorded in
 short (`--states` and `--memory` override it). It fails only on a false proof
 or bound, a nondeterministic run, or a crash. Both it and `bench:check` run
 within the budget that sets Fast's stage point, so a run there that stages does
-so at its full arena; larger budgets stage before the arena fills. `test:db` runs the ignored
-`live_postgres_*` server tests against `SOKOMIND_TEST_DATABASE_URL`, a dedicated, disposable
-database that allows `CREATE SCHEMA`. `test:browser` runs the Playwright specs
+so at its full arena; larger budgets stage before the arena fills. `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
 `npx playwright install chromium`. CI and `validate` run it with `CI=true`, so
@@ -573,11 +499,10 @@ must accept `deploy/nginx.conf` (`nginx -t`), and both image targets, `server`
 and `web`, must build. It then starts the stack as Full stack with Docker
 describes, with `.env` copied from `.env.example` and a `compose.override.yaml`
 that runs the two images just built, and checks it through NGINX at
-`127.0.0.1:8080`: `/api/health` reports persistence (the API reached PostgreSQL
-and ran its migrations), an optimal solve of the ultra-tiny board returns its
-one-push route, a progress save reads back, `/` serves the app shell, and the
-WASM file is served as `application/wasm`. `docker compose down --volumes`
-removes the stack afterwards, also after a failure, whose container states and
+`127.0.0.1:8080`: `/api/health` answers `ok`, an optimal solve of the
+ultra-tiny board returns its one-push route, `/` serves the app shell, and the
+WASM file is served as `application/wasm`. `docker compose down` removes the
+stack afterwards, also after a failure, whose container states and
 logs are printed first. The job runs when a push or pull request changes a file
 the images, their configuration, or the smoke test come from (the Dockerfile,
 `.dockerignore`, `compose.yaml`, `.env.example`, `deploy`, the workflow, and
@@ -590,8 +515,7 @@ waits for the weekly or a manual run.
 
 Rust tests live in `crates/core/tests` (`parse.rs`, `game.rs`) and
 `crates/search/tests`, besides unit tests in the search and server sources; the
-server's router tests are in `crates/server/src/tests/router.rs` and its live
-PostgreSQL tests in `live_postgres.rs` beside it.
+server's router tests are in `crates/server/src/tests/router.rs`.
 `boundary.rs` pins the search API's errors, limits, messages, stats order, and
 proof kinds. `search.rs` checks every mode against a BFS oracle on fixed and
 seeded random boards and holds the reference solver's frozen fixtures

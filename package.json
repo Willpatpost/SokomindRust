@@ -25,7 +25,6 @@
     "test:web": "node --test web/tests/*.test.ts",
     "test:scripts": "node --test scripts/*.test.mjs",
     "test:browser": "playwright test",
-    "test:db": "node scripts/rust.mjs test --locked -p sokomind-server live_postgres -- --ignored",
     "test:parity": "npm run wasm && node scripts/parity.mjs",
     "bench": "node scripts/benchmark.mjs",
     "bench:check": "node scripts/benchmark.mjs --check",

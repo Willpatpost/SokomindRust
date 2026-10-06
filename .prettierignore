@@ -19,10 +19,9 @@ package-lock.json
 data/
 benchmarks/
 
-# Outside the TS/JS/CSS/HTML/JSON scope: the Rust workspace, SQL migrations,
-# deployment config, CI workflows, compose and docs.
+# Outside the TS/JS/CSS/HTML/JSON scope: the Rust workspace, deployment config,
+# CI workflows, compose and docs.
 crates/
-migrations/
 deploy/
 .github/
 *.md
