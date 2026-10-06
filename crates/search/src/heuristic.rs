@@ -208,6 +208,13 @@ impl Heuristic {
         &self.goal_cells[..self.goals]
     }
 
+    /// The fewest pushes a lone box on `cell` needs to reach goal column
+    /// `column`, the keeper standing anywhere, `NONE` when it cannot: an
+    /// entry the matching sums, which drops by at most one per push.
+    pub(crate) fn distance(&self, cell: Cell, column: usize) -> u16 {
+        self.distances[cell as usize * self.goals + column]
+    }
+
     /// Distances from `cell` to each of `group`'s goals, in column order.
     fn goal_distances(&self, group: &Group, cell: Cell) -> &[u16] {
         let at = cell as usize * self.goals + group.start;

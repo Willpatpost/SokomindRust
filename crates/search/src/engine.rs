@@ -5,6 +5,7 @@ use crate::{
     corral::Corral,
     deadlock::Deadlock,
     heuristic::{Heuristic, ParentGroup},
+    polish::{self, Polish},
     push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
     stage::{self, Done, Ladder},
@@ -48,6 +49,12 @@ pub(crate) struct Policy {
     /// only: the ladder ends at its first route, so it needs
     /// stop_on_goal_push.
     stage: bool,
+    /// Whether a search that ends on its own with a route polishes it before
+    /// its status is final: single-box rescheduling (polish.rs) within the
+    /// arena's share of the budget, which keeps a route only when it replays
+    /// shorter. Route-only, so never Exact's; Fast's first route stands as
+    /// found.
+    polish: bool,
 }
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
@@ -60,6 +67,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        polish: false,
     };
     /// First route wins, with no bound on its length. Fast never proves.
     /// When the search reaches its stage point with no route, the stage
@@ -79,8 +87,10 @@ impl Policy {
         then: None,
         restart: None,
         stage: true,
+        polish: false,
     };
-    /// Keeps improving the incumbent until the queue empties or a limit hits.
+    /// Keeps improving the incumbent until the queue empties or a limit hits,
+    /// then polishes the route.
     pub(crate) const QUALITY: Self = Self {
         weight: 3,
         stop_on_goal_pop: false,
@@ -90,6 +100,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        polish: true,
     };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
     /// arena fills the search starts over as plain [`Self::QUALITY`],
@@ -111,10 +122,12 @@ impl Policy {
     /// up leaves the plain Quality result. Below [`stage::MIN_STATES`] states
     /// at the stage point the ladder declines, and a routeless fill gives the
     /// plain Quality result. When the route's path alone leaves no room for
-    /// the start, the search stops at the fill with that route.
+    /// the start, the search stops at the fill with that route. Whichever
+    /// phase ends the search with a route polishes it.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         then: Some(&Self::QUALITY_RESTART),
         restart: Some(&Self::QUALITY),
+        polish: true,
         ..Self::FAST
     };
     /// Every policy a search can run. The const asserts below read it, so a
@@ -138,6 +151,15 @@ const _: () = assert!(!Policy::EXACT.stage);
 // do.
 const _: () = assert!(Policy::FAST.stage && Policy::FAST_THEN_QUALITY_RESTART.stage);
 const _: () = assert!(!Policy::QUALITY.stage && !Policy::QUALITY_RESTART.stage);
+// Polish only shortens routes, never bounds them, so Exact never runs it;
+// Fast's route stands as found. Every policy Quality mode runs polishes,
+// whichever phase ends the search.
+const _: () = assert!(!Policy::EXACT.polish && !Policy::FAST.polish);
+const _: () = assert!(
+    Policy::FAST_THEN_QUALITY_RESTART.polish
+        && Policy::QUALITY_RESTART.polish
+        && Policy::QUALITY.polish
+);
 // Mode's docs (lib.rs) call Quality's weight lighter than Fast's, and the
 // arena's key-width test takes Fast's as the largest.
 const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
@@ -214,6 +236,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 then,
                 restart,
                 stage,
+                polish,
             } = *a;
             weight == b.weight
                 && stop_on_goal_pop == b.stop_on_goal_pop
@@ -223,6 +246,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 && same(then, b.then)
                 && same(restart, b.restart)
                 && stage == b.stage
+                && polish == b.polish
         }
         (None, None) => true,
         _ => false,
@@ -262,6 +286,10 @@ pub(crate) struct Engine {
     /// Whether the root policy may still stage. A resumed search keeps a
     /// policy with `stage` set, so the flag lives here.
     may_stage: bool,
+    /// Some once a polishing policy's search has ended with a route: the
+    /// polisher then owns the route, the arena is released, and the search
+    /// runs the polish until its status is final. Never with an incumbent.
+    polish: Option<Polish>,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -387,6 +415,7 @@ impl Engine {
             staging: None,
             fill_at,
             may_stage: policy.stage,
+            polish: None,
         };
         search.seed();
         Ok(search)
@@ -422,7 +451,18 @@ impl Engine {
     pub(crate) fn status(&self) -> Status {
         self.status
     }
+    /// The best route's length: the polisher's while it holds the route,
+    /// otherwise the incumbent's.
     pub(crate) fn best_moves(&self) -> Option<u32> {
+        match &self.polish {
+            Some(polisher) => Some(polisher.moves()),
+            None => self.incumbent_moves(),
+        }
+    }
+    /// The incumbent's g, the bound the search prunes with. The search reads
+    /// this rather than [`Self::best_moves`], since no polisher runs while it
+    /// does.
+    fn incumbent_moves(&self) -> Option<u32> {
         self.incumbent.map(|i| self.arena.meta(i).g)
     }
     pub(crate) fn expanded(&self) -> u32 {
@@ -482,10 +522,14 @@ impl Engine {
     }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach. A
-    /// running stage ladder is dropped with its unfinished stage.
+    /// running stage ladder is dropped with its unfinished stage, and a
+    /// running polish with its unfinished job, keeping its best route.
     pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
             self.staging = None;
+            if let Some(polisher) = &mut self.polish {
+                polisher.stop();
+            }
             self.status = match reason {
                 StopReason::Cancelled => Status::Cancelled,
                 StopReason::TimeLimit => Status::TimeLimit,
@@ -554,7 +598,27 @@ impl Engine {
     /// g + queued h is `f`.
     fn stop_at_limit(&mut self, f: u64) {
         self.interrupted_f = Some(f);
-        self.status = self.arena.limit_status();
+        self.end(self.arena.limit_status());
+    }
+    /// Ends the search with `status`, unless the policy polishes and the
+    /// incumbent's route rebuilds: the polisher then takes the route and the
+    /// status, the arena is released so its share of the budget holds the
+    /// polisher's jobs, and the status is final once the polish ends. A
+    /// route that does not rebuild ends the search here, and
+    /// [`Self::solution`] reports the error.
+    fn end(&mut self, status: Status) {
+        if self.policy.polish
+            && let Some(id) = self.incumbent
+            && let Ok(route) = self.route_to(id)
+        {
+            let fixed = fixed_bytes(self.board.tiles().len(), self.board.labels().len());
+            let allowance = (self.arena.reserved_bytes() as u64).saturating_sub(fixed);
+            self.incumbent = None;
+            self.arena.release();
+            self.polish = Some(Polish::new(route, status, allowance));
+        } else {
+            self.status = status;
+        }
     }
     /// Hands the search to the stage ladder when the arena reached its stage
     /// point or filled, while expanding `parent`, with no route: builds the
@@ -650,7 +714,7 @@ impl Engine {
                     if !self.next_phase() {
                         // FAST: the staged route ends the search, as a
                         // solved push does.
-                        self.status = Status::Solved;
+                        self.end(Status::Solved);
                     } else if starved {
                         // FTQ, or FTQR, keeps the route but stops there.
                         self.stop_at_limit(trigger_f);
@@ -677,8 +741,9 @@ impl Engine {
         pops
     }
     /// Work is sliced by pops so a worker can yield, report, or cancel. A
-    /// pop is one queue pop, or one stage ladder unit while the ladder runs
-    /// the search; a search that hands over to the ladder returns at once.
+    /// pop is one queue pop, one stage ladder unit while the ladder runs the
+    /// search, or one polish unit once a polishing search has ended with a
+    /// route; a search that hands over to the ladder returns at once.
     /// Stale, solved and dominated pops count toward `pops` without
     /// expanding anything.
     pub(crate) fn advance(&mut self, mut pops: u32) {
@@ -709,11 +774,19 @@ impl Engine {
         //   stage point, or a full arena, hands the search to the stage
         //   ladder; a full arena may instead start it over or end it, and so
         //   may a solved push.
+        // - polish: once a polishing search has ended with a route, a pop is
+        //   one polish unit instead: starting a box's job, one of its setup
+        //   layers, or one of its pops. When a full cycle over the boxes
+        //   gains nothing, the search ends with the status it stopped on.
         if self.staging.is_some() {
             pops = self.advance_staged(pops);
             if self.status != Status::Running || self.staging.is_some() {
                 return;
             }
+        }
+        if self.polish.is_some() {
+            self.advance_polish(pops);
+            return;
         }
         for _ in 0..pops {
             let parent = match self.pop() {
@@ -734,11 +807,11 @@ impl Engine {
             // The queue emptied: every state was popped, dominated, or
             // pruned by an admissible rule. Under the exact policy that
             // makes the incumbent optimal.
-            self.status = if self.incumbent.is_some() {
+            self.end(if self.incumbent.is_some() {
                 Status::Solved
             } else {
                 Status::Exhausted
-            };
+            });
             return Popped::Stop;
         };
         let Some(parent) = Parent::of(&self.arena, key) else {
@@ -747,16 +820,16 @@ impl Engine {
         };
         let node = &parent.node;
         if self.board.solved(&node.state) {
-            if self.best_moves().is_none_or(|best| node.g < best) {
+            if self.incumbent_moves().is_none_or(|best| node.g < best) {
                 self.incumbent = Some(parent.index);
             }
             if self.policy.stop_on_goal_pop && !self.next_phase() {
-                self.status = Status::Solved;
+                self.end(Status::Solved);
                 return Popped::Stop;
             }
             return Popped::Skip;
         }
-        if self.best_moves().is_some_and(|best| {
+        if self.incumbent_moves().is_some_and(|best| {
             node.g >= best
                 || (self.policy.prune_popped_estimate
                     && node.g as u64 + parent.queued_h as u64 >= best as u64)
@@ -798,7 +871,7 @@ impl Engine {
         // only call here that changes the incumbent or the policy: it can
         // record a shorter route, or hand a solved push to a next phase and
         // still queue it.
-        let mut best = self.best_moves();
+        let mut best = self.incumbent_moves();
         let mut reopen_closed = self.policy.reopen_closed;
         for i in 0..self.board.labels().len() {
             let from = parent.node.state.boxes[i];
@@ -818,7 +891,7 @@ impl Engine {
                 };
                 match self.insert(&parent, child) {
                     Inserted::Queued => {
-                        best = self.best_moves();
+                        best = self.incumbent_moves();
                         reopen_closed = self.policy.reopen_closed;
                     }
                     // The arena was emptied but for the incumbent's path;
@@ -848,7 +921,7 @@ impl Engine {
     ) -> Option<Child> {
         debug_assert_eq!(
             (reopen_closed, best),
-            (self.policy.reopen_closed, self.best_moves())
+            (self.policy.reopen_closed, self.incumbent_moves())
         );
         push::admit(
             &mut self.parts().kernel(),
@@ -910,7 +983,7 @@ impl Engine {
             self.incumbent = Some(id);
             // A next phase takes over the rest of this expansion.
             if self.policy.stop_on_goal_push && !self.next_phase() {
-                self.status = Status::Solved;
+                self.end(Status::Solved);
                 return Inserted::Stopped;
             }
         }
@@ -933,13 +1006,29 @@ impl Engine {
         self.spend_stage();
         !goal && self.start_staging(parent)
     }
-    /// Rebuilds the incumbent's full route and replays it from the start.
-    /// Costs O(route) plus one flood per push, so call it once per improved
-    /// incumbent.
-    pub(crate) fn solution(&mut self) -> Result<Option<String>, SolutionError> {
-        let Some(id) = self.incumbent else {
-            return Ok(None);
+    /// Runs the polish one unit per pop, and once it ends gives the search
+    /// the status it ended with.
+    // Cold and out of line, as advance_staged: it runs only after a Quality
+    // search has ended.
+    #[cold]
+    #[inline(never)]
+    fn advance_polish(&mut self, pops: u32) {
+        let Some(polisher) = &mut self.polish else {
+            return;
         };
+        for _ in 0..pops {
+            if polisher.step(&self.board, &self.heuristic, &self.start, &mut self.reach) {
+                self.status = polisher.ending();
+                return;
+            }
+        }
+    }
+    /// Rebuilds the route to the solved record `id` as direction indices and
+    /// replays it from the start: it must reach its first solved state at its
+    /// last move, after exactly the record's g moves. No record on a path is
+    /// solved, since a solved state is never expanded, so only the last push
+    /// solves. Costs O(route) plus one flood per push.
+    fn route_to(&mut self, id: u32) -> Result<Vec<u8>, SolutionError> {
         let mut node = self.arena.node(id);
         let expected = node.g as usize;
         if expected > MAX_ROUTE {
@@ -958,22 +1047,37 @@ impl Engine {
             node = parent;
         }
         route.reverse();
-        let mut replay = self.start;
-        for &direction in &route {
-            if self.board.step(&mut replay, direction as usize).is_none() {
-                return Err(SolutionError::Replay);
-            }
-        }
-        if !self.board.solved(&replay) || route.len() != expected {
+        let solved_at = polish::replay(&self.board, &self.start, &route)?;
+        if solved_at != expected || route.len() != expected {
             return Err(SolutionError::Counters);
         }
-        Ok(Some(
-            route
-                .iter()
-                .map(|&direction| ACTIONS[direction as usize] as char)
-                .collect(),
-        ))
+        Ok(route)
     }
+    /// The best route as letters, replayed from the start: the polisher's
+    /// while it holds the route, otherwise the incumbent's, rebuilt. Costs
+    /// O(route), plus one flood per push for the incumbent's, so call it once
+    /// per improved route.
+    pub(crate) fn solution(&mut self) -> Result<Option<String>, SolutionError> {
+        if let Some(polisher) = &self.polish {
+            let route = polisher.route();
+            if polish::replay(&self.board, &self.start, route)? != route.len() {
+                return Err(SolutionError::Counters);
+            }
+            return Ok(Some(letters(route)));
+        }
+        let Some(id) = self.incumbent else {
+            return Ok(None);
+        };
+        self.route_to(id).map(|route| Some(letters(&route)))
+    }
+}
+
+/// A route's direction indices as `UDLR` letters.
+fn letters(route: &[u8]) -> String {
+    route
+        .iter()
+        .map(|&direction| ACTIONS[direction as usize] as char)
+        .collect()
 }
 
 #[cfg(test)]

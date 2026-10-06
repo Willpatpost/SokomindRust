@@ -11,7 +11,9 @@
 //!
 //! - [`Mode::Fast`]: weighted A* that stops at its first route.
 //! - [`Mode::Quality`]: Fast, then a lighter weight that keeps shortening
-//!   that route until nothing queued can beat it or a limit hits.
+//!   that route until nothing queued can beat it or a limit hits, then a
+//!   route polish that reschedules one box at a time around the others'
+//!   pushes (docs/route-polish.md).
 //! - [`Mode::Optimal`]: admissible A*, and the only mode that yields a
 //!   [`Proof`]: that the route is shortest, that the optimum lies between
 //!   two bounds, or that no route exists.
@@ -60,6 +62,7 @@ mod deadlock;
 mod engine;
 mod exact;
 mod heuristic;
+mod polish;
 mod proof;
 mod push;
 mod reach;
@@ -127,7 +130,13 @@ pub enum Mode {
     /// no route under a limit of 4,096 states or more runs the stage search
     /// first, and the restart keeps its route, if any, as the bound. Under a
     /// smaller limit its route never ends longer than it would without the
-    /// restart.
+    /// restart. A search that ends on its own with a route, at an empty
+    /// queue or a limit, then polishes it before its status is final: one
+    /// box at a time, it searches for a shorter schedule of that box's
+    /// pushes around the other boxes' pushes, keeping a route only when it
+    /// replays shorter, until a full pass over the boxes gains nothing
+    /// (docs/route-polish.md). The polish runs within the arena's share of
+    /// the budget, after the arena has freed its records.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes.
@@ -181,7 +190,7 @@ pub enum Status {
     /// More pops may find or improve a route.
     Running,
     /// Finished with a route: Fast at its first, Quality once its queue
-    /// empties, Optimal once it pops a solved state. Only an `Optimal`
+    /// empties and the polish ends, Optimal once it pops a solved state. Only an `Optimal`
     /// search proves the route shortest; see [`Search::proof`].
     Solved,
     /// The queue emptied without a route, or the start has no
@@ -528,7 +537,10 @@ impl Search {
     /// its table can leave linear memory up to that freed first table,
     /// 256 KiB, past this ceiling, and one that ran the stage search up to
     /// 200,000 bytes more, for the stage search's freed buffers, which the
-    /// route need not reuse. The allocator's slack comes on top: it grows
+    /// route need not reuse. A Quality search's polish frees the arena's
+    /// records, queue and table before it allocates its own buffers within
+    /// the arena's share; on wasm32 the allocator may not fit them into the
+    /// freed blocks, so linear memory can grow by up to that share again. The allocator's slack comes on top: it grows
     /// linear memory by whole requests rounded up to 64 KiB, even when the
     /// free space at the top of the heap falls just short, so each growth can
     /// leave up to 64 KiB more there, and up to one of the arena's record
@@ -541,7 +553,8 @@ impl Search {
         self.engine().stats()
     }
     /// Ends a running search with the status `reason` names; a search that
-    /// has already ended keeps its status.
+    /// has already ended keeps its status. A Quality search stopped during
+    /// its polish keeps the shortest route the polish has found so far.
     pub fn stop(&mut self, reason: StopReason) {
         self.engine_mut().stop(reason);
     }
@@ -551,14 +564,17 @@ impl Search {
     /// stale, solved and dominated pops count without expanding anything.
     /// A Fast or Quality search that reaches its stage point with no route
     /// returns as it hands over to the stage search, and while that runs, a
-    /// pop is one stage unit. Slicing the work this way lets a worker yield,
+    /// pop is one stage unit. Once a Quality search ends on its own with a
+    /// route, a pop is one unit of its polish, and the status stays
+    /// [`Status::Running`] until the polish ends. Slicing the work this way lets a worker yield,
     /// report or stop between calls.
     pub fn advance(&mut self, pops: u32) {
         self.engine_mut().advance(pops);
     }
     /// The best route found so far as `UDLR` letters, rebuilt and replayed
     /// from the start, or `None` without one. It costs O(route) plus one
-    /// flood per push, so call it once per improved route. It may be called
+    /// flood per push (only O(route) once a Quality search polishes), so
+    /// call it once per improved route. It may be called
     /// between slices of a running search: it borrows mutably only for flood
     /// scratch and leaves the search as it was.
     ///

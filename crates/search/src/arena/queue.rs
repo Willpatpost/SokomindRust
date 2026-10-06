@@ -108,6 +108,11 @@ impl Queue {
         }
         self.len = 0;
     }
+    /// Empties the queue and frees its chunks and chunk list.
+    pub(super) fn release(&mut self) {
+        self.chunks = Vec::new();
+        self.len = 0;
+    }
     #[inline]
     fn get(&self, at: usize) -> Key {
         self.chunks[at >> CHUNK_SHIFT][at & (CHUNK - 1)]

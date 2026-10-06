@@ -817,6 +817,21 @@ impl Arena {
             self.generation = self.generation.wrapping_add(1);
         }
     }
+    /// Frees every chunk, the queue and the table, for a search that is done
+    /// with its states but still reports on them, such as a route polish
+    /// that reuses the budget. The length, counters, limit and flags stay,
+    /// so afterwards only [`Arena::len`], [`Arena::counters`],
+    /// [`Arena::reserved_bytes`] and [`Arena::limit_status`] may be read.
+    pub(crate) fn release(&mut self) {
+        self.chunks = Vec::new();
+        self.queue.release();
+        self.table = Vec::new();
+        self.resident = 0;
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
     /// Empties the arena like [`Arena::clear`], except that the path from
     /// the root to `id` stays at the front, root first, as detached records:
     /// each keeps its g, h, keeper, push direction, flags and box cells, with

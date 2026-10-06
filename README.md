@@ -190,7 +190,15 @@ fill. When the Fast phase reaches its stage point with no route, the stage
 search runs first, and the restart keeps its route, if it finds one, as the
 bound. Only a full arena or the stage search's end restarts it, and at most
 once: a route that alone fills the arena ends it there instead, and a time limit
-that hits first ends Quality in whichever phase it is in.
+that hits first ends Quality in whichever phase it is in. When Quality ends on
+its own with a route, at an empty queue or a limit, it polishes the route
+before it reports (`crates/search/src/polish.rs`): one box at a time, a small
+A* keeps every other box's pushes in their order and searches for a shorter
+schedule of that box's own pushes among them, every walk as short as the boxes
+then allow. A route is kept only when it replays shorter, and the polish ends
+once a full pass over the boxes gains nothing. It runs in the arena's share of
+the budget after the arena frees its records, so the reserved bytes do not
+change; `docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -215,7 +223,8 @@ The objective is total remaining moves, not pushes. Not ported from the
 reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
-heuristic change), generators, and Quality route repair. On Grand Hall (`huge`),
+heuristic change), generators, and Quality route repair other than the box
+rescheduling that the polish ports. On Grand Hall (`huge`),
 which plain Fast and Quality do not route in 8M states even at the 1024 MiB cap
 (about 7.5 s; job 47772), the stage search finds an 812-move route (268 pushes)
 in about 0.95 s in both Fast and Quality at 64, 128 and 256 MiB on a
