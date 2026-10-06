@@ -108,7 +108,7 @@ Prefer:
 - a test or const assert for each hand-written list the compiler cannot check, such as an array of every mode, that fails when the list misses an entry;
 - doctests that must fail to compile, pinning what callers must never write.
 
-The compiler does not see copies outside Rust, such as those in `web`, the scripts, the docs, the migrations, and the deployment files. A clean build still needs the checks under Changes across mirrored layers and Native/WASM parity.
+The compiler does not see copies outside Rust, such as those in `web`, the scripts, the docs, and the deployment files. A clean build still needs the checks under Changes across mirrored layers and Native/WASM parity.
 
 Replaceable does not mean **dynamic**. Search composes concrete types and constant policy data. Add a trait, generic parameter, or `dyn` object at a component boundary only when a second real implementation exists and the seam's hot-path cost is measured.
 
