@@ -198,7 +198,9 @@ schedule of that box's own pushes among them, every walk as short as the boxes
 then allow. A route is kept only when it replays shorter. A run ends once a
 full pass over the boxes gains nothing, and where it ends depends on the order
 it visits them in, so the polish makes up to eight runs from the search's
-route, each in its own box order, and keeps the shortest. It runs in the arena's share of
+route, each in its own box order, and keeps the shortest. It then frees boxes
+in pairs, those that end nearest each other first, so two boxes can trade
+order, or goals when they share a label. It runs in the arena's share of
 the budget after the arena frees its records, so the reserved bytes do not
 change; `docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
@@ -226,7 +228,7 @@ reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
 heuristic change), generators, and Quality route repair other than the box
-rescheduling that the polish ports. On Grand Hall (`huge`),
+rescheduling and two-box repair that the polish ports. On Grand Hall (`huge`),
 which plain Fast and Quality do not route in 8M states even at the 1024 MiB cap
 (about 7.5 s; job 47772), the stage search finds an 812-move route (268 pushes)
 in about 0.95 s in both Fast and Quality at 64, 128 and 256 MiB on a
@@ -235,12 +237,15 @@ MiB up stages at the same point and generates the same states first. The
 reference's own benchmark reports about 5.3 s for 893 moves on its development
 machine (Node on Windows), so the two times come from different machines.
 Quality's search does not shorten it before its memory limit, which a larger
-budget only moves later. The polish then takes it to 475 moves (228 pushes) at
-every budget, in eight runs of about 0.2 s each after the search ends: at the
-production limits it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and
-4.7 s at 256 MiB (job 48685; `docs/route-polish.md` has the catalog-wide
-numbers). The
-sealed-corral check covers the reference's corral deadlock check, at the same
+budget only moves later. The polish then takes it to 475 moves (228 pushes), in
+eight runs of about 0.2 s each after the search ends: at the production limits
+it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and 4.7 s at 256 MiB (job
+48685). Given more time, its pair jobs take it to 458 moves at 15 s and to 436
+moves (222 pushes) at 30 s, at 64 MiB (job 48688). A larger budget ends the
+search later, and so the polish: at 5 s, 256 MiB returned 485 in job 48688,
+whose last run did not finish, and 1024 MiB returned the unpolished 812, since
+its search had not ended. `docs/route-polish.md` has the catalog-wide numbers.
+The sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:
 

@@ -4,7 +4,8 @@ Quality mode's search shortens its route by finding a better one in the arena.
 On large boards it stops short: on Grand Hall (`huge`) the staged route of 812
 moves came back from the search unchanged, because the restart's arena fills
 long before weight 3 reaches anything shorter. The polish takes it to 475
-(see Measured). Much of such a route's length is walk:
+inside the production limit of 5 s, and to 436 given about 35 s (see
+Measured). Much of such a route's length is walk:
 the keeper crosses the board to push one box a step, then crosses back. The
 polish attacks that directly. After the search, it rearranges when each box's
 pushes happen, which no arena-bound search over whole states can afford on a
@@ -29,39 +30,48 @@ keeps the shortest route found so far. A search stopped by the caller before it
 ends on its own is not polished. The caller asked for the answer now, so the
 polish does not run then.
 
-## One box's job
+## A job
 
-The polisher works on one box at a time, cycling through the slots in the
-run's order (see Runs). A job for box `b`:
+A job frees one box, or two (see Pairs), and keeps every other box's pushes.
+The runs free one box at a time, cycling through the slots in the run's order
+(see Runs). A job for the freed boxes:
 
 1. Replays the route and records every push of the other boxes as a kept event:
    the keeper's stand, the cell the box left and its new cell, and the
    direction. Let `m` be their number. The job also stores the other boxes'
-   cells after each count of events, and the cell `b` ended on, which is its
-   goal.
-2. Runs A* over nodes `(k, p, tag)`. Here `k` of the `m` kept events are done,
-   `b` stands on `p`, and the tag fixes the keeper. The keeper stands either
-   where the last kept event left it (tag 0) or behind `b` after `b`'s own push
-   in direction `tag - 1`.
+   cells after each count of events, and the cells the freed boxes ended on,
+   which are their goals.
+2. Runs A* over nodes `(k, at, tag)`. Here `k` of the `m` kept events are done,
+   the freed boxes stand on `at`, and the tag fixes the keeper. The keeper
+   stands either where the last kept event left it (tag 0) or behind a freed
+   box after that box's own push in one of four directions (tags 1 to 8).
 3. From a node, two kinds of move follow, each after the shortest walk to its
    stand with every box in place:
-   - Kept event `k`, unless it would push a box onto `p`. It costs the walk
-     plus 1.
-   - One of `b`'s own pushes, onto a cell from which `b` can still reach its
-     goal (a finite lone-box push distance). It also costs the walk plus 1.
-4. The goal node is `(m, goal)`. The bound is the current route's length, and
-   any node with `g + h` at or above it is dropped. A goal pop is therefore a
-   strictly shorter route.
+   - Kept event `k`, unless it would push a box onto a freed box. It costs the
+     walk plus 1.
+   - One of a freed box's own pushes, onto a cell from which the freed boxes
+     can still reach their goals (a finite push bound, see Heuristic). It also
+     costs the walk plus 1.
+4. The goal is `k = m` with the freed boxes on their goals. Two freed boxes of
+   one label may also end on each other's goals: either box on either goal
+   solves the board just as well. The bound is the current route's length,
+   and any node with `g + h` at or above it is dropped. A goal pop is
+   therefore a strictly shorter route.
 
 Within this model, which keeps the other boxes' pushes and their order, a job
 finds the shortest route. That route is rebuilt by re-flooding each step's
 expansion and replayed under the game rules. It is then cut at its first solved
 state, since a box can reach its goal before another box's last push. It
 replaces the route only if it is shorter. A job that finds nothing, runs out of
-queue, or cannot start (the box never moves, or the job does not fit in memory)
-gains nothing. A run ends when a full cycle of jobs, one per box, has gained
-nothing. A gain restarts that count, so a run ends only at a local optimum
-under single-box rescheduling.
+queue, or cannot start (a freed box never moves, or the job does not fit in
+memory) gains nothing. A run ends when a full cycle of single-box jobs, one per
+box, has gained nothing. A gain restarts that count, so a run ends only at a
+local optimum under single-box rescheduling.
+
+A job's nodes go in a hashed store, keyed by `k`, the freed boxes' cells and
+the tag, so a job holds only the nodes its A* reaches. A pair's node space is
+the single box's times the second box's cells, and a dense array over it would
+not fit on a large board.
 
 ## Runs
 
@@ -85,35 +95,68 @@ replaces it only when strictly shorter. It ends when every run has ended. A
 caller's stop ends it sooner and keeps the best route so far, so under a time
 limit the polish makes as many runs as fit.
 
+## Pairs
+
+Some gains need two boxes to move at once. A single-box job keeps every other
+box's pushes, and their order, so it cannot let two boxes that block each other
+trade order. It also keeps its box's goal, so two boxes of one label cannot
+trade goals. Once every run has ended, the polish frees boxes in pairs.
+
+The pair phase works on the best route any run reached. It takes every pair,
+those whose boxes end that route nearest each other first, by Manhattan
+distance, ties in slot order (`pairs`), so under a time limit the nearest
+pairs, the likeliest to block each other, go first. The phase frees them in
+that order, one pair job each, and cycles. Gains also come from pairs that end
+far apart: five of the eight pairs that shortened Grand Hall's route ranked
+beyond the nearest 16 (see Measured). A pair's node space is a single box's
+times the second box's cells, so a pair job makes at most `PAIR_POPS` (2^20)
+expansions, and gains nothing if it runs out first. Without that cap, one pair
+job on a large board could run longer than all the single-box jobs together. On
+Grand Hall no pair job reaches it. An expansion takes about a microsecond, so
+the longest pair job there took about a second.
+
+When a pair job shortens the route, every box may now be rescheduled better
+around the new one. So a full cycle of single-box jobs runs before the next
+pair, restarting on each gain, as in a run. The polish ends when a full pass
+over the pairs, with any single-box cycles a gain sets off, has gained nothing.
+
 ## Heuristic
 
-Write `D(p)` for `b`'s lone-box push distance from `p` to its goal, with the
-keeper anywhere (`Heuristic::distance`). Write `W_k(q)` for the walking
-distance from `q` to kept event `k`'s stand, with the other boxes after `k`
-events in the way but not `b`. Then let `T_k` be the sum, over the events from
-`k` on, of `W_j` from where event `j - 1` left the keeper, with `T_m = 0`. The
-job's heuristic at `(k, p)`, with the keeper on `q`, is:
+Write `d(p, g)` for the lone-box push distance from `p` to goal `g`, with the
+keeper anywhere (`Heuristic::distance`). For one freed box on `p` with goal
+`g`, let `D(at) = d(p, g)`. For two, on `p1` and `p2` with goals `g1` and `g2`,
+let `D(at) = d(p1, g1) + d(p2, g2)`, or, when they share a label, the smaller of
+that and `d(p1, g2) + d(p2, g1)`. Write `W_k(q)` for the walking distance from
+`q` to kept event `k`'s stand, with the other boxes after `k` events in the way
+but not the freed ones. Then let `T_k` be the sum, over the events from `k` on,
+of `W_j` from where event `j - 1` left the keeper, with `T_m = 0`. The job's
+heuristic at `(k, at)`, with the keeper on `q`, is:
 
 ```
-h = (m - k) + max(D(p), W_k(q) + T_{k+1})     for k < m
-h = D(p)                                      for k = m
+h = (m - k) + max(D(at), W_k(q) + T_{k+1})     for k < m
+h = D(at)                                      for k = m
 ```
 
-**Admissible.** Every remaining kept event costs at least its push, and `b`
-needs at least `D(p)` more pushes. Between kept events the keeper must get from
-where the last one left it to the next stand. Every move it makes on the way,
-walk or own push, is a step in the grid with only the other boxes as walls. So
-those moves sum to at least `W_k(q) + T_{k+1}`. Own pushes count toward both
-terms, so they combine by max, not sum.
+**Admissible.** Every remaining kept event costs at least its push. Each push
+moves one box, so the freed boxes need at least the sum of their lone-box push
+distances to the goals they end on; with a shared label they end on one of the
+two matchings, and need at least the cheaper. Between kept events the keeper
+must get from where the last one left it to the next stand. Every move it makes
+on the way, walk or own push, is a step in the grid with only the other boxes
+as walls. So those moves sum to at least `W_k(q) + T_{k+1}`. Own pushes count
+toward both terms, so they combine by max, not sum.
 
 **Consistent.** Take an own push in direction `d`, after a walk of `w` from `q`.
-`D` drops by at most 1. The new keeper cell `p` is at most `w + 1` from `q`
-with `b` ignored, so `W_k` drops by at most `w + 1` by the triangle
-inequality. Now take kept event `k` after a walk of `w`. `W_k(q) <= w`, and
-`T_{k+1}` is exactly the next node's walk term, so the bound drops by at most
-`w + 1`. Each term of the max is consistent, so the max is too. The walk
-layers ignore `b`, so they are lower bounds wherever `b` stands. The A* needs
-no reopenings, and its first goal pop is the model's shortest route.
+It moves one freed box one cell, so each matching's sum drops by at most 1,
+and so does the smaller of two sums: if the smaller sum before the push is
+`s`, both sums after it are at least `s - 1`. The new keeper cell is at most
+`w + 1` from `q` with the freed boxes ignored, so `W_k` drops by at most
+`w + 1` by the triangle inequality. Now take kept event `k` after a walk of
+`w`. `W_k(q) <= w`, and `T_{k+1}` is exactly the next node's walk term, so the
+bound drops by at most `w + 1`. Each term of the max is consistent, so the max
+is too. The walk layers ignore the freed boxes, so they are lower bounds
+wherever those stand. The A* needs no reopenings, and its first goal pop is
+the model's shortest route.
 
 ## Memory
 
@@ -121,19 +164,24 @@ The polish runs in the arena's share of the budget, the bytes
 `Arena::reserved_bytes` charges beyond `fixed_bytes`, which the arena freed
 before the polish. The seed and the best route come out of it first: each is
 at most the seed's length, so a job's allowance is that share less twice the
-seed's length. A job charges:
+seed's length, and in the pair phase less the pair list too. A job charges:
 
 - its event list;
 - the other boxes' cells per event count;
 - one `u16` walk layer per event over every cell;
 - the tails;
-- the live-cell maps;
-- one `u32` per node id, (m + 1) × live cells × 5;
-- 16 bytes per queue entry. That is an 8-byte key, doubled because a growing
-  queue briefly holds its old and new buffers.
+- the box scratch for its floods;
+- 20 bytes per node in its store: an 8-byte key, a 4-byte cost (which also
+  holds the tag of the node it was reached from, for the rebuild) and two
+  4-byte slots, since the table is a power of two at most half full. The store
+  doubles when it is half full, and its old table is still held while the new
+  one fills, which the charge counts. It stops at 2^30 nodes, the most a queue
+  key can name;
+- 8 bytes per queue entry, and the queue's old buffer too while it grows.
 
-A job that cannot hold its buffers plus `MIN_QUEUE` (1,024) entries does not
-start. A job whose queue reaches its cap ends with no gain. Every allocation
+A job that cannot hold its buffers, a store of `Nodes::MIN` (1,024) nodes and
+`MIN_QUEUE` (1,024) queue entries does not start. A job whose store or queue
+cannot grow within its allowance ends with no gain. Every allocation
 is fallible (`try_reserve`), so an allocator refusal ends the job too, never
 the process. The route, a job's found route and a solution's letters fit in
 the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). Besides the
@@ -152,7 +200,8 @@ A unit is one of:
 - one walk layer, which is one flood (layers are built from the last event
   down, so each tail adds the next);
 - queueing the root;
-- one A* pop, which is one flood and up to five relaxations;
+- one A* pop, which is one flood and up to `1 + 4 × freed` relaxations (five
+  for one freed box, nine for two);
 - the final rebuild, which is one flood per step.
 
 Every unit floods for itself, so no flood outlives a unit. Queue keys pack the
@@ -253,6 +302,40 @@ example.
   and returns its best route so far, so a slower machine gets fewer runs and
   a longer route, not a late answer.
 
+**Pairs.** Jobs 48687 and 48688, on c4-standard-32 nodes, ran throwaway
+builds that set the pair count and `PAIR_POPS` and printed each pair job
+(Quality, using the catalog example). The search before the polish is
+identical in every variant: same expanded counts, same `reserved_bytes`.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.** Against the runs alone,
+  every pair at 2^20 shortens 9 of the 50 routes, by 60 moves in all (5,242 →
+  5,182), and lengthens none. The nearest 16 pairs at 2^18 shortened 3, by 10
+  moves. 2^18 and 2^20 give the same routes here. Total Quality time rose
+  from 10.3 s to 21.4 s. The largest increases are gen-v2-370002 (+2.5 s, no
+  gain), huge (+2.3 s, no gain) and gen-v2-360372 (+1.1 s, 319 → 303). At
+  20,000 states the arena's share is small, and every pair job on huge runs
+  out of memory within 32,501 expansions.
+- **Grand Hall, 60M states and 64 MiB, no time limit.** The runs end at 475.
+  At 2^20, pair gains then take the route to 470, 468, 458, 456, 455, 451 and
+  448, and the polish ends at 436 moves (222 pushes), 35.3 s after the
+  search. The eight pairs that gained ranked 9th, 17th, 44th, 99th, 127th,
+  7th, 15th and 34th of the 136 by distance. At 2^16 the polish ends at 463,
+  at 2^18 at 457, where 29 of 235 pair jobs hit the cap. 2^22 gives the same
+  route as 2^20: no pair job reaches 2^20, and the most any took was 958,053
+  expansions, about 1.1 s.
+- **Grand Hall at the production limits** (60M states, 64 MiB, two samples
+  each). Every pair at 2^20 returns 475 at 5 s, since the first pair gain
+  comes later, 458 at 15 s and 436 at 30 s. The nearest 16 at 2^18 ended at
+  471 about 6.1 s in.
+- **Larger budgets.** At 5 s the routes are 485 at 256 MiB, where the search
+  ends late enough that only 7 runs finish, and 812 at 1024 MiB, where the
+  search has not ended by 5 s, so nothing is polished (see When it runs).
+  Pairs do not change these.
+
+So the pair phase takes every pair, with `PAIR_POPS` at 2^20: no pair job on
+Grand Hall reaches it, and the catalog's routes and time are the same as at
+2^18.
+
 ## Left out, for now
 
 These come from the reference's Quality route repair, or were considered here:
@@ -260,17 +343,17 @@ These come from the reference's Quality route repair, or were considered here:
 - **Polishing earlier.** Polishing the first route as soon as Fast finds it,
   or polishing when a time limit stops the search. The second needs the
   caller to leave time for it, and transports do not decide search behavior.
-  Polishing during the search needs memory beside a live arena. Both are
-  candidates once the single-box polish is measured.
+  Polishing during the search needs memory beside a live arena.
 - **An h1-only fallback** (push distance only, with no walk layers) for jobs
   whose layers do not fit. It is weaker, and is worth adding only if
   measurement shows jobs being skipped at the budgets that matter.
 - **Window rewrite**: re-searching short windows of the route with every box
-  free. It catches what single-box rescheduling cannot: two boxes that must
-  trade order. In the reference it gained nothing on Grand Hall once
-  rescheduling had run.
-- **Two-box rescheduling and goal swaps** within a label group: moves that
-  single-box rescheduling cannot reach, since each job keeps its box's goal.
+  free. Where a job frees one or two boxes over the whole route, a window
+  frees every box over a short stretch of it. In the reference it gained
+  nothing on Grand Hall once rescheduling had run.
+- **Goal swaps beyond a pair.** A pair job lets its two boxes trade goals
+  when they share a label, but a box never takes a goal held by a box the job
+  keeps. A three-box or label-wide reassignment would need a larger job.
 - **Diverse seeds**: polishing several first routes and keeping the best. In
   the reference, the choice of seed alone moved Grand Hall between 476 and 509
   moves. Runs vary the box order instead, on the one route the search has.
