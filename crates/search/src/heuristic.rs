@@ -2,8 +2,9 @@
 //! boxes to that label's goals over reverse-push distances. Each distance
 //! ignores every other box, so the bound is admissible in moves. With keeper
 //! sides it counts the pushes a lone box needs from its cell with the keeper
-//! on its current side; without, from its cell with the keeper anywhere. It
-//! is incremental: a push re-solves only the pushed box's group, and a group
+//! on its current side, each with the walk its stand forces (see
+//! `charges`); without, the pushes from its cell with the keeper anywhere.
+//! It is incremental: a push re-solves only the pushed box's group, and a group
 //! of `REPAIR_CROSSOVER` or more boxes repairs the parent's duals with one
 //! augment instead of solving from scratch.
 use crate::reach::Blocks;
@@ -22,13 +23,16 @@ type Spot = u16;
 const _: () = assert!(SIDES * MAX_CELLS <= NONE as usize);
 
 const INF: i32 = 1_000_000;
+/// The largest push distance. An uncharged distance counts pushes between
+/// distinct spots, so it never exceeds this; a charged one is capped here,
+/// which keeps it a lower bound that drops by no more per push.
+const MAX_DISTANCE: u16 = (SIDES * MAX_CELLS - 1) as u16;
 // INF exceeds every finite matching, and a full row of INF costs cannot
-// overflow i32. A push distance counts steps between distinct spots, so it
-// stays below SIDES * MAX_CELLS, and a dual repair's augmenting path can
-// cost one row more than a full matching, so MAX_BOXES + 1 rows of the
-// largest distance stay below INF.
+// overflow i32. A dual repair's augmenting path can cost one row more than
+// a full matching, so MAX_BOXES + 1 rows of the largest distance stay below
+// INF.
 const _: () = assert!(
-    (MAX_BOXES + 1) * SIDES * MAX_CELLS < INF as usize
+    (MAX_BOXES + 1) * (MAX_DISTANCE as usize) < INF as usize
         && (MAX_BOXES as i64 + 1) * (INF as i64) <= i32::MAX as i64
 );
 // Duals indices and group_of group indices fit a byte.
@@ -74,6 +78,11 @@ struct KeeperSides {
     /// makes the estimate `None`. On every side of a cell it holds the
     /// cell's `dead` bits, and maybe more.
     dead_spots: Vec<u32>,
+    /// Per cell, the walk a keeper there makes before it stands where a box
+    /// can: see `charges`.
+    charge: Vec<u8>,
+    /// The largest charge.
+    most: u32,
 }
 /// A label group's boxes are indices `start..start + len`. Goal columns
 /// follow the same order, so the group's goals are the same column range.
@@ -134,88 +143,145 @@ impl ParentGroup {
     };
 }
 
-/// Reverse-push distances, spot-major per goal column: the fewest pushes a
-/// lone box needs from each spot, `NONE` when unreachable. Between two
-/// pushes of a box the keeper only walks around it, so it stays on one side
-/// of the box, and it can push the box only from a stand on that side. So
-/// with `blocks`, a push in direction `d` from `from` to `to` moves the box
-/// from the spot of `from` on the side holding the stand to the spot of
-/// `to` on the side holding `from`, and a goal cell is 0 on every side.
-/// Without, the keeper may stand anywhere, and a spot is a cell.
+/// The push that leaves a box on `cell`, with the keeper on `side` of it,
+/// moved opposite to direction `d`: the spot the box came from and the
+/// stand the keeper pushed from, or `None` when there is no such push. The
+/// box came from `previous`, pushed by a keeper that started on the stand
+/// past `previous` and ended on `previous`, so on the side of `cell`
+/// holding `previous`. Without `blocks` a spot is a cell and `side` is 0.
+#[inline]
+fn reverse_push(
+    neighbors: &[[Cell; 4]],
+    blocks: Option<&Blocks>,
+    cell: usize,
+    side: usize,
+    d: usize,
+) -> Option<(Spot, Cell)> {
+    let previous = neighbors[cell][d];
+    if previous == NONE || neighbors[previous as usize][d] == NONE {
+        return None;
+    }
+    let stand = neighbors[previous as usize][d];
+    let before = match blocks {
+        None => previous,
+        Some(blocks) if usize::from(blocks.toward(cell as Cell, d)) == side => {
+            (previous as usize * SIDES + usize::from(blocks.toward(previous, d))) as Spot
+        }
+        Some(_) => return None,
+    };
+    Some((before, stand))
+}
+
+/// Reverse-push distances, spot-major per goal column: the least cost of
+/// the pushes a lone box needs from each spot, `NONE` when unreachable.
+/// Between two pushes of a box the keeper only walks around it, so it stays
+/// on one side of the box, and it can push the box only from a stand on
+/// that side. So with keeper sides, a push in direction `d` from `from` to
+/// `to` moves the box from the spot of `from` on the side holding the stand
+/// to the spot of `to` on the side holding `from`, and a goal cell is 0 on
+/// every side; a push costs one plus its stand's charge (see `charges`),
+/// and a distance is capped at `MAX_DISTANCE`. Without, the keeper may
+/// stand anywhere, a spot is a cell, and a push costs one.
 ///
 /// Other boxes keep their spots through a push: the keeper moves from the
 /// stand to `from`, neighbors and neither one their cell. So such a push
-/// gives d(before) <= d(after) + 1 for the pushed box's spots and leaves
-/// every other box's entries as they were. An entry drops by at most one
-/// per push, though it may rise by any amount or become `NONE`, and walks
-/// change no spot. A min-cost matching over such entries therefore drops by
-/// at most one per move: consistent in moves.
-fn push_distances(board: &Board, blocks: Option<&Blocks>, columns: &[(Cell, u8)]) -> Vec<u16> {
+/// gives d(before) <= d(after) + its cost for the pushed box's spots and
+/// leaves every other box's entries as they were. An entry drops by at most
+/// a push's cost per push, though it may rise by any amount or become
+/// `NONE`, and walks change no spot. A min-cost matching over such entries,
+/// less the keeper's charge, therefore drops by at most one per move: a
+/// walk changes the charge by at most one, and a push ends with the keeper
+/// on its box's old cell, where a box can stand, so at charge 0. That is
+/// consistent in moves, and without keeper sides every charge is 0.
+fn push_distances(
+    board: &Board,
+    sides: Option<(&Blocks, &[u8])>,
+    columns: &[(Cell, u8)],
+) -> Vec<u16> {
     let neighbors = board.neighbors();
     let goals = columns.len();
-    let stride = if blocks.is_some() { SIDES } else { 1 };
+    let stride = if sides.is_some() { SIDES } else { 1 };
+    let blocks = sides.map(|(blocks, _)| blocks);
+    let cost = |stand: Cell| 1 + sides.map_or(0, |(_, charge)| usize::from(charge[stand as usize]));
+    let most = sides.map_or(0, |(_, charge)| charge.iter().copied().max().unwrap_or(0));
     let mut distances = vec![NONE; neighbors.len() * stride * goals];
-    let mut queue: Vec<Spot> = Vec::with_capacity(neighbors.len() * stride);
+    // Dial's buckets, reused for every column: a push costs 1 to
+    // 1 + `most`, so the spots waiting at once span fewer distances than
+    // there are buckets. Spots in one bucket share a distance, so their
+    // order does not matter.
+    let mut buckets: Vec<Vec<Spot>> = vec![Vec::new(); usize::from(most) + 2];
     for (column, &(goal, _)) in columns.iter().enumerate() {
         let at = |spot: Spot| spot as usize * goals + column;
-        queue.clear();
         for side in 0..stride {
             let spot = (goal as usize * stride + side) as Spot;
             distances[at(spot)] = 0;
-            queue.push(spot);
+            buckets[0].push(spot);
         }
-        let mut head = 0;
-        while head < queue.len() {
-            let spot = queue[head];
-            head += 1;
-            let (cell, side) = (spot as usize / stride, spot as usize % stride);
-            // The box came from `previous`, pushed opposite to `d` by a
-            // keeper that started on the stand past `previous` and ended on
-            // `previous`, so on the side of `cell` holding `previous`.
-            for (d, &previous) in neighbors[cell].iter().enumerate() {
-                if previous == NONE || neighbors[previous as usize][d] == NONE {
+        let mut waiting = stride;
+        let mut distance = 0;
+        while waiting > 0 {
+            let bucket = distance % buckets.len();
+            while let Some(spot) = buckets[bucket].pop() {
+                waiting -= 1;
+                // Queued again since at a lower distance.
+                if usize::from(distances[at(spot)]) != distance {
                     continue;
                 }
-                let before = match blocks {
-                    None => previous,
-                    Some(blocks) if usize::from(blocks.toward(cell as Cell, d)) == side => {
-                        let stand = blocks.toward(previous, d);
-                        (previous as usize * SIDES + usize::from(stand)) as Spot
+                let (cell, side) = (spot as usize / stride, spot as usize % stride);
+                for d in 0..OPPOSITE.len() {
+                    let Some((before, stand)) = reverse_push(neighbors, blocks, cell, side, d)
+                    else {
+                        continue;
+                    };
+                    // Never below `distance`: a capped one may join the
+                    // bucket this loop is still draining.
+                    let next = (distance + cost(stand)).min(usize::from(MAX_DISTANCE)) as u16;
+                    if next < distances[at(before)] {
+                        distances[at(before)] = next;
+                        buckets[usize::from(next) % buckets.len()].push(before);
+                        waiting += 1;
                     }
-                    Some(_) => continue,
-                };
-                if distances[at(before)] == NONE {
-                    distances[at(before)] = distances[at(spot)] + 1;
-                    queue.push(before);
                 }
             }
+            distance += 1;
         }
     }
     distances
 }
 
-/// Per cell, bit `g` clear when a lone box of group `g` reaches one of the
-/// group's goals by pushes, wherever the keeper may stand: the reverse-push
-/// flood from the group's goals that ignores sides. Deadlock, corral and
-/// stage checks read it with no keeper side at hand.
-fn dead_cells(board: &Board, groups: &[Group], columns: &[(Cell, u8)]) -> Vec<u32> {
+/// Per spot, bit `g` clear when a lone box of group `g` reaches one of the
+/// group's goals by pushes: the reverse-push flood from the group's goals,
+/// over the spots of `push_distances`. Every other bit stays set, those of
+/// groups the board lacks too. Without `blocks` a spot is a cell and the
+/// keeper may stand anywhere: deadlock, corral and stage checks read that
+/// table with no keeper side at hand.
+fn dead_masks(
+    board: &Board,
+    blocks: Option<&Blocks>,
+    groups: &[Group],
+    columns: &[(Cell, u8)],
+) -> Vec<u32> {
     let neighbors = board.neighbors();
-    let mut dead = vec![u32::MAX; neighbors.len()];
+    let stride = if blocks.is_some() { SIDES } else { 1 };
+    let mut dead = vec![u32::MAX; neighbors.len() * stride];
     let mut stack = Vec::new();
     for (g, group) in groups.iter().enumerate() {
         let bit = 1u32 << g;
         for &(goal, _) in &columns[group.range()] {
-            dead[goal as usize] &= !bit;
-            stack.push(goal);
+            for side in 0..stride {
+                let spot = goal as usize * stride + side;
+                dead[spot] &= !bit;
+                stack.push(spot);
+            }
         }
-        while let Some(cell) = stack.pop() {
-            for (d, &previous) in neighbors[cell as usize].iter().enumerate() {
-                if previous != NONE
-                    && neighbors[previous as usize][d] != NONE
-                    && dead[previous as usize] & bit != 0
+        while let Some(spot) = stack.pop() {
+            let (cell, side) = (spot / stride, spot % stride);
+            for d in 0..OPPOSITE.len() {
+                if let Some((before, _)) = reverse_push(neighbors, blocks, cell, side, d)
+                    && dead[before as usize] & bit != 0
                 {
-                    dead[previous as usize] &= !bit;
-                    stack.push(previous);
+                    dead[before as usize] &= !bit;
+                    stack.push(before as usize);
                 }
             }
         }
@@ -223,22 +289,65 @@ fn dead_cells(board: &Board, groups: &[Group], columns: &[(Cell, u8)]) -> Vec<u3
     dead
 }
 
+/// Per cell, the fewest steps from it to a cell a box can stand on: one
+/// with a spot in `dead_spots` that is live for some group. No state on a
+/// route has a box anywhere else, since its estimate would be `None`, and a
+/// push leaves the keeper on the cell its box left. So the keeper enters
+/// any other cell only by walking, and before it pushes from stand `s` it
+/// walks at least `charge(s)` steps since it last stood where a box can.
+/// Those walks are disjoint for distinct pushes, as every push ends where a
+/// box can stand. Capped at `u8::MAX`, and 0 where no such cell is
+/// reachable: still a lower bound, and changed by at most one per step.
+fn charges(board: &Board, dead_spots: &[u32]) -> Vec<u8> {
+    let neighbors = board.neighbors();
+    let mut steps = vec![u32::MAX; neighbors.len()];
+    let mut queue: Vec<Cell> = Vec::with_capacity(neighbors.len());
+    for (cell, masks) in dead_spots.chunks_exact(SIDES).enumerate() {
+        if masks.iter().any(|&mask| mask != u32::MAX) {
+            steps[cell] = 0;
+            queue.push(cell as Cell);
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let cell = queue[head] as usize;
+        head += 1;
+        for &next in &neighbors[cell] {
+            if next != NONE && steps[next as usize] == u32::MAX {
+                steps[next as usize] = steps[cell] + 1;
+                queue.push(next);
+            }
+        }
+    }
+    steps
+        .iter()
+        .map(|&steps| match steps {
+            u32::MAX => 0,
+            steps => steps.min(u8::MAX.into()) as u8,
+        })
+        .collect()
+}
+
 impl Heuristic {
     /// The cell's dead mask and one u16 push distance per goal column; there
-    /// is one goal per box. With keeper sides, the sides, and per side a dead
-    /// mask and the distances.
+    /// is one goal per box. With keeper sides, the sides, the charge, and per
+    /// side a dead mask and the distances.
     pub(crate) const fn bytes_per_cell(boxes: usize, keeper_sides: bool) -> usize {
         let distances = boxes * size_of::<u16>();
         if keeper_sides {
-            Blocks::bytes_for(1) + size_of::<u32>() + SIDES * (size_of::<u32>() + distances)
+            Blocks::bytes_for(1)
+                + size_of::<u32>()
+                + size_of::<u8>()
+                + SIDES * (size_of::<u32>() + distances)
         } else {
             size_of::<u32>() + distances
         }
     }
     /// The estimator over the reverse-push distance table, so its estimates
-    /// are admissible and consistent, with or without keeper sides. It
-    /// counts them given `keeper`, the start keeper's cell, which every
-    /// estimated state's keeper shares a floor component with.
+    /// less the keeper's [`charge`](Self::charge) are admissible and
+    /// consistent, with or without keeper sides. It counts them given
+    /// `keeper`, the start keeper's cell, which every estimated state's
+    /// keeper shares a floor component with.
     pub(crate) fn new(board: &Board, keeper: Option<Cell>) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
@@ -267,23 +376,25 @@ impl Heuristic {
             Blocks::build(board, player, &mut stack, &mut low, &mut next)
                 .expect("the heuristic's keeper sides")
         });
-        let distances = push_distances(board, blocks.as_ref(), &columns);
-        let keeper = blocks.map(|blocks| KeeperSides {
-            blocks,
-            dead_spots: distances
-                .chunks_exact(goals)
-                .map(|row| {
-                    groups
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, group)| {
-                            row[group.range()].iter().all(|&distance| distance == NONE)
-                        })
-                        .fold(0, |mask, (g, _)| mask | (1u32 << g))
-                })
-                .collect(),
+        let keeper = blocks.map(|blocks| {
+            let dead_spots = dead_masks(board, Some(&blocks), &groups, &columns);
+            let charge = charges(board, &dead_spots);
+            let most = charge.iter().copied().max().map_or(0, u32::from);
+            KeeperSides {
+                blocks,
+                dead_spots,
+                charge,
+                most,
+            }
         });
-        let dead = dead_cells(board, &groups, &columns);
+        let distances = push_distances(
+            board,
+            keeper
+                .as_ref()
+                .map(|keeper| (&keeper.blocks, &keeper.charge[..])),
+            &columns,
+        );
+        let dead = dead_masks(board, None, &groups, &columns);
         Self {
             distances,
             keeper,
@@ -345,6 +456,23 @@ impl Heuristic {
         }
     }
 
+    /// The walk a keeper on `cell` makes before it stands where a box can,
+    /// which the estimate counts toward the next push from there (see
+    /// `charges`); 0 without keeper sides, and on every cell a push leaves
+    /// the keeper on.
+    #[inline]
+    pub(crate) fn charge(&self, cell: Cell) -> u32 {
+        match &self.keeper {
+            Some(keeper) => keeper.charge[cell as usize].into(),
+            None => 0,
+        }
+    }
+
+    /// The largest [`charge`](Self::charge) of any cell.
+    pub(crate) fn most_charge(&self) -> u32 {
+        self.keeper.as_ref().map_or(0, |keeper| keeper.most)
+    }
+
     /// Box `i`'s label group as a range of box slots: `i` and every box
     /// interchangeable with it, the run of equal labels that
     /// [`canonicalize`](crate::push::canonicalize) sorts.
@@ -366,7 +494,9 @@ impl Heuristic {
     }
 
     /// Minimum-cost label-compatible matching over relaxed push distances.
-    /// Admissible for total moves: the relaxation removes every other box.
+    /// Less the keeper's [`charge`](Self::charge), admissible for total
+    /// moves: the relaxation removes every other box. That charge is 0 in
+    /// every state a push leaves, which is every queued state but the root.
     /// It is the sum of independent per-group optima, `None` when some group
     /// has no perfect matching over reachable goals.
     pub(crate) fn estimate(&self, state: &State) -> Option<u32> {
@@ -449,10 +579,10 @@ impl Heuristic {
     ///
     /// The path ends at its first step when the row's least reduced cost is
     /// on its own column, the only free one. That holds whenever the push
-    /// took the box one closer to its matched goal: no distance drops by
-    /// more than one per push, so no other reduced cost falls below the
-    /// row's old potential less one. Then the cost follows from the duals,
-    /// with no copy, augment or rescan.
+    /// took the box along a cheapest path to its matched goal: no distance
+    /// drops by more than the push's cost, so no other reduced cost falls
+    /// below the row's old potential less that cost. Then the cost follows
+    /// from the duals, with no copy, augment or rescan.
     fn repair(
         &self,
         group: &Group,
@@ -743,10 +873,21 @@ mod tests {
     /// so `dead` marks them dead for every group where the probe leaves them
     /// out, and no caller asks about a wall. `goal_cells` lists, per column
     /// `t`, a goal of box `t`'s label, each goal once. Neither depends on
-    /// keeper sides.
+    /// keeper sides. With them, each spot's dead mask marks exactly the
+    /// groups whose goals are all `NONE` from it, so `dead_after` prunes no
+    /// child the estimate keeps.
     #[test]
     fn dead_matches_pull() {
         for (id, board) in catalog() {
+            let sides = Heuristic::new(&board, Some(board.initial().player));
+            let keeper = sides.keeper.as_ref().unwrap();
+            for (spot, row) in sides.distances.chunks_exact(sides.goals).enumerate() {
+                for (g, group) in sides.groups.iter().enumerate() {
+                    let unreachable = row[group.range()].iter().all(|&d| d == NONE);
+                    let dead = (keeper.dead_spots[spot] >> g) & 1 != 0;
+                    assert_eq!(dead, unreachable, "{id}: group {g} at spot {spot}");
+                }
+            }
             let heuristic = Heuristic::new(&board, None);
             let labels = board.labels();
             let goal_cells = heuristic.goal_cells();
@@ -777,7 +918,8 @@ mod tests {
     }
 
     /// The arena accounts exactly the distance table and the dead masks,
-    /// plus with keeper sides the per-spot dead masks and the blocks.
+    /// plus with keeper sides the per-spot dead masks, the charges and the
+    /// blocks.
     #[test]
     fn bytes_per_cell_matches_the_tables() {
         let board = Board::parse(WIDE).unwrap();
@@ -785,7 +927,9 @@ mod tests {
         for keeper in [None, Some(board.initial().player)] {
             let h = Heuristic::new(&board, keeper);
             let sides = h.keeper.as_ref().map_or(0, |keeper| {
-                keeper.dead_spots.len() * size_of::<u32>() + keeper.blocks.heap_bytes()
+                keeper.dead_spots.len() * size_of::<u32>()
+                    + keeper.charge.len() * size_of::<u8>()
+                    + keeper.blocks.heap_bytes()
             });
             assert_eq!(
                 h.distances.len() * size_of::<u16>() + h.dead.len() * size_of::<u32>() + sides,
@@ -816,8 +960,9 @@ mod tests {
 
     /// Against exact remaining moves from every primitive state of each
     /// catalog board small enough to enumerate, with keeper sides and
-    /// without: the estimate is admissible, `None` only where no solution
-    /// exists, and consistent: a move lowers it by at most one.
+    /// without: the estimate less the keeper's charge is admissible, `None`
+    /// only where no solution exists, and consistent: a move lowers it by at
+    /// most one.
     #[test]
     fn heuristic_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
@@ -826,7 +971,10 @@ mod tests {
                 let heuristic = Heuristic::new(board, keeper);
                 let estimates: Vec<_> = states
                     .iter()
-                    .map(|state| heuristic.estimate(state))
+                    .map(|state| {
+                        let h = heuristic.estimate(state)?;
+                        Some(h.saturating_sub(heuristic.charge(state.player)))
+                    })
                     .collect();
                 for (from, state) in states.iter().enumerate() {
                     let h = estimates[from];

@@ -1523,7 +1523,7 @@ mod tests {
     /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
     /// where the next state would double the table, and 11,177,698 at
     /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
-    /// bytes, or 11,167,263 past the larger tables of keeper sides. Every
+    /// bytes, or 11,167,215 past the larger tables of keeper sides. Every
     /// budget is sized without allocating, through
     /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
     /// millions of the four-record chunks unit tests use.
@@ -1534,7 +1534,7 @@ mod tests {
             (MAX_CELLS, 1, false, 33_554_431),
             (4, MAX_BOXES, false, 11_181_644),
             (MAX_CELLS, MAX_BOXES, false, 11_177_698),
-            (MAX_CELLS, MAX_BOXES, true, 11_167_263),
+            (MAX_CELLS, MAX_BOXES, true, 11_167_215),
         ];
         let top = *MEMORY_MIB_RANGE.end();
         for (cells, boxes, sides, fits) in shapes {
