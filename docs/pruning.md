@@ -128,10 +128,11 @@ freeze uses it too.
   Optimal anyway, because it raises the lower bounds of the cases it does not
   prove, and at larger limits it proves more (below).
 
-Job 48564 (rev `40265c2` against the same tree with the check off in Optimal
-only, three alternating rounds on one c4-standard-32 node) measured what
-Optimal loses without it. Every proof agreed and Fast and Quality were
-identical.
+Job 48564 measured what Optimal loses without it: the tree against itself
+with the check off in Optimal only, three alternating rounds on one
+c4-standard-32 node. That tree also warm-started the assignment, which
+changes no search decision and was later dropped (README lists it among the
+rejected approaches). Every proof agreed and Fast and Quality were identical.
 
 - At 20k states and 64 MiB (the benchmark's limits) it proves the same 23
   cases, 15% faster, but 15 lower bounds fall: large from 84 to 73, the
