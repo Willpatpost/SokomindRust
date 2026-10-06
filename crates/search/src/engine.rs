@@ -1060,7 +1060,7 @@ impl Engine {
     /// per improved route.
     pub(crate) fn solution(&mut self) -> Result<Option<String>, SolutionError> {
         if let Some(polisher) = &self.polish {
-            let route = polisher.route();
+            let route = polisher.best();
             if polish::replay(&self.board, &self.start, route)? != route.len() {
                 return Err(SolutionError::Counters);
             }

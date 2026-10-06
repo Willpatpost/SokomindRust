@@ -107,7 +107,7 @@ impl Polish {
     pub(crate) fn moves(&self) -> u32 {
         self.best.len() as u32
     }
-    pub(crate) fn route(&self) -> &[u8] {
+    pub(crate) fn best(&self) -> &[u8] {
         &self.best
     }
     /// The status the search ended with before polishing.
