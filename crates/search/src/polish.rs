@@ -374,9 +374,9 @@ impl Job {
                 return Progress::Failed;
             }
         }
-        for d in 0..4 {
+        for (d, &opposite) in OPPOSITE.iter().enumerate() {
             let to = board.neighbors()[p as usize][d];
-            let stand = board.neighbors()[p as usize][OPPOSITE[d]];
+            let stand = board.neighbors()[p as usize][opposite];
             if to == NONE || stand == NONE || self.live_of[to as usize] == NONE || reach.blocked(to)
             {
                 continue;
