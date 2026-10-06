@@ -230,7 +230,7 @@ fn hash(player: Cell, boxes: &[Cell]) -> u64 {
 /// half, so every bit of `x` reaches both the low bits [`home`] takes and
 /// the top bits [`tag`] takes.
 #[inline]
-fn mix(x: u64) -> u64 {
+pub(crate) fn mix(x: u64) -> u64 {
     let m = x.wrapping_mul(0x9e3779b97f4a7c15);
     m ^ (m >> 32)
 }
