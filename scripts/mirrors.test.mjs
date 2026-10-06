@@ -741,6 +741,14 @@ test("the README quotes stage.rs's FILL_MIB, within which the benchmark gate and
   assert.ok(read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: [\d_]+, memoryMiB: (\d+),/) <= fill);
 });
 
+test("parity.mjs's stage cases run at the server's default budget, above FILL_MIB, as the README says", () => {
+  const stage = read('scripts/parity.mjs', /const STAGE_MIB = (\d+);/);
+  assert.equal(stage, read('crates/server/src/solve.rs', /const DEFAULT_MEMORY_MIB: usize = (\d+);/));
+  assert.equal(read('README.md', /Two Fast cases at the server's default (\d+) MiB/), stage);
+  const fill = read('crates/search/src/stage.rs', /pub\(crate\) const FILL_MIB: usize = (\d+);/);
+  assert.ok(stage > fill, `STAGE_MIB ${stage} must exceed FILL_MIB ${fill}, or the ladder starts only at a full arena`);
+});
+
 test("the README and parity.mjs's comment quote the memory-fill case's allowance past reserved_bytes", () => {
   const allowance = read('scripts/parity.mjs', /const fillCap = fill\.metrics\.reservedBytes \+ (\d+) \* MIB;/);
   assert.equal(read('README.md', /memory ceiling plus (\d+) MiB/), allowance);

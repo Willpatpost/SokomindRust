@@ -542,9 +542,13 @@ timings; `npm run bench:update` rewrites the baseline after review.
 catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each
 native run (status, counters, bounds, proof, diagnostics, and route) and replays
-each route. Two last cases, each in a fresh WASM instance, check that a
-search's memory grows with its use, not its budget, and that one that fills its
-arena grows by at most its memory ceiling plus 2 MiB.
+each route. Two Fast cases at the server's default 128 MiB, each in a fresh WASM
+instance, check the same against native runs of their own, where the stage
+ladder starts before the arena fills: on gen-v2-340048-b5d312a6 it gives up and
+the plain search starts over, and on `huge` it finds Fast's route. Two last
+cases, each in a fresh WASM instance, check that a search's memory grows with
+its use, not its budget, and that one that fills its arena grows by at most its
+memory ceiling plus 2 MiB.
 `bench:observe` runs four hard catalog boards in every mode at a fixed 1,000,000
 states and 64 MiB, three times each: an observation size, recorded in
 `benchmarks/observe-reference.json` and far below the state cap so a run stays

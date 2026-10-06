@@ -1,11 +1,13 @@
 // Checks the WASM build in web/wasm against the native corpus: each catalog
 // search must match its native record's status, counters, bound, proof,
 // diagnostics and route and stay within its memory budget, and each route must
-// replay to a solved board. Two last cases, each in a fresh instance, check that
-// a search's arena grows with its use, not its budget, and that one that fills
-// its arena grows memory by at most its memory ceiling plus 2 MiB. npm run
-// test:parity builds the WASM first; CI and validate run this file with --native
-// after their one WASM build.
+// replay to a solved board. Two Fast cases at the server's default budget, each
+// in a fresh instance, check the same against a native run of their own where
+// the stage ladder starts before the arena fills. Two last cases, each in a fresh
+// instance, check that a search's arena grows with its use, not its budget, and
+// that one that fills its arena grows memory by at most its memory ceiling plus
+// 2 MiB. npm run test:parity builds the WASM first; CI and validate run this file
+// with --native after their one WASM build.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -63,7 +65,14 @@ const puzzles = new Map(catalog.map(puzzle => [puzzle.id, puzzle.rows.join('\n')
 /** Pops per advance(). parity sets no deadline, so any batch size gives the same records. */
 const POPS_PER_ADVANCE = 8;
 let verified = 0;
-for (const reference of native) {
+/**
+ * Runs the search a native record describes to its end with one WASM instance's bindings, and
+ * checks it against that record: status, counters, bound, proof, budget, diagnostics and route,
+ * and that the route replays to a solved board.
+ * @param {import('./corpus.mjs').CorpusRecord} reference
+ * @param {{ WasmSearch: any, WasmGame: any }} instance
+ */
+function check(reference, { WasmSearch, WasmGame }) {
   const rows = puzzles.get(reference.id);
   const context = `${reference.id}/${reference.mode}`;
   const search = new WasmSearch(rows, '', reference.mode, reference.max_states, reference.memory_mib);
@@ -118,6 +127,7 @@ for (const reference of native) {
     search.free();
   }
 }
+for (const reference of native) check(reference, { WasmSearch, WasmGame });
 
 /**
  * Runs one catalog puzzle in optimal mode at the full state cap to its end, solved or not, in a fresh
@@ -146,6 +156,26 @@ const mib = bytes => (bytes / MIB).toFixed(2);
 
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
 console.log(`WASM retained linear memory: ${mib(wasm.memory.buffer.byteLength)} MiB (one reused test instance, not per-worker RSS).`);
+
+// Above stage.rs's FILL_MIB, Fast stages when its arena holds what FILL_MIB
+// would hold, before it fills, which no corpus case reaches. At STAGE_MIB, the
+// server's default budget, and the state cap, the ladder gives up there on
+// gen-v2-340048-b5d312a6 and the plain search starts over to the full arena
+// (resume_unstaged), and on huge it finds Fast's route. A change that routes the
+// first or loses the second needs another board to keep that path covered.
+const STAGE_MIB = 128;
+for (const [id, status] of [
+  ['gen-v2-340048-b5d312a6', 'memory_limit'],
+  ['huge', 'solved'],
+]) {
+  const limits = ['--states', `${MAX_STATES}`, '--memory', `${STAGE_MIB}`];
+  const [reference] = nativeCorpus(['--puzzle', id, '--mode', 'fast', ...limits]);
+  console.log(`parity stage: ${id}/fast ${STAGE_MIB} MiB status=${reference.status} generated=${reference.generated}`);
+  assert.equal(reference.status, status, `parity stage: ${id}/fast`);
+  const fresh = await import(`${bindings}?stage-${id}`);
+  await fresh.default({ module_or_path: wasmBytes });
+  check(reference, fresh);
+}
 
 // Ultra-tiny at the full state cap and the web's default 64 MiB budget holds
 // 2,097,151 states: the arena grows only the records, queue and table it fills,
