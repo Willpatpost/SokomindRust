@@ -17,7 +17,7 @@
 //! it: nothing here reads the policy or the incumbent or touches the queue,
 //! only the bound, the reopen flag and the weight each call passes in.
 use crate::{
-    arena::{Arena, Key, Node},
+    arena::{Arena, Key, Node, Slot},
     corral::Corral,
     deadlock::{ALL_BOXES, Deadlock},
     heuristic::{Heuristic, ParentGroup},
@@ -136,7 +136,7 @@ pub(crate) struct Child {
     /// Its estimate in full; `node.h` holds it only while it fits.
     pub(crate) h: u32,
     /// The table slot [`Arena::find`] returned for its state.
-    pub(crate) slot: usize,
+    pub(crate) slot: Slot,
 }
 
 impl Child {
