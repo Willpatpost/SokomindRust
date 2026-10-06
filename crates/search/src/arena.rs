@@ -215,28 +215,34 @@ impl Key {
 const _: () = assert!(MAX_QUEUED_H <= Key::H_SAT);
 const _: () = assert!(size_of::<Key>() == 8);
 
-/// A state's hash, from which [`home`] and [`tag`] are taken.
+/// A state's hash, from which [`home`] and [`tag`] are taken: the sum of
+/// one [`mix`] for the keeper and one per box, of its index and cell. The
+/// mixes do not depend on one another, so the boxes hash in parallel, not
+/// as one chain of dependent multiplies.
 fn hash(player: Cell, boxes: &[Cell]) -> u64 {
-    let mut h = (player as u64).wrapping_add(0x9e3779b97f4a7c15);
-    for &cell in boxes {
-        h ^= cell as u64;
-        h = h.wrapping_mul(0x100000001b3);
-        h ^= h >> 29;
+    let mut h = mix(u64::from(player));
+    for (i, &cell) in boxes.iter().enumerate() {
+        h = h.wrapping_add(mix(((i as u64 + 1) << 32) | u64::from(cell)));
     }
-    h ^ (h >> 32)
+    h
+}
+/// Multiplicative hashing with the product's top half folded into its low
+/// half, so every bit of `x` reaches both the low bits [`home`] takes and
+/// the top bits [`tag`] takes.
+#[inline]
+fn mix(x: u64) -> u64 {
+    let m = x.wrapping_mul(0x9e3779b97f4a7c15);
+    m ^ (m >> 32)
 }
 /// The first slot probed for hash `h` in a table of `mask + 1` slots.
 #[inline]
 fn home(h: u64, mask: usize) -> usize {
     h as usize & mask
 }
-/// Hash `h`'s tag, already shifted into a slot's top [`TAG_BITS`]. The top
-/// bits of `h` itself barely depend on the last box, whose cell reaches
-/// them only through carries, so the tag takes the top bits of `h` times
-/// an odd constant, which depend on every bit of `h`.
+/// Hash `h`'s tag, already shifted into a slot's top [`TAG_BITS`].
 #[inline]
 fn tag(h: u64) -> u32 {
-    ((h.wrapping_mul(0x9e3779b97f4a7c15) >> (u64::BITS - TAG_BITS)) as u32) << ID_BITS
+    ((h >> (u64::BITS - TAG_BITS)) as u32) << ID_BITS
 }
 
 /// Where [`Arena::find`] stopped for a state: the table slot that holds its
