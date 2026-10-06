@@ -235,10 +235,11 @@ MiB up stages at the same point and generates the same states first. The
 reference's own benchmark reports about 5.3 s for 893 moves on its development
 machine (Node on Windows), so the two times come from different machines.
 Quality's search does not shorten it before its memory limit, which a larger
-budget only moves later. The polish then takes it to 485 moves (226 pushes) at
-every budget, about 0.3 s after the search ends: at the production limits it
-returns at about 2.0 s at 64 MiB, 2.65 s at 128 MiB and 4.1 s at 256 MiB (job
-48673; `docs/route-polish.md` has the catalog-wide numbers). The
+budget only moves later. The polish then takes it to 475 moves (228 pushes) at
+every budget, in eight runs of about 0.2 s each after the search ends: at the
+production limits it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and
+4.7 s at 256 MiB (job 48685; `docs/route-polish.md` has the catalog-wide
+numbers). The
 sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:

@@ -3,7 +3,7 @@
 Quality mode's search shortens its route by finding a better one in the arena.
 On large boards it stops short: on Grand Hall (`huge`) the staged route of 812
 moves came back from the search unchanged, because the restart's arena fills
-long before weight 3 reaches anything shorter. The polish takes it to 485
+long before weight 3 reaches anything shorter. The polish takes it to 475
 (see Measured). Much of such a route's length is walk:
 the keeper crosses the board to push one box a step, then crosses back. The
 polish attacks that directly. After the search, it rearranges when each box's
@@ -67,8 +67,9 @@ under single-box rescheduling.
 
 Where a run ends depends on the order it visits the boxes in. Each job
 reschedules its box around the route the earlier jobs left, so another order
-takes another path, to another local optimum. On Grand Hall, 119 box orders
-took the same 812-move route to anything from 462 to 547 moves (see Measured).
+takes another path, to another local optimum. On Grand Hall, its 272 box
+orders take the same 812-move route to anything from 458 to 557 moves (see
+Measured).
 
 So the polish makes several runs. Each starts from the route the search handed
 over, the seed, and visits the slots in its own order: a first slot and a
@@ -168,8 +169,8 @@ identical. The base run's moves and time are the route and time before the
 polish.
 
 - **Catalog, at the gate's 20,000 states and 64 MiB.**
-  - 22 of the 57 Quality routes are shorter. None is longer, and the other 35
-    are unchanged.
+  - 50 of the 57 puzzles have a Quality route at these limits. 22 of those
+    routes are shorter, none is longer, and the other 28 are unchanged.
   - The largest gains:
     - huge: 812 → 485;
     - gen-v2-370002: 491 → 377;
@@ -180,15 +181,17 @@ polish.
     increases are gen-v2-370002 (+0.34 s) and huge (+0.29 s).
   - Push counts move both ways (huge 268 → 226, gen-v2-350108-80cb 99 → 103).
     The objective is moves, so a job may trade a push for a shorter walk.
-- **Grand Hall.** The route is 485 moves (226 pushes) at every budget
-  measured:
+- **Grand Hall.** A single run (the polish before restarts) ends at 485 moves
+  (226 pushes) at every budget measured:
   - 20,000 and 1,000,000 states at 64 MiB;
   - the production limits (60M states, 5 s) at 64, 128 and 256 MiB.
-- **Timing at the production limits.**
+- **Timing at the production limits, one run.**
   - The search ends at its memory limit at about 1.7, 2.3 and 3.9 s.
   - The polish ends about 0.3 s later, at 2.0, 2.65 and 4.13 s, inside the
     5 s limit.
   - `reserved_bytes` is identical with and without the polish.
+
+Eight runs take Grand Hall to 475 (see Runs).
 
 485 is a local optimum under single-box rescheduling. The reference's
 rescheduler alone took its Grand Hall route from 789 to 503 moves. Its best
@@ -206,6 +209,49 @@ same build polished three of the reference's routes as seeds, in 34 orders
 each: its 503-move route reached 497 in every order, its 626-move route 465 to
 509, and its 893-move route 472 to 551. This spread is why the polish makes
 several runs (see Runs).
+
+**Runs.** Job 48684, on a c4-standard-32 node, ran every box order through a
+throwaway build that lifted the run cap and printed each run's end (Quality, no
+time limit). Every run starts from the same seed and is deterministic, so the
+best of the first K runs of one uncapped polish is what a cap of K returns.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.** The 50 routes total
+  5,358 moves after one run, 5,284 after 4, 5,242 after 8, 5,221 after 16 and
+  5,170 after every order (up to 342 runs). Eight runs shorten 15 routes, by
+  116 moves in all; every order shortens the same 15, by 188. The polish time,
+  summed over the 50, grows from 0.73 s for one run to 5.5 s for 8, 10.8 s for
+  16 and 126 s for every order.
+- **Grand Hall, 60M states and 64 MiB, all 272 orders.** The best route is 485
+  moves after 1 to 4 runs, 484 after 6, 475 after 8 to 64, 462 after 128 and
+  458 after all 272 (run 197: first slot 12, stride 6). A run takes about
+  0.24 s, and the median run ends at 502.
+- **Grand Hall at the production limits** (60M states, 5 s, three samples at
+  each budget). The 5 s limit left room for 17 runs at 64 MiB, 15 at 128 MiB
+  and 10 at 256 MiB, and every sample reached 475 moves (228 pushes) at its
+  eighth run.
+
+So `RUNS` is 8: about 60% of the all-orders catalog gain for 7.5 times one
+run's time, and 475 on Grand Hall at every production budget, where the next
+gain needs 128 runs.
+
+**Eight runs against one.** Job 48685, on a c4-standard-32 node, compares
+1413d43 (one run) with b1d0636 (eight), in Quality mode, using the catalog
+example.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.** 15 routes are shorter,
+  none is longer, and the other 35 are unchanged. Total Quality time rose from
+  7.32 s to 12.14 s (+66%). The largest increases are huge (+1.6 s, 485 →
+  475), gen-v2-370002 (+1.6 s, 377 → 362) and open-field (+0.5 s, no gain).
+- **Grand Hall.** 475 moves (228 pushes) at 20,000 and 1,000,000 states and at
+  the production limits, two samples at each budget. The search before the
+  polish is identical: same expanded and generated counts, same
+  `reserved_bytes`.
+- **Timing at the production limits.** With one run the polish returned at
+  about 1.6, 2.1 and 3.1 s at 64, 128 and 256 MiB. With eight it returns at
+  about 3.2, 3.7 and 4.7 s, inside the 5 s limit, and a run with no time
+  limit ends at the same point. A time limit stops the polish between units
+  and returns its best route so far, so a slower machine gets fewer runs and
+  a longer route, not a late answer.
 
 ## Left out, for now
 
