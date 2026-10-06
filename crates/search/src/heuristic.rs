@@ -262,7 +262,7 @@ impl Heuristic {
         let cost = if group.len < REPAIR_CROSSOVER {
             self.solve(group, cells)?.0
         } else {
-            self.repair(group, cells, i - group.start, &cache.duals)?
+            self.repair(group, cells, i - group.start, cache)?
         };
         Some(parent_h - cache.cost + cost)
     }
@@ -284,20 +284,46 @@ impl Heuristic {
         Some((self.matched_cost(group, cells, &duals)?, duals))
     }
 
-    /// One-row repair of a parent's optimal `duals` after only 0-based `row`
-    /// moved, to `cells[row]`. Freeing the row's column and zeroing its
+    /// One-row repair of the parent's optimal solution after only 0-based
+    /// `row` moved, to `cells[row]`. Freeing the row's column and zeroing its
     /// potential keeps the duals feasible (every `v <= 0 <= cost`), so one
     /// augmenting path from that row restores an optimal matching; a missing
     /// finite column proves no matching exists.
-    fn repair(&self, group: &Group, cells: &[Cell], row: usize, duals: &Duals) -> Option<u32> {
-        let mut state = *duals;
+    ///
+    /// The path ends at its first step when the row's least reduced cost is
+    /// on its own column, the only free one. That holds whenever the push
+    /// took the box one closer to its matched goal: no distance drops by
+    /// more than one per push, so no other reduced cost falls below the
+    /// row's old potential less one. Then the cost follows from the duals,
+    /// with no copy, augment or rescan.
+    fn repair(
+        &self,
+        group: &Group,
+        cells: &[Cell],
+        row: usize,
+        parent: &ParentGroup,
+    ) -> Option<u32> {
+        let duals = &parent.duals;
         let row = row + 1;
-        state.u[row] = 0;
-        for p in &mut state.p[1..=group.len] {
-            if *p as usize == row {
-                *p = 0;
-            }
+        let column = (1..=group.len)
+            .find(|&j| duals.p[j] as usize == row)
+            .expect("the parent's matching is complete");
+        let distances = self.goal_distances(group, cells[row - 1]);
+        let reduced = |j: usize| cost(distances[j - 1]) - duals.v[j];
+        let own = reduced(column);
+        if (1..=group.len).all(|j| reduced(j) >= own) {
+            // Raising the row's potential to `own` keeps the duals feasible
+            // and makes its edge to `column` tight, so the parent's matching
+            // is optimal again. Only that edge's cost changed: it was
+            // u[row] + v[column], tight in the parent, and is now
+            // own + v[column]. It is at most the total, so an unreachable
+            // goal still lands the total at INF or more.
+            let total = parent.cost as i32 - duals.u[row] + own;
+            return (total < INF).then_some(total as u32);
         }
+        let mut state = *duals;
+        state.u[row] = 0;
+        state.p[column] = 0;
         if !self.augment(group, cells, row, &mut state) {
             return None;
         }

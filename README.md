@@ -137,8 +137,9 @@ again), an arena-index transposition table, reusable flood buffers, reverse-push
 distances, and a minimum-cost assignment per box label
 (only the pushed box's label group is re-scored per child: a lookup for one box,
 a re-solve for two, and a one-row dual repair of the parent's duals for groups
-of 3 or more; pushes onto a cell with no reachable goal of the box's label are
-dropped before the estimate).
+of 3 or more, read straight off the duals with no augmenting path when the push
+brings the box closer to its matched goal; pushes onto a cell with no reachable
+goal of the box's label are dropped before the estimate).
 Each edge is one push plus a shortest walk to its stand, the cell behind the
 box. Keeper position remains part of state identity. Walks are reconstructed
 only for reported routes.
