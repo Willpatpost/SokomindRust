@@ -318,7 +318,7 @@ mod tests {
     impl Owned {
         fn new(board: &Board) -> Self {
             let cells = board.tiles().len();
-            let heuristic = Heuristic::new(board);
+            let heuristic = Heuristic::new(board, false);
             let mut scratch = Scratch::new(cells).expect("stage scratch");
             let player = board.initial().player;
             let built = Facts::build(board, &heuristic, player, &mut scratch);

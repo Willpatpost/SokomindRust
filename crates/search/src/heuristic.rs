@@ -1,16 +1,18 @@
 //! Lower bound on the moves left: per label, a minimum-cost matching of the
 //! boxes to that label's goals over reverse-push distances. Each distance
-//! ignores every other box but counts the pushes a lone box needs from its
-//! cell with the keeper on its current side, so the bound is admissible in
-//! moves. It is incremental: a push re-solves only the pushed box's group,
-//! and a group of `REPAIR_CROSSOVER` or more boxes repairs the parent's duals
-//! with one augment instead of solving from scratch.
+//! ignores every other box, so the bound is admissible in moves. With keeper
+//! sides it counts the pushes a lone box needs from its cell with the keeper
+//! on its current side; without, from its cell with the keeper anywhere. It
+//! is incremental: a push re-solves only the pushed box's group, and a group
+//! of `REPAIR_CROSSOVER` or more boxes repairs the parent's duals with one
+//! augment instead of solving from scratch.
 use crate::sides::{SIDES, Sides};
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, OPPOSITE, State};
 use std::{mem::size_of, ops::Range};
 
-/// A box's cell and the side of it the keeper is on, as
-/// `cell * SIDES + side`: what a box's push distances depend on.
+/// What a box's push distances depend on: with keeper sides, its cell and
+/// the side of it the keeper is on, as `cell * SIDES + side`; without, its
+/// cell.
 type Spot = u16;
 // Every spot fits below the NONE sentinel.
 const _: () = assert!(SIDES * MAX_CELLS <= NONE as usize);
@@ -42,8 +44,8 @@ pub(crate) struct Heuristic {
     /// Spot-major push distances: `distances[spot * goals + goal]` is the
     /// distance from `spot` to goal column `goal`, `NONE` when unreachable.
     distances: Vec<u16>,
-    /// Which side of each cell the keeper is on.
-    sides: Sides,
+    /// The keeper sides, when the estimate counts them.
+    keeper: Option<KeeperSides>,
     goals: usize,
     /// Each goal column's cell, `NONE` past the last column.
     goal_cells: [Cell; MAX_BOXES],
@@ -56,6 +58,12 @@ pub(crate) struct Heuristic {
     /// before each push: a box of that label there makes every estimate
     /// `None`.
     dead: Vec<u32>,
+}
+/// What the estimate needs to tell a box's sides apart. Exact search counts
+/// them; the weighted policies do not (see `Policy::keeper_sides`).
+struct KeeperSides {
+    /// Which side of each cell the keeper is on.
+    sides: Sides,
     /// Per spot, bit `g` set when its distance to every goal of group `g`
     /// is `NONE`: a box of that label there, with the keeper on that side,
     /// makes the estimate `None`. On every side of a cell it holds the
@@ -125,9 +133,10 @@ impl ParentGroup {
 /// lone box needs from each spot, `NONE` when unreachable. Between two
 /// pushes of a box the keeper only walks around it, so it stays on one side
 /// of the box, and it can push the box only from a stand on that side. So
-/// a push in direction `d` from `from` to `to` moves the box from the spot
-/// of `from` on the side holding the stand to the spot of `to` on the side
-/// holding `from`, and a goal cell is 0 on every side.
+/// with `sides`, a push in direction `d` from `from` to `to` moves the box
+/// from the spot of `from` on the side holding the stand to the spot of
+/// `to` on the side holding `from`, and a goal cell is 0 on every side.
+/// Without, the keeper may stand anywhere, and a spot is a cell.
 ///
 /// Other boxes keep their spots through a push: the keeper moves from the
 /// stand to `from`, neighbors and neither one their cell. So such a push
@@ -136,16 +145,17 @@ impl ParentGroup {
 /// per push, though it may rise by any amount or become `NONE`, and walks
 /// change no spot. A min-cost matching over such entries therefore drops by
 /// at most one per move: consistent in moves.
-fn push_distances(board: &Board, sides: &Sides, columns: &[(Cell, u8)]) -> Vec<u16> {
+fn push_distances(board: &Board, sides: Option<&Sides>, columns: &[(Cell, u8)]) -> Vec<u16> {
     let neighbors = board.neighbors();
     let goals = columns.len();
-    let mut distances = vec![NONE; neighbors.len() * SIDES * goals];
-    let mut queue: Vec<Spot> = Vec::with_capacity(neighbors.len() * SIDES);
+    let stride = if sides.is_some() { SIDES } else { 1 };
+    let mut distances = vec![NONE; neighbors.len() * stride * goals];
+    let mut queue: Vec<Spot> = Vec::with_capacity(neighbors.len() * stride);
     for (column, &(goal, _)) in columns.iter().enumerate() {
         let at = |spot: Spot| spot as usize * goals + column;
         queue.clear();
-        for side in 0..SIDES {
-            let spot = (goal as usize * SIDES + side) as Spot;
+        for side in 0..stride {
+            let spot = (goal as usize * stride + side) as Spot;
             distances[at(spot)] = 0;
             queue.push(spot);
         }
@@ -153,18 +163,21 @@ fn push_distances(board: &Board, sides: &Sides, columns: &[(Cell, u8)]) -> Vec<u
         while head < queue.len() {
             let spot = queue[head];
             head += 1;
-            let (cell, side) = (spot / SIDES as Spot, spot as usize % SIDES);
+            let (cell, side) = (spot as usize / stride, spot as usize % stride);
             // The box came from `previous`, pushed opposite to `d` by a
             // keeper that started on the stand past `previous` and ended on
             // `previous`, so on the side of `cell` holding `previous`.
-            for (d, &previous) in neighbors[cell as usize].iter().enumerate() {
-                if previous == NONE
-                    || sides.toward(cell, d) != side
-                    || neighbors[previous as usize][d] == NONE
-                {
+            for (d, &previous) in neighbors[cell].iter().enumerate() {
+                if previous == NONE || neighbors[previous as usize][d] == NONE {
                     continue;
                 }
-                let before = (previous as usize * SIDES + sides.toward(previous, d)) as Spot;
+                let before = match sides {
+                    None => previous,
+                    Some(sides) if sides.toward(cell as Cell, d) == side => {
+                        (previous as usize * SIDES + sides.toward(previous, d)) as Spot
+                    }
+                    Some(_) => continue,
+                };
                 if distances[at(before)] == NONE {
                     distances[at(before)] = distances[at(spot)] + 1;
                     queue.push(before);
@@ -205,16 +218,20 @@ fn dead_cells(board: &Board, groups: &[Group], columns: &[(Cell, u8)]) -> Vec<u3
 }
 
 impl Heuristic {
-    /// The sides, the cell's dead mask, and per side a dead mask and one
-    /// u16 push distance per goal column; there is one goal per box.
-    pub(crate) const fn bytes_per_cell(boxes: usize) -> usize {
-        Sides::BYTES_PER_CELL
-            + size_of::<u32>()
-            + SIDES * (size_of::<u32>() + boxes * size_of::<u16>())
+    /// The cell's dead mask and one u16 push distance per goal column; there
+    /// is one goal per box. With keeper sides, the sides, and per side a dead
+    /// mask and the distances.
+    pub(crate) const fn bytes_per_cell(boxes: usize, keeper_sides: bool) -> usize {
+        let distances = boxes * size_of::<u16>();
+        if keeper_sides {
+            Sides::BYTES_PER_CELL + size_of::<u32>() + SIDES * (size_of::<u32>() + distances)
+        } else {
+            size_of::<u32>() + distances
+        }
     }
     /// The estimator over the reverse-push distance table, so its estimates
-    /// are admissible and consistent.
-    pub(crate) fn new(board: &Board) -> Self {
+    /// are admissible and consistent, with or without keeper sides.
+    pub(crate) fn new(board: &Board, keeper_sides: bool) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
@@ -235,30 +252,32 @@ impl Heuristic {
         for (slot, &(cell, _)) in goal_cells.iter_mut().zip(&columns) {
             *slot = cell;
         }
-        let sides = Sides::new(board);
-        let distances = push_distances(board, &sides, &columns);
-        let dead_spots = distances
-            .chunks_exact(goals)
-            .map(|row| {
-                groups
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, group)| {
-                        row[group.range()].iter().all(|&distance| distance == NONE)
-                    })
-                    .fold(0, |mask, (g, _)| mask | (1u32 << g))
-            })
-            .collect();
+        let sides = keeper_sides.then(|| Sides::new(board));
+        let distances = push_distances(board, sides.as_ref(), &columns);
+        let keeper = sides.map(|sides| KeeperSides {
+            sides,
+            dead_spots: distances
+                .chunks_exact(goals)
+                .map(|row| {
+                    groups
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, group)| {
+                            row[group.range()].iter().all(|&distance| distance == NONE)
+                        })
+                        .fold(0, |mask, (g, _)| mask | (1u32 << g))
+                })
+                .collect(),
+        });
         let dead = dead_cells(board, &groups, &columns);
         Self {
             distances,
-            sides,
+            keeper,
             goals,
             goal_cells,
             groups,
             group_of,
             dead,
-            dead_spots,
         }
     }
 
@@ -272,21 +291,32 @@ impl Heuristic {
 
     /// Whether box `i`, pushed in direction `d` onto `to`, has no reachable
     /// goal of its label from there: then `child_estimate` of that push
-    /// returns `None`. It holds wherever `dead(i, to)` does, and also where
-    /// every goal needs a push from a side the keeper can no longer reach.
+    /// returns `None`. It holds wherever `dead(i, to)` does, and with keeper
+    /// sides also where every goal needs a push from a side the keeper can
+    /// no longer reach.
     pub(crate) fn dead_after(&self, i: usize, to: Cell, d: usize) -> bool {
-        (self.dead_spots[self.pushed(to, d) as usize] >> self.group_of[i]) & 1 != 0
+        let mask = match &self.keeper {
+            Some(keeper) => keeper.dead_spots[self.pushed(to, d) as usize],
+            None => self.dead[to as usize],
+        };
+        (mask >> self.group_of[i]) & 1 != 0
     }
 
-    /// The spot of a box on `cell` with the keeper on `keeper`.
-    fn spot(&self, cell: Cell, keeper: Cell) -> Spot {
-        (cell as usize * SIDES + self.sides.holding(cell, keeper)) as Spot
+    /// The spot of a box on `cell` with the keeper on `player`.
+    fn spot(&self, cell: Cell, player: Cell) -> Spot {
+        match &self.keeper {
+            Some(keeper) => (cell as usize * SIDES + keeper.sides.holding(cell, player)) as Spot,
+            None => cell,
+        }
     }
 
     /// The spot of a box pushed in direction `d` onto `to`: the keeper is on
     /// the cell it came from.
     fn pushed(&self, to: Cell, d: usize) -> Spot {
-        (to as usize * SIDES + self.sides.toward(to, OPPOSITE[d])) as Spot
+        match &self.keeper {
+            Some(keeper) => (to as usize * SIDES + keeper.sides.toward(to, OPPOSITE[d])) as Spot,
+            None => to,
+        }
     }
 
     /// Box `i`'s label group as a range of box slots: `i` and every box
@@ -560,13 +590,31 @@ mod tests {
         Board::parse(&text.join("\n")).unwrap()
     }
 
-    /// Walks `steps` random feasible states of `board`, restarting every 25.
-    /// Makes every push the keeper can reach, box-major with one cache per
-    /// parent as the engine does, and checks the incremental child estimate
-    /// against a fresh one. Tallies `[feasible, infeasible]` per path:
-    /// singleton, re-solve, dual repair.
+    /// Walks `steps` random feasible states of `board`, restarting every 25,
+    /// once without keeper sides and once with. Makes every push the keeper
+    /// can reach, box-major with one cache per parent as the engine does,
+    /// and checks the incremental child estimate against a fresh one.
+    /// Tallies `[feasible, infeasible]` per path: singleton, re-solve, dual
+    /// repair.
     fn walk(board: &Board, steps: usize, rng: &mut Lcg, counts: &mut [[u32; 2]; 3]) {
-        let heuristic = Heuristic::new(board);
+        for keeper_sides in [false, true] {
+            walk_with(
+                &Heuristic::new(board, keeper_sides),
+                board,
+                steps,
+                rng,
+                counts,
+            );
+        }
+    }
+
+    fn walk_with(
+        heuristic: &Heuristic,
+        board: &Board,
+        steps: usize,
+        rng: &mut Lcg,
+        counts: &mut [[u32; 2]; 3],
+    ) {
         let boxes = board.labels().len();
         let neighbors = board.neighbors();
         let mut reach = Reach::new(neighbors.len());
@@ -656,7 +704,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(board.labels(), [b'A', b'B']);
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let at = |x: usize, y: usize| (y * board.width() + x) as Cell;
         let (a, b) = (0, 1);
         // A corner is dead for every label.
@@ -675,11 +723,12 @@ mod tests {
     /// Walls differ only in representation: the flood never reaches them,
     /// so `dead` marks them dead for every group where the probe leaves them
     /// out, and no caller asks about a wall. `goal_cells` lists, per column
-    /// `t`, a goal of box `t`'s label, each goal once.
+    /// `t`, a goal of box `t`'s label, each goal once. Neither depends on
+    /// keeper sides.
     #[test]
     fn dead_matches_pull() {
         for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board);
+            let heuristic = Heuristic::new(&board, false);
             let labels = board.labels();
             let goal_cells = heuristic.goal_cells();
             assert_eq!(goal_cells.len(), labels.len(), "{id}");
@@ -708,19 +757,22 @@ mod tests {
         }
     }
 
-    /// The arena accounts exactly the distance table, both dead masks and
-    /// the sides, which check their own share.
+    /// The arena accounts exactly the distance table and the dead masks,
+    /// plus with keeper sides the sides, which check their own share.
     #[test]
     fn bytes_per_cell_matches_the_tables() {
         let board = Board::parse(WIDE).unwrap();
-        let h = Heuristic::new(&board);
         let cells = board.tiles().len();
-        assert_eq!(
-            h.distances.len() * size_of::<u16>()
-                + (h.dead.len() + h.dead_spots.len()) * size_of::<u32>()
-                + cells * Sides::BYTES_PER_CELL,
-            cells * Heuristic::bytes_per_cell(board.labels().len())
-        );
+        for keeper_sides in [false, true] {
+            let h = Heuristic::new(&board, keeper_sides);
+            let keeper = h.keeper.as_ref().map_or(0, |keeper| {
+                keeper.dead_spots.len() * size_of::<u32>() + cells * Sides::BYTES_PER_CELL
+            });
+            assert_eq!(
+                h.distances.len() * size_of::<u16>() + h.dead.len() * size_of::<u32>() + keeper,
+                cells * Heuristic::bytes_per_cell(board.labels().len(), keeper_sides)
+            );
+        }
     }
 
     /// The incremental child estimate equals a fresh estimate for label
@@ -744,34 +796,38 @@ mod tests {
     }
 
     /// Against exact remaining moves from every primitive state of each
-    /// catalog board small enough to enumerate: the estimate is admissible,
-    /// `None` only where no solution exists, and consistent: a move lowers
-    /// it by at most one.
+    /// catalog board small enough to enumerate, with keeper sides and
+    /// without: the estimate is admissible, `None` only where no solution
+    /// exists, and consistent: a move lowers it by at most one.
     #[test]
     fn heuristic_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
             let exact = remaining(board, states, edges);
-            let heuristic = Heuristic::new(board);
-            let estimates: Vec<_> = states
-                .iter()
-                .map(|state| heuristic.estimate(state))
-                .collect();
-            for (from, state) in states.iter().enumerate() {
-                let h = estimates[from];
-                match h {
-                    Some(h) => {
-                        assert!(h <= exact[from], "{id}: {h} > {} at {state:?}", exact[from])
+            for keeper_sides in [false, true] {
+                let heuristic = Heuristic::new(board, keeper_sides);
+                let estimates: Vec<_> = states
+                    .iter()
+                    .map(|state| heuristic.estimate(state))
+                    .collect();
+                for (from, state) in states.iter().enumerate() {
+                    let h = estimates[from];
+                    match h {
+                        Some(h) => {
+                            assert!(h <= exact[from], "{id}: {h} > {} at {state:?}", exact[from])
+                        }
+                        None => {
+                            assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}")
+                        }
                     }
-                    None => assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}"),
-                }
-                for &(to, _) in &edges[from] {
-                    let Some(next) = estimates[to] else {
-                        continue;
-                    };
-                    assert!(
-                        h.is_some_and(|h| h <= next + 1),
-                        "{id}: {h:?} then {next} at {state:?}"
-                    );
+                    for &(to, _) in &edges[from] {
+                        let Some(next) = estimates[to] else {
+                            continue;
+                        };
+                        assert!(
+                            h.is_some_and(|h| h <= next + 1),
+                            "{id}: {h:?} then {next} at {state:?}"
+                        );
+                    }
                 }
             }
         }

@@ -327,7 +327,7 @@ mod tests {
         let d = at(&board, 2, 1);
         let a = at(&board, 2, 3);
         assert_eq!(board.initial().boxes[..2], [a, at(&board, 1, 1)]);
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let mut deadlock = Deadlock::new(&board);
         // Before D reaches its goal, pushing A left is merely a legal retreat.
         deadlock.refresh(&board.initial().boxes[..board.labels().len()]);
@@ -369,7 +369,7 @@ mod tests {
         // One box against the wall can still be pushed along it, but the
         // whole row is dead for A, so the dead-pair case flags it, a push
         // admit's dead-cell check already prunes.
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         assert!(heuristic.dead(0, at(&board, 1, 2)));
         assert!(deadlock.is_dead_after_push(&board, &heuristic, ALL_BOXES, a, at(&board, 1, 2)));
         // The second box freezes both against the wall.
@@ -386,7 +386,7 @@ mod tests {
         let lower = at(&board, 3, 2);
         let below = at(&board, 3, 3);
         assert_eq!(board.initial().boxes[..2], [upper, lower]);
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[upper, lower]);
         // The first push of the 4-move solution.
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(board.initial().boxes[..3], [a, b, c]);
         let left = at(&board, 3, 4);
         // B's destination is not a dead cell, so only the freeze prunes it.
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         assert!(!heuristic.dead(1, left));
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[a, b, c]);
@@ -419,7 +419,7 @@ mod tests {
         let d = at(&board, 3, 5);
         let boxes = [at(&board, 2, 3), at(&board, 2, 4), at(&board, 3, 3), d];
         assert_eq!(board.initial().boxes[..4], boxes);
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&boxes);
         // Each box has a frozen neighbor across both of its axes.
@@ -433,7 +433,7 @@ mod tests {
         let board = Board::parse(WALL_SQUARE).unwrap();
         let (a, b) = (at(&board, 4, 3), at(&board, 2, 3));
         assert_eq!(board.initial().boxes[..2], [a, b]);
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[a, b]);
         // A wall blocks each box's row, and each blocks the other's column.
@@ -450,7 +450,7 @@ mod tests {
         let board = Board::parse(GOAL_SQUARE).unwrap();
         let (a, b, c) = (at(&board, 2, 3), at(&board, 2, 4), at(&board, 3, 3));
         let (from, to) = (at(&board, 3, 5), at(&board, 3, 4));
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let mut deadlock = Deadlock::new(&board);
         deadlock.refresh(&[a, b, c, from]);
         assert!(!deadlock.is_dead_after_push(&board, &heuristic, ALL_BOXES, from, to));
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn dead_pair_axis_freezes() {
         let board = Board::parse(DEAD_PAIR).unwrap();
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let (a, from, to) = (at(&board, 1, 3), at(&board, 3, 3), at(&board, 2, 3));
         // Admit's dead-cell check passes the push; both row neighbors are dead.
         assert!(!heuristic.dead(1, to));
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn dead_pair_holds_the_partner() {
         let board = Board::parse(DEAD_PAIR_PARTNER).unwrap();
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, false);
         let (a, b, up) = (at(&board, 2, 4), at(&board, 4, 4), at(&board, 3, 4));
         assert_eq!(board.initial().boxes[..2], [a, b]);
         assert!(!heuristic.dead(1, up));
@@ -497,7 +497,7 @@ mod tests {
         for _ in 0..150 {
             let rows = random_room(&mut rng);
             let board = Board::parse(&rows).unwrap();
-            let heuristic = Heuristic::new(&board);
+            let heuristic = Heuristic::new(&board, false);
             let solvable = solvable_states(&board);
             let boxes = board.labels().len();
             let mut deadlock = Deadlock::new(&board);
@@ -548,7 +548,7 @@ mod tests {
     fn flagged_catalog_pushes_leave_no_solution() {
         let (mut flagged, mut from_solvable) = (0, 0);
         for (id, board, states, edges) in explored_catalog() {
-            let heuristic = Heuristic::new(board);
+            let heuristic = Heuristic::new(board, false);
             let left = remaining(board, states, edges);
             let boxes = board.labels().len();
             let mut deadlock = Deadlock::new(board);
@@ -593,7 +593,7 @@ mod tests {
     fn lone_box_shortcut_matches_the_fixpoint() {
         let (mut lone, mut lone_flags, mut grouped) = (0, 0, 0);
         for (id, board, states, edges) in explored_catalog() {
-            let heuristic = Heuristic::new(board);
+            let heuristic = Heuristic::new(board, false);
             let boxes = board.labels().len();
             let mut deadlock = Deadlock::new(board);
             for (s, out) in edges.iter().enumerate() {

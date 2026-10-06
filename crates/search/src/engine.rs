@@ -48,6 +48,13 @@ pub(crate) struct Policy {
     /// only: the ladder ends at its first route, so it needs
     /// stop_on_goal_push.
     stage: bool,
+    /// Whether the estimate counts the pushes a box needs with the keeper
+    /// on its current side ([`Heuristic`]), at more table bytes per cell.
+    /// It raises the exact search's bounds, but misleads the weighted
+    /// searches: under the 2026-10-06 A/B, huge's stage ladder found no
+    /// route at any limit from 8,192 to 128,000 states. The heuristic is
+    /// built once per search, so a search keeps its root policy's value.
+    keeper_sides: bool,
 }
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
@@ -60,6 +67,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        keeper_sides: true,
     };
     /// First route wins, with no bound on its length. Fast never proves.
     /// When the search reaches its stage point with no route, the stage
@@ -79,6 +87,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: true,
+        keeper_sides: false,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits.
     pub(crate) const QUALITY: Self = Self {
@@ -90,6 +99,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        keeper_sides: false,
     };
     /// Exactly [`Self::FAST`] until its first route, then [`Self::QUALITY`]
     /// in the same arena. The incumbent only improves, so the result is never
@@ -168,7 +178,8 @@ const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // spent, so a search stages at most once. The ladder's end hands over to a
 // `then` or `restart` target, resumes the root policy, or ends the search.
 // A search resumes at most once (FAST or FTQ after a ladder that gave up
-// below the limit) and restarts at most once.
+// below the limit) and restarts at most once. A search keeps its heuristic
+// through every switch, so its targets count keeper sides as it does.
 const _: () = {
     let all = Policy::ALL;
     let mut i = 0;
@@ -177,10 +188,10 @@ const _: () = {
         assert!(listed(p.then) && listed(p.restart));
         if let Some(next) = p.restart {
             assert!(next.then.is_none() && next.restart.is_none());
-            assert!(!next.stage);
+            assert!(!next.stage && next.keeper_sides == p.keeper_sides);
         }
         if let Some(next) = p.then {
-            assert!(!next.stage);
+            assert!(!next.stage && next.keeper_sides == p.keeper_sides);
         }
         if p.stage {
             assert!(p.stop_on_goal_push && p.weight > 1);
@@ -230,6 +241,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 then,
                 restart,
                 stage,
+                keeper_sides,
             } = *a;
             weight == b.weight
                 && stop_on_goal_pop == b.stop_on_goal_pop
@@ -239,6 +251,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 && same(then, b.then)
                 && same(restart, b.restart)
                 && stage == b.stage
+                && keeper_sides == b.keeper_sides
         }
         (None, None) => true,
         _ => false,
@@ -342,15 +355,15 @@ const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
 const _: () = assert!(Ladder::bytes_for(MAX_CELLS) <= ROUTE_ALLOWANCE);
 
 /// The bytes a search charges its budget besides the arena: the flood,
-/// deadlock and corral buffers and the heuristic tables per cell, plus
-/// [`FIXED_SCRATCH`]. Counted in u64, since usize is 32 bits on wasm32, and
-/// saturating, so a board too large to count never fits instead of
-/// wrapping.
-fn fixed_bytes(cells: usize, boxes: usize) -> u64 {
+/// deadlock and corral buffers and the heuristic tables per cell, with or
+/// without keeper sides, plus [`FIXED_SCRATCH`]. Counted in u64, since usize
+/// is 32 bits on wasm32, and saturating, so a board too large to count
+/// never fits instead of wrapping.
+fn fixed_bytes(cells: usize, boxes: usize, keeper_sides: bool) -> u64 {
     let per_cell = Reach::BYTES_PER_CELL
         + Deadlock::BYTES_PER_CELL
         + Corral::BYTES_PER_CELL
-        + Heuristic::bytes_per_cell(boxes);
+        + Heuristic::bytes_per_cell(boxes, keeper_sides);
     (cells as u64)
         .saturating_mul(per_cell as u64)
         .saturating_add(FIXED_SCRATCH as u64)
@@ -373,7 +386,7 @@ impl Engine {
         }
         let cells = board.tiles().len();
         let boxes = board.labels().len();
-        let fixed = fixed_bytes(cells, boxes);
+        let fixed = fixed_bytes(cells, boxes, policy.keeper_sides);
         let arena = Arena::new(fixed, boxes, max_states, memory_mib)?;
         let node_limit = arena.node_limit();
         let fill_at = if policy.stage {
@@ -382,7 +395,7 @@ impl Engine {
         } else {
             node_limit
         };
-        let heuristic = Heuristic::new(&board);
+        let heuristic = Heuristic::new(&board, policy.keeper_sides);
         let deadlock = Deadlock::new(&board);
         let corral = Corral::new(&board);
         let mut search = Self {
@@ -1510,26 +1523,31 @@ mod tests {
     /// `MAX_STATES`: 1024 MiB, the top, holds 33,554,431 states at one box,
     /// where the next state would double the table, and 11,177,698 at
     /// `MAX_BOXES` on `MAX_CELLS` cells (`MAX_STATES`'s doc), past the fixed
-    /// bytes. Every budget is sized without allocating, through
+    /// bytes, or 11,166,434 past the larger tables of keeper sides. Every
+    /// budget is sized without allocating, through
     /// [`Arena::capacity`]: an arena at the top would reserve chunk lists for
     /// millions of the four-record chunks unit tests use.
     #[test]
     fn memory_binds_a_full_limit_at_every_budget() {
         let shapes = [
-            (4, 1, 33_554_431),
-            (MAX_CELLS, 1, 33_554_431),
-            (4, MAX_BOXES, 11_181_644),
-            (MAX_CELLS, MAX_BOXES, 11_177_698),
+            (4, 1, false, 33_554_431),
+            (MAX_CELLS, 1, false, 33_554_431),
+            (4, MAX_BOXES, false, 11_181_644),
+            (MAX_CELLS, MAX_BOXES, false, 11_177_698),
+            (MAX_CELLS, MAX_BOXES, true, 11_166_434),
         ];
         let top = *MEMORY_MIB_RANGE.end();
-        for (cells, boxes, fits) in shapes {
-            let fixed = fixed_bytes(cells, boxes);
+        for (cells, boxes, sides, fits) in shapes {
+            let fixed = fixed_bytes(cells, boxes, sides);
             let capacity = Arena::capacity(fixed, boxes, MAX_STATES, top).unwrap();
-            assert_eq!(capacity.limit, fits, "{cells} cells, {boxes} boxes");
+            assert_eq!(
+                capacity.limit, fits,
+                "{cells} cells, {boxes} boxes, {sides}"
+            );
         }
         for memory_mib in MEMORY_MIB_RANGE {
-            for (cells, boxes, _) in shapes {
-                let fixed = fixed_bytes(cells, boxes);
+            for (cells, boxes, sides, _) in shapes {
+                let fixed = fixed_bytes(cells, boxes, sides);
                 let capacity = Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
                 assert!(
                     capacity.limit < MAX_STATES,
@@ -1544,7 +1562,7 @@ mod tests {
     /// states fit with 68 bytes to spare, and one more scales the request.
     #[test]
     fn a_limit_one_past_the_budget_is_scaled_to_it() {
-        let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES);
+        let fixed = fixed_bytes(MAX_CELLS, MAX_BOXES, false);
         let fits = Arena::new(fixed, MAX_BOXES, 691_938, 64).unwrap();
         assert_eq!(fits.node_limit(), 691_938);
         assert_eq!(fits.limit_status(), Status::StateLimit);
@@ -1560,7 +1578,7 @@ mod tests {
     /// total.
     #[test]
     fn a_board_too_large_to_count_never_fits() {
-        let fixed = fixed_bytes(usize::MAX, MAX_BOXES);
+        let fixed = fixed_bytes(usize::MAX, MAX_BOXES, false);
         for memory_mib in [*MEMORY_MIB_RANGE.start(), *MEMORY_MIB_RANGE.end()] {
             assert_eq!(
                 Arena::capacity(fixed, MAX_BOXES, MAX_STATES, memory_mib).err(),

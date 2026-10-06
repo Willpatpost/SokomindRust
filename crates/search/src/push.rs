@@ -484,7 +484,7 @@ mod tests {
         // boxes, to its end past at least two.
         let mut seen = [0; 4];
         for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board);
+            let heuristic = Heuristic::new(&board, false);
             let n = board.labels().len();
             let mut state = board.initial();
             for _ in 0..1_000 {
@@ -544,27 +544,29 @@ mod tests {
     #[test]
     fn stand_walk_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
-            let heuristic = Heuristic::new(board);
             let exact = remaining(board, states, edges);
-            let values: Vec<_> = states
-                .iter()
-                .map(|state| estimates(board, &heuristic, state))
-                .collect();
-            for (from, state) in states.iter().enumerate() {
-                let Some((h, value)) = values[from] else {
-                    assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
-                    continue;
-                };
-                assert!(
-                    value <= exact[from],
-                    "{id}: {value} > {} at {state:?}",
-                    exact[from]
-                );
-                for &(to, _) in &edges[from] {
-                    if let Some((next_h, next)) = values[to]
-                        && h <= next_h + 1
-                    {
-                        assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
+            for keeper_sides in [false, true] {
+                let heuristic = Heuristic::new(board, keeper_sides);
+                let values: Vec<_> = states
+                    .iter()
+                    .map(|state| estimates(board, &heuristic, state))
+                    .collect();
+                for (from, state) in states.iter().enumerate() {
+                    let Some((h, value)) = values[from] else {
+                        assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
+                        continue;
+                    };
+                    assert!(
+                        value <= exact[from],
+                        "{id}: {value} > {} at {state:?}",
+                        exact[from]
+                    );
+                    for &(to, _) in &edges[from] {
+                        if let Some((next_h, next)) = values[to]
+                            && h <= next_h + 1
+                        {
+                            assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
+                        }
                     }
                 }
             }
@@ -579,30 +581,37 @@ mod tests {
     fn stand_walk_after_a_push_matches_a_fresh_scan() {
         let (mut pushes, mut onward) = (0, 0);
         for (id, board, states, edges) in explored_catalog() {
-            let heuristic = Heuristic::new(board);
-            let mut reach = Reach::new(board.tiles().len());
-            let n = board.labels().len();
-            for (parent, state) in states.iter().enumerate() {
-                reach.fill(board, state);
-                for &(child, push) in &edges[parent] {
-                    let Some((i, d)) = push else {
-                        continue;
-                    };
-                    let (from, to) = (state.boxes[i], states[child].boxes[i]);
-                    let boxes = &states[child].boxes[..n];
-                    let occupied = |cell: Cell| cell == to || (cell != from && reach.blocked(cell));
-                    let exact = walk(board, &heuristic, from, boxes);
-                    for enough in 0..=exact + 1 {
-                        let got = stand_walk(board, &heuristic, from, boxes, occupied, enough);
-                        assert_eq!(got < enough, exact < enough, "{id}: {got} {exact} {enough}");
-                        assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
+            for keeper_sides in [false, true] {
+                let heuristic = Heuristic::new(board, keeper_sides);
+                let mut reach = Reach::new(board.tiles().len());
+                let n = board.labels().len();
+                for (parent, state) in states.iter().enumerate() {
+                    reach.fill(board, state);
+                    for &(child, push) in &edges[parent] {
+                        let Some((i, d)) = push else {
+                            continue;
+                        };
+                        let (from, to) = (state.boxes[i], states[child].boxes[i]);
+                        let boxes = &states[child].boxes[..n];
+                        let occupied =
+                            |cell: Cell| cell == to || (cell != from && reach.blocked(cell));
+                        let exact = walk(board, &heuristic, from, boxes);
+                        for enough in 0..=exact + 1 {
+                            let got = stand_walk(board, &heuristic, from, boxes, occupied, enough);
+                            assert_eq!(
+                                got < enough,
+                                exact < enough,
+                                "{id}: {got} {exact} {enough}"
+                            );
+                            assert!(got < enough || got == exact, "{id}: {got} {exact} {enough}");
+                        }
+                        let ahead = board.neighbors()[to as usize][d];
+                        if ahead != NONE && !occupied(ahead) && !heuristic.dead_after(i, ahead, d) {
+                            assert_eq!(exact, 0, "{id} at {:?}", states[child]);
+                            onward += 1;
+                        }
+                        pushes += 1;
                     }
-                    let ahead = board.neighbors()[to as usize][d];
-                    if ahead != NONE && !occupied(ahead) && !heuristic.dead_after(i, ahead, d) {
-                        assert_eq!(exact, 0, "{id} at {:?}", states[child]);
-                        onward += 1;
-                    }
-                    pushes += 1;
                 }
             }
         }
@@ -636,28 +645,30 @@ mod tests {
         ];
         let mut raised = 0;
         for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board);
-            // The start as the engine seeds it, canonical.
-            let mut start = board.initial();
-            canonicalize(&board, &mut start);
-            let pushes = heuristic.estimate(&start).unwrap();
-            let width = board.width();
-            let (x, y) = (start.player as usize % width, start.player as usize / width);
-            let box_walk = start.boxes[..board.labels().len()]
-                .iter()
-                .map(|&cell| {
-                    x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
-                })
-                .min()
-                .unwrap() as u32;
-            let gain = RAISED
-                .iter()
-                .find(|&&(raised_id, _)| raised_id == id)
-                .map_or(0, |&(_, gain)| gain);
-            let root = root_estimate(&board, &heuristic, &start, pushes);
-            assert_eq!(root, pushes + box_walk + gain, "{id}");
-            raised += usize::from(root > pushes + box_walk);
+            for keeper_sides in [false, true] {
+                let heuristic = Heuristic::new(&board, keeper_sides);
+                // The start as the engine seeds it, canonical.
+                let mut start = board.initial();
+                canonicalize(&board, &mut start);
+                let pushes = heuristic.estimate(&start).unwrap();
+                let width = board.width();
+                let (x, y) = (start.player as usize % width, start.player as usize / width);
+                let box_walk = start.boxes[..board.labels().len()]
+                    .iter()
+                    .map(|&cell| {
+                        x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
+                    })
+                    .min()
+                    .unwrap() as u32;
+                let gain = RAISED
+                    .iter()
+                    .find(|&&(raised_id, _)| raised_id == id)
+                    .map_or(0, |&(_, gain)| gain);
+                let root = root_estimate(&board, &heuristic, &start, pushes);
+                assert_eq!(root, pushes + box_walk + gain, "{id}");
+                raised += usize::from(root > pushes + box_walk);
+            }
         }
-        assert_eq!(raised, RAISED.len());
+        assert_eq!(raised, 2 * RAISED.len());
     }
 }

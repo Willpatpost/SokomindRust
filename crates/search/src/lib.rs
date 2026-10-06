@@ -80,12 +80,13 @@ use std::ops::RangeInclusive;
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
 /// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,698
-/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells and 33,554,431 at one box
-/// (the engine test `memory_binds_a_full_limit_at_every_budget`). A search
-/// that fills a request at this limit therefore ends with
-/// [`Status::MemoryLimit`], never [`Status::StateLimit`]. Records, the queue
-/// and the table are allocated only as the search fills them, so one that
-/// ends early, as on a small board, allocates little of its budget.
+/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells (11,166,434 in Optimal,
+/// whose heuristic tables are larger) and 33,554,431 at one box (the engine
+/// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
+/// request at this limit therefore ends with [`Status::MemoryLimit`], never
+/// [`Status::StateLimit`]. Records, the queue and the table are allocated
+/// only as the search fills them, so one that ends early, as on a small
+/// board, allocates little of its budget.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.

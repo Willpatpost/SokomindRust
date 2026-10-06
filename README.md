@@ -159,6 +159,17 @@ only prunes: once a route is known, a child whose moves so far, estimate, and
 walk reach its length is dropped, so queue keys and stored estimates stay
 push-only.
 
+Optimal's distances also count keeper sides. Between two pushes of a box the
+keeper only walks around it, so it stays in one component of the floor without
+the box's cell, and can push only from a stand there. Optimal therefore keeps
+one distance per goal for each side of each cell, so a box whose next push
+needs a side the keeper cannot reach pays for the pushes that bring it round.
+Other boxes keep their sides through a push, so the estimate stays admissible
+and consistent. Its tables take 299 bytes per cell at 32 boxes instead of 68.
+Fast and Quality keep the per-cell distances. In their weighted searches the
+sharper estimate misled the stage ladder: huge found no route at any limit
+from 8,192 to 128,000 states.
+
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
 route and never re-expands a closed node. When Fast reaches its stage point
