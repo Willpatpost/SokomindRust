@@ -303,7 +303,7 @@ fn charges(board: &Board, dead_spots: &[u32]) -> Vec<u8> {
     let neighbors = board.neighbors();
     let mut steps = vec![u32::MAX; neighbors.len()];
     let mut queue: Vec<Cell> = Vec::with_capacity(neighbors.len());
-    for (cell, masks) in dead_spots.chunks_exact(SIDES).enumerate() {
+    for (cell, masks) in dead_spots.as_chunks::<SIDES>().0.iter().enumerate() {
         if masks.iter().any(|&mask| mask != u32::MAX) {
             steps[cell] = 0;
             queue.push(cell as Cell);
