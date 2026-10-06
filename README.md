@@ -144,7 +144,8 @@ box. Keeper position remains part of state identity. Walks are reconstructed
 only for reported routes.
 Each arena record is 12 bytes plus its box cells, each queue entry one 8-byte
 key packing `f`, `h`, and a 26-bit arena id, and each table slot a 4-byte arena
-index.
+index whose 6 spare bits hold a hash tag, so a probe skips most other states'
+records unread.
 
 The estimate is the assignment's push count. The start state also adds the
 keeper's walk to its first push: the Manhattan distance to the stand of the

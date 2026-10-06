@@ -13,6 +13,8 @@ pub(crate) const NIL: u32 = u32::MAX;
 const ID_BITS: u32 = 26;
 /// Low `ID_BITS` set: extracts an id, and stands for NIL in a record.
 const ID_MASK: u32 = (1 << ID_BITS) - 1;
+/// Bits of a table slot above its id, which hold the state's [`tag`].
+const TAG_BITS: u32 = u32::BITS - ID_BITS;
 // Every id, the spare node's included, is at most MAX_STATES, so it fits
 // both fields with the all-ones value left over for a record's NIL parent.
 const _: () = assert!(MAX_STATES < ID_MASK as usize);
@@ -213,14 +215,37 @@ impl Key {
 const _: () = assert!(MAX_QUEUED_H <= Key::H_SAT);
 const _: () = assert!(size_of::<Key>() == 8);
 
-fn hash(player: Cell, boxes: &[Cell]) -> usize {
+/// A state's hash, from which [`home`] and [`tag`] are taken.
+fn hash(player: Cell, boxes: &[Cell]) -> u64 {
     let mut h = (player as u64).wrapping_add(0x9e3779b97f4a7c15);
     for &cell in boxes {
         h ^= cell as u64;
         h = h.wrapping_mul(0x100000001b3);
         h ^= h >> 29;
     }
-    (h ^ (h >> 32)) as usize
+    h ^ (h >> 32)
+}
+/// The first slot probed for hash `h` in a table of `mask + 1` slots.
+#[inline]
+fn home(h: u64, mask: usize) -> usize {
+    h as usize & mask
+}
+/// Hash `h`'s tag, already shifted into a slot's top [`TAG_BITS`]. The top
+/// bits of `h` itself barely depend on the last box, whose cell reaches
+/// them only through carries, so the tag takes the top bits of `h` times
+/// an odd constant, which depend on every bit of `h`.
+#[inline]
+fn tag(h: u64) -> u32 {
+    ((h.wrapping_mul(0x9e3779b97f4a7c15) >> (u64::BITS - TAG_BITS)) as u32) << ID_BITS
+}
+
+/// Where [`Arena::find`] stopped for a state: the table slot that holds its
+/// node or would hold a new node for it, and the state's [`tag`], which
+/// [`Arena::insert`] stores with the new id. Only `find` builds one, and
+/// it is not `Copy`, so one find binds at most one insert.
+pub(crate) struct Slot {
+    index: usize,
+    tag: u32,
 }
 
 /// What the arena counts as it inserts and queues. Each field is the
@@ -289,10 +314,12 @@ pub(crate) struct Arena {
     /// At most `len` entries, since every enqueue follows an insert, with
     /// a chunk of room per record chunk, of the same size.
     queue: Queue,
-    /// Open-addressed slots, each a node id or [`NIL`] when empty. Ids stay
-    /// below [`ID_MASK`], so a slot's top 32 - `ID_BITS` = 6 bits are spare:
-    /// too few for a 12-bit hash tag, which is therefore not implemented. A
-    /// 6-bit tag is worth trying only if profiling shows table finds dominate.
+    /// Open-addressed slots, each [`NIL`] when empty, or a node id in the
+    /// low [`ID_BITS`] with its state's [`tag`] in the top [`TAG_BITS`] (6).
+    /// A probe loads a slot's record only when the tags match, which for a
+    /// different state happens one time in 64, so a find reads about one
+    /// record when it hits and almost none when it misses. Ids stay below
+    /// [`ID_MASK`], so no bound slot reads as [`NIL`].
     ///
     /// A power of two of one of two sizes. It starts at [`INITIAL_TABLE`]
     /// slots, or at its final size when that is smaller, and once more than
@@ -498,25 +525,30 @@ impl Arena {
     }
     /// The state's node, if any, and the table slot that holds it or would
     /// hold a new node for it. The slot is valid until the next insert.
-    pub(crate) fn find(&self, state: &State) -> (usize, Option<u32>) {
+    pub(crate) fn find(&self, state: &State) -> (Slot, Option<u32>) {
         #[cfg(debug_assertions)]
         self.found
             .store(self.generation, std::sync::atomic::Ordering::Relaxed);
         let boxes = &state.boxes[..self.boxes];
         let mask = self.table.len() - 1;
-        let mut slot = hash(state.player, boxes) & mask;
+        let h = hash(state.player, boxes);
+        let tag = tag(h);
+        let mut index = home(h, mask);
         loop {
-            let id = self.table[slot];
-            if id == NIL {
-                return (slot, None);
+            let entry = self.table[index];
+            if entry == NIL {
+                return (Slot { index, tag }, None);
             }
-            let (chunk, offset) = self.chunk(id);
-            if chunk.records[offset].player == state.player
-                && chunk.cells(offset, self.boxes) == boxes
-            {
-                return (slot, Some(id));
+            if entry & !ID_MASK == tag {
+                let id = entry & ID_MASK;
+                let (chunk, offset) = self.chunk(id);
+                if chunk.records[offset].player == state.player
+                    && chunk.cells(offset, self.boxes) == boxes
+                {
+                    return (Slot { index, tag }, Some(id));
+                }
             }
-            slot = (slot + 1) & mask;
+            index = (index + 1) & mask;
         }
     }
     /// Appends `node` and binds `slot`, which [`Arena::find`] returned for its
@@ -525,7 +557,7 @@ impl Arena {
     /// limit, into the spare slot: a solution discovered at the exact moment
     /// the arena filled. Below the limit it then allocates what the next
     /// insert needs ([`Arena::grow`]), so the spare's insert never does.
-    pub(crate) fn insert(&mut self, node: Node, slot: usize) -> u32 {
+    pub(crate) fn insert(&mut self, node: Node, slot: Slot) -> u32 {
         debug_assert!(self.len <= self.node_limit);
         #[cfg(debug_assertions)]
         {
@@ -537,13 +569,13 @@ impl Arena {
             self.generation = self.generation.wrapping_add(1);
         }
         let id = self.len as u32;
-        let previous = self.table[slot];
+        let previous = self.table[slot.index];
         if previous == NIL {
             self.counters.unique_states += 1;
             self.resident += 1;
         } else {
             self.counters.duplicate_improvements += 1;
-            let previous = self.record_mut(previous);
+            let previous = self.record_mut(previous & ID_MASK);
             let reopened = previous.has(Record::CLOSED);
             // Its queued entry, if any, now pops as stale.
             previous.link |= Record::SUPERSEDED;
@@ -557,7 +589,7 @@ impl Arena {
             .box_cells
             .extend_from_slice(&node.state.boxes[..self.boxes]);
         chunk.records.push(Record::new(&node));
-        self.table[slot] = id;
+        self.table[slot.index] = id | slot.tag;
         self.len += 1;
         // Nearly every insert stops at these checks, so the growth itself
         // stays out of line.
@@ -633,11 +665,12 @@ impl Arena {
                 if record.has(Record::SUPERSEDED) {
                     continue;
                 }
-                let mut slot = hash(record.player, chunk.cells(offset, self.boxes)) & mask;
+                let h = hash(record.player, chunk.cells(offset, self.boxes));
+                let mut slot = home(h, mask);
                 while self.table[slot] != NIL {
                     slot = (slot + 1) & mask;
                 }
-                self.table[slot] = (first + offset) as u32;
+                self.table[slot] = (first + offset) as u32 | tag(h);
                 bound += 1;
             }
         }
@@ -692,7 +725,7 @@ impl Arena {
                 if record.has(Record::SUPERSEDED) {
                     continue;
                 }
-                let mut slot = hash(record.player, chunk.cells(offset, self.boxes)) & mask;
+                let mut slot = home(hash(record.player, chunk.cells(offset, self.boxes)), mask);
                 while self.table[slot] != NIL {
                     self.table[slot] = NIL;
                     slot = (slot + 1) & mask;
