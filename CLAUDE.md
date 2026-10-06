@@ -547,7 +547,7 @@ Routes returned by a search should be replay-verifiable under the actual Rust ga
 
 Preserve the existing philosophy that routes crossing trust boundaries are checked rather than blindly trusted.
 
-The browser, server, persistence layer, and solver should not rely on claimed route metadata when the route itself can be replayed.
+The browser, server, and solver should not rely on claimed route metadata when the route itself can be replayed.
 
 If the search reports:
 
@@ -592,7 +592,7 @@ Where:
 - `core` owns the puzzle and game rules;
 - `search` owns the solver;
 - `wasm` exposes the solver/game to the browser;
-- `server` exposes native solving and persistence;
+- `server` exposes native solving;
 - `web` drives the UI and transport.
 
 Keep solver algorithms platform-independent when possible.

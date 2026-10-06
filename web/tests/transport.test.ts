@@ -5,8 +5,6 @@ import {
   decodeHealth,
   decodeMetricTuple,
   decodeNativeReply,
-  decodeProgress,
-  decodeSaveReply,
   decodeSnapshot,
   decodeWorkerReply,
   encodeSolveRequest,
@@ -136,30 +134,7 @@ test('native errors show the server text as sent, and only a bare 429 points to 
   assert.equal(nativeErrorText(429, undefined), 'Server returned HTTP 429. The browser solver still works: set Run on to This browser.');
   assert.equal(nativeErrorText(502, undefined), 'Server returned HTTP 502');
 });
-test('health replies report persistence only when it is exactly true', () => {
-  assert.equal(decodeHealth({ status: 'ok', persistence: true }), true);
-  for (const value of [{ status: 'ok', persistence: false }, { status: 'ok' }, { persistence: 'true' }, [{ persistence: true }]])
-    assert.equal(decodeHealth(value), false);
-  for (const value of [null, 'ok', 1, '']) assert.equal(decodeHealth(value), undefined);
-});
-test('save replies must say whether the route improved the stored best', () => {
-  assert.equal(decodeSaveReply({ saved: true, improved: true }), true);
-  assert.equal(decodeSaveReply({ saved: true, improved: false }), false);
-  for (const value of [null, [], {}, { saved: true, improved: 'yes' }])
-    assert.throws(() => decodeSaveReply(value), /Invalid progress response/);
-});
-test('stored progress decodes to a full route with the counts the server reported', () => {
-  const stored = { puzzle_id: 'p', route: 'DD', moves: 2, pushes: 1 };
-  assert.deepEqual(decodeProgress(stored), { puzzleId: 'p', route: 'DD', moves: 2, pushes: 1 });
-  for (const [patch, error] of [
-    [{ puzzle_id: 1 }, /Invalid progress record/],
-    [{ route: null }, /Invalid progress record/],
-    [{ route: 'XD' }, /Invalid progress route/],
-    [{ route: 'D'.repeat(100001) }, /Invalid progress route/],
-    [{ moves: -1 }, /Invalid progress moves/],
-    [{ moves: '2' }, /Invalid progress moves/],
-    [{ pushes: 0.5 }, /Invalid progress pushes/],
-  ] as const)
-    assert.throws(() => decodeProgress({ ...stored, ...patch }), error);
-  for (const value of [null, [], 'DD']) assert.throws(() => decodeProgress(value), /Invalid progress record/);
+test('only an object with status "ok" is a health reply', () => {
+  assert.equal(decodeHealth({ status: 'ok' }), true);
+  for (const value of [null, 'ok', 1, '', [], {}, { status: 'OK' }, [{ status: 'ok' }]]) assert.equal(decodeHealth(value), false);
 });

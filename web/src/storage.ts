@@ -40,16 +40,3 @@ export function best(id: string, rows: string): Best | null {
     ? (v as Best)
     : null;
 }
-// getRandomValues works over plain HTTP; randomUUID needs a secure context.
-function randomId(): string {
-  return [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-/** This browser's progress profile id, created at random on first use; null when storage is
- * unavailable. Its 32 hex digits are the length crates/server/src/progress.rs requires (checked by
- * scripts/mirrors.test.mjs). */
-export function profile(): string | null {
-  const value = read('profile');
-  if (typeof value === 'string' && /^[a-f0-9]{32}$/.test(value)) return value;
-  const id = randomId();
-  return write('profile', id) ? id : null;
-}

@@ -6,46 +6,23 @@
 # IPv4 CIDR and run docker compose down once, so the network is recreated.
 x-trusted-subnet: &trusted-subnet "${TRUSTED_SUBNET:-172.16.57.0/24}"
 services:
-  db:
-    image: postgres:18-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: sokomind
-      POSTGRES_DB: sokomind
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - postgres-data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sokomind -d sokomind"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
   api:
     build:
       context: .
       target: server
     restart: unless-stopped
     environment:
-      # Passed to the driver as-is, so any characters are safe.
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       # Set these in .env or the shell. One left unset arrives empty, which
       # the server reads as unset, so its defaults apply: they live only in
       # the server and README's Configuration table. Budgets apply to each
       # API process, including the search storage its solve slots may reserve
-      # (.env.example gives the figures). Recheck aggregate CPU, memory and
-      # PostgreSQL connections before adding replicas.
+      # (.env.example gives the figures). Recheck aggregate CPU and memory
+      # before adding replicas.
       SOLVE_CONCURRENCY: ${SOLVE_CONCURRENCY:-}
       SOLVE_RATE_PER_MINUTE: ${SOLVE_RATE_PER_MINUTE:-}
-      PROGRESS_CONCURRENCY: ${PROGRESS_CONCURRENCY:-}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-}
-      PROGRESS_RETENTION_DAYS: ${PROGRESS_RETENTION_DAYS:-}
-      PROGRESS_RETENTION_BATCH_SIZE: ${PROGRESS_RETENTION_BATCH_SIZE:-}
       # nginx is the API's only peer and overwrites X-Forwarded-For with its
       # client, so trust this project's network (x-trusted-subnet).
       TRUSTED_PROXIES: *trusted-subnet
-    depends_on:
-      db:
-        condition: service_healthy
     init: true
     # Part of the solve timeout chain; see TIME_MS in
     # crates/server/src/solve.rs. It outlasts the longest solve, so a shutdown
@@ -67,5 +44,3 @@ networks:
     ipam:
       config:
         - subnet: *trusted-subnet
-volumes:
-  postgres-data:

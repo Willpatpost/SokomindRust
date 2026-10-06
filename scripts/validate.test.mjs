@@ -76,26 +76,19 @@ function ciSteps() {
 test('the steps are the npm and node scripts steps of ci.yml, in its order', () => {
   const ci = ciSteps();
   assert.ok(ci.length > 0, 'ci.yml has no npm run or node scripts steps');
-  assert.deepEqual(commands(plan({ quick: false, database: true })), commands(ci));
+  assert.deepEqual(commands(plan({ quick: false })), commands(ci));
 });
 
 test("each step runs with the variables of its ci.yml step's env:", () => {
   /** @param {readonly Step[]} steps */
   const envs = steps => steps.map(s => ({ command: s.command, env: s.env ?? {} }));
-  assert.deepEqual(envs(plan({ quick: false, database: true })), envs(ciSteps()));
+  assert.deepEqual(envs(plan({ quick: false })), envs(ciSteps()));
 });
 
-test('--quick skips exactly bench:observe, test:db and test:browser', () => {
-  const steps = plan({ quick: true, database: true });
-  assert.deepEqual(commands(skipped(steps)), ['npm run bench:observe', 'npm run test:db', 'npm run test:browser']);
+test('--quick skips exactly bench:observe and test:browser', () => {
+  const steps = plan({ quick: true });
+  assert.deepEqual(commands(skipped(steps)), ['npm run bench:observe', 'npm run test:browser']);
   assert.ok(skipped(steps).every(s => s.skip === 'skipped by --quick'));
-});
-
-test('test:db is skipped, never run, without SOKOMIND_TEST_DATABASE_URL', () => {
-  assert.deepEqual(skipped(plan({ quick: false, database: false })), [
-    { command: 'npm run test:db', skip: 'SOKOMIND_TEST_DATABASE_URL is not set' },
-  ]);
-  assert.deepEqual(skipped(plan({ quick: false, database: true })), []);
 });
 
 test('by default the steps after a failure are skipped, not run', () => {

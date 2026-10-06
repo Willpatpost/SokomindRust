@@ -4,11 +4,9 @@
 // PASS/FAIL/SKIP line per step.
 //   npm run validate                      stops at the first failure
 //   npm run validate -- --keep-going      runs every step, then fails if any failed
-//   npm run validate -- --quick           skips bench:observe, test:db and test:browser
+//   npm run validate -- --quick           skips bench:observe and test:browser
 // Windows PowerShell 5.1 drops a bare --, so quote it there: npm run validate '--' --quick
-// test:db needs SOKOMIND_TEST_DATABASE_URL (README.md "Validation") and is skipped,
-// never passed, without it. test:browser needs Playwright's Chromium once:
-// npx playwright install chromium.
+// test:browser needs Playwright's Chromium once: npx playwright install chromium.
 import { parseArgs } from 'node:util';
 import { attempt } from './toolchain.mjs';
 
@@ -31,10 +29,10 @@ const STOPPED = 'an earlier step failed; --keep-going runs every step';
 /**
  * The steps in ci.yml's order; validate.test.mjs checks that they match its run lines
  * and env: blocks.
- * @param {{ quick: boolean, database: boolean }} options database: SOKOMIND_TEST_DATABASE_URL is set.
+ * @param {{ quick: boolean }} options
  * @returns {Step[]}
  */
-export function plan({ quick, database }) {
+export function plan({ quick }) {
   /**
    * @param {string} command
    * @param {string} [skip]
@@ -62,7 +60,6 @@ export function plan({ quick, database }) {
     // Reuses the native records bench:check just wrote instead of rerunning the corpus.
     step('node scripts/parity.mjs --native target/bench/catalog.json'),
     step('npm run bench:observe', slow),
-    step('npm run test:db', slow ?? (database ? undefined : 'SOKOMIND_TEST_DATABASE_URL is not set')),
     // CI=true, which GitHub sets in every job, makes playwright.config.ts fail a
     // leftover test.only and start its own preview server instead of reusing one.
     { command: 'npm run test:browser', skip: slow, env: { CI: 'true' } },
@@ -167,7 +164,7 @@ function main() {
     if (program !== 'npm' && program !== 'node') throw new Error(`Step ${command} must start with npm or node`);
     return attempt(process.execPath, program === 'npm' ? [npm, ...args] : args, env);
   };
-  const steps = plan({ quick: !!options.quick, database: !!process.env.SOKOMIND_TEST_DATABASE_URL });
+  const steps = plan({ quick: !!options.quick });
   const outcomes = execute(steps, { keepGoing: !!options['keep-going'], run, now: () => performance.now() });
   console.log(`\n${summary(outcomes)}`);
   return outcomes.some(o => o.result === 'FAIL') ? 1 : 0;

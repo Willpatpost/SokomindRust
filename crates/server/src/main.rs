@@ -1,36 +1,26 @@
 //! Sokomind's HTTP API, which must run behind nginx: nginx serves the web
 //! app, adds the security headers and bounds slow clients, so this binary
 //! answers only these routes:
-//! - `GET /api/health`: whether the API and its database answer
-//!   ([`api::health`]).
+//! - `GET /api/health`: whether the API answers ([`api::health`]).
 //! - `POST /api/solve`: one native search under the server's limits
 //!   ([`solve::solve`]).
-//! - `GET /api/progress/{id}`: a browser profile's best route for a catalog
-//!   puzzle, from PostgreSQL ([`progress::get`]).
-//! - `POST /api/progress/{id}`: replays a route and keeps it when it beats
-//!   the saved one ([`progress::save`]).
 //!
 //! Every error body is `{"error": "..."}` ([`api::Error`]): 400 invalid
-//! input; 404 an unknown endpoint, catalog puzzle or saved route; 405 a wrong
-//! method; 408 a body still arriving after [`api::BODY_TIMEOUT`]; 413 a body
-//! over [`BODY_LIMIT`]; 415 a missing or non-JSON content type; 422 JSON of
-//! the wrong shape; 429 a busy server or a spent rate budget; 503 persistence
-//! off, unreachable or interrupted, or a failed search allocation; 500 a
+//! input; 404 an unknown endpoint; 405 a wrong method; 408 a body still
+//! arriving after [`api::BODY_TIMEOUT`]; 413 a body over [`BODY_LIMIT`]; 415
+//! a missing or non-JSON content type; 422 JSON of the wrong shape; 429 a
+//! busy server or a spent rate budget; 503 a failed search allocation; 500 a
 //! server bug. Behind the bundled nginx, whose `client_max_body_size` matches
 //! [`BODY_LIMIT`], an oversize body gets nginx's own HTML 413 instead; the
 //! README notes this and nginx's HTML 5xx pages.
 //!
-//! Handlers admit a request in one order, cheapest and most client-caused
-//! first, and skip the steps a route does not have: a solve names no catalog
-//! puzzle and needs no database, and a read spends no rate budget.
+//! A solve is admitted in one order, cheapest and most client-caused first:
 //! 1. The request itself: 400.
-//! 2. The catalog puzzle: 404.
-//! 3. Persistence: 503.
-//! 4. A free solve or progress slot: 429 busy, at once, since nothing queues.
-//! 5. The client's solve or save budget: 429. It is charged last, so a
-//!    request refused earlier spends none of it.
+//! 2. A free solve slot: 429 busy, at once, since nothing queues.
+//! 3. The client's solve budget: 429. It is charged last, so a request
+//!    refused earlier spends none of it.
 //!
-//! Parsing a position and replaying a route cost CPU, so both run after
+//! Parsing a position and replaying its actions cost CPU, so both run after
 //! admission, on a blocking thread, and their 400 comes after every step.
 //!
 //! Settings come from the environment once at startup: [`config`] reads and
@@ -41,9 +31,7 @@
 mod api;
 mod client;
 mod config;
-mod database;
 mod limit;
-mod progress;
 mod solve;
 #[cfg(test)]
 mod tests;
@@ -73,22 +61,10 @@ const _: () = assert!(BODY_LIMIT >= sokomind_core::MAX_ROUTE + 4 * sokomind_core
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configuration, catalog and bind errors fail before the database wait,
-    // not after it.
     let config = Config::from_env()?;
-    let catalog = api::load_catalog()?;
     let listener = TcpListener::bind(&config.bind).await?;
-    let db = match &config.database {
-        Some(settings) => Some(database::open(settings).await?),
-        None => {
-            eprintln!(
-                "DATABASE_URL and DATABASE_PASSWORD are unset; game and solver work, server progress persistence is disabled."
-            );
-            None
-        }
-    };
     eprintln!("Sokomind API listening at http://{}", config.bind);
-    let state = api::App::new(config, catalog, db);
+    let state = api::App::new(config);
     // axum's serve() gives hyper no timer, so hyper's 30 s header read
     // timeout never arms. Behind nginx, the required edge, that is moot:
     // nginx reads each whole request before passing it on and bounds slow
@@ -109,10 +85,6 @@ fn router(state: api::App) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
         .route("/api/solve", post(solve::solve))
-        .route(
-            "/api/progress/{id}",
-            get(progress::get).post(progress::save),
-        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(api_not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))

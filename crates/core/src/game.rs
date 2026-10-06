@@ -3,14 +3,10 @@ use crate::{ACTIONS, Board, Cell, ParseError, State, Step};
 /// The most moves a [`Game`] holds: [`Game::step`] refuses a move once it
 /// is reached, and [`Game::replay`] refuses a longer route.
 ///
-/// Mirrored by `MAX_ROUTE` in `web/src/protocol.ts` and by the progress
-/// table's `length(route) <= 100000` check, created in
-/// `migrations/0001_progress.sql` and again in
-/// `migrations/0002_progress_fingerprint.sql`. Applied migrations are never
-/// edited, so changing this needs a new migration that replaces that check.
-/// A request body carries up to a full route, so the server's `BODY_LIMIT`
-/// (crates/server/src/main.rs, asserted against this) and deploy/nginx.conf's
-/// `client_max_body_size` must hold one.
+/// Mirrored by `MAX_ROUTE` in `web/src/protocol.ts`. A request body carries
+/// up to a full route, so the server's `BODY_LIMIT` (crates/server/src/main.rs,
+/// asserted against this) and deploy/nginx.conf's `client_max_body_size` must
+/// hold one.
 pub const MAX_ROUTE: usize = 100_000;
 
 /// Why a route was not replayed. Each variant displays the message the
