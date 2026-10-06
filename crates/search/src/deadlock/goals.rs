@@ -534,7 +534,7 @@ mod tests {
         let mut rng = Lcg(0x60a1);
         let mut outside = 0;
         for (id, board) in boards(&mut rng) {
-            let heuristic = Heuristic::new(&board, false);
+            let heuristic = Heuristic::new(&board, None);
             let (blocks, table) = build(&board, &heuristic);
             assert_eq!(
                 table.heap_bytes(),
@@ -583,7 +583,7 @@ mod tests {
             if board.labels().len() > 10 {
                 continue;
             }
-            let heuristic = Heuristic::new(&board, false);
+            let heuristic = Heuristic::new(&board, None);
             let (blocks, table) = build(&board, &heuristic);
             let probe = Probe::new(&board, &heuristic);
             let floor = floor_cells(&board);

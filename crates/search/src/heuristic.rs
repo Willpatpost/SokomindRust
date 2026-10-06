@@ -6,9 +6,13 @@
 //! is incremental: a push re-solves only the pushed box's group, and a group
 //! of `REPAIR_CROSSOVER` or more boxes repairs the parent's duals with one
 //! augment instead of solving from scratch.
-use crate::sides::{SIDES, Sides};
+use crate::reach::Blocks;
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, OPPOSITE, State};
 use std::{mem::size_of, ops::Range};
+
+/// A cell has at most one side per neighbor, and [`Blocks`] labels each
+/// side by a neighbor's direction.
+const SIDES: usize = 4;
 
 /// What a box's push distances depend on: with keeper sides, its cell and
 /// the side of it the keeper is on, as `cell * SIDES + side`; without, its
@@ -62,8 +66,9 @@ pub(crate) struct Heuristic {
 /// What the estimate needs to tell a box's sides apart. Exact search counts
 /// them; the weighted policies do not (see `Policy::keeper_sides`).
 struct KeeperSides {
-    /// Which side of each cell the keeper is on.
-    sides: Sides,
+    /// Which side of each cell holds each neighbor and the keeper, built
+    /// from the start keeper.
+    blocks: Blocks,
     /// Per spot, bit `g` set when its distance to every goal of group `g`
     /// is `NONE`: a box of that label there, with the keeper on that side,
     /// makes the estimate `None`. On every side of a cell it holds the
@@ -133,7 +138,7 @@ impl ParentGroup {
 /// lone box needs from each spot, `NONE` when unreachable. Between two
 /// pushes of a box the keeper only walks around it, so it stays on one side
 /// of the box, and it can push the box only from a stand on that side. So
-/// with `sides`, a push in direction `d` from `from` to `to` moves the box
+/// with `blocks`, a push in direction `d` from `from` to `to` moves the box
 /// from the spot of `from` on the side holding the stand to the spot of
 /// `to` on the side holding `from`, and a goal cell is 0 on every side.
 /// Without, the keeper may stand anywhere, and a spot is a cell.
@@ -145,10 +150,10 @@ impl ParentGroup {
 /// per push, though it may rise by any amount or become `NONE`, and walks
 /// change no spot. A min-cost matching over such entries therefore drops by
 /// at most one per move: consistent in moves.
-fn push_distances(board: &Board, sides: Option<&Sides>, columns: &[(Cell, u8)]) -> Vec<u16> {
+fn push_distances(board: &Board, blocks: Option<&Blocks>, columns: &[(Cell, u8)]) -> Vec<u16> {
     let neighbors = board.neighbors();
     let goals = columns.len();
-    let stride = if sides.is_some() { SIDES } else { 1 };
+    let stride = if blocks.is_some() { SIDES } else { 1 };
     let mut distances = vec![NONE; neighbors.len() * stride * goals];
     let mut queue: Vec<Spot> = Vec::with_capacity(neighbors.len() * stride);
     for (column, &(goal, _)) in columns.iter().enumerate() {
@@ -171,10 +176,11 @@ fn push_distances(board: &Board, sides: Option<&Sides>, columns: &[(Cell, u8)]) 
                 if previous == NONE || neighbors[previous as usize][d] == NONE {
                     continue;
                 }
-                let before = match sides {
+                let before = match blocks {
                     None => previous,
-                    Some(sides) if sides.toward(cell as Cell, d) == side => {
-                        (previous as usize * SIDES + sides.toward(previous, d)) as Spot
+                    Some(blocks) if usize::from(blocks.toward(cell as Cell, d)) == side => {
+                        let stand = blocks.toward(previous, d);
+                        (previous as usize * SIDES + usize::from(stand)) as Spot
                     }
                     Some(_) => continue,
                 };
@@ -224,14 +230,16 @@ impl Heuristic {
     pub(crate) const fn bytes_per_cell(boxes: usize, keeper_sides: bool) -> usize {
         let distances = boxes * size_of::<u16>();
         if keeper_sides {
-            Sides::BYTES_PER_CELL + size_of::<u32>() + SIDES * (size_of::<u32>() + distances)
+            Blocks::bytes_for(1) + size_of::<u32>() + SIDES * (size_of::<u32>() + distances)
         } else {
             size_of::<u32>() + distances
         }
     }
     /// The estimator over the reverse-push distance table, so its estimates
-    /// are admissible and consistent, with or without keeper sides.
-    pub(crate) fn new(board: &Board, keeper_sides: bool) -> Self {
+    /// are admissible and consistent, with or without keeper sides. It
+    /// counts them given `keeper`, the start keeper's cell, which every
+    /// estimated state's keeper shares a floor component with.
+    pub(crate) fn new(board: &Board, keeper: Option<Cell>) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
@@ -252,10 +260,16 @@ impl Heuristic {
         for (slot, &(cell, _)) in goal_cells.iter_mut().zip(&columns) {
             *slot = cell;
         }
-        let sides = keeper_sides.then(|| Sides::new(board));
-        let distances = push_distances(board, sides.as_ref(), &columns);
-        let keeper = sides.map(|sides| KeeperSides {
-            sides,
+        let blocks = keeper.map(|player| {
+            let cells = board.tiles().len();
+            let (mut stack, mut low, mut next) = (vec![0; cells], vec![0; cells], vec![0; cells]);
+            // Fatal when refused, like the tables' own allocations here.
+            Blocks::build(board, player, &mut stack, &mut low, &mut next)
+                .expect("the heuristic's keeper sides")
+        });
+        let distances = push_distances(board, blocks.as_ref(), &columns);
+        let keeper = blocks.map(|blocks| KeeperSides {
+            blocks,
             dead_spots: distances
                 .chunks_exact(goals)
                 .map(|row| {
@@ -302,10 +316,20 @@ impl Heuristic {
         (mask >> self.group_of[i]) & 1 != 0
     }
 
-    /// The spot of a box on `cell` with the keeper on `player`.
+    /// The spot of a box on `cell` with the keeper on `player`. A box
+    /// outside the keeper's floor component never moves, so its spot need
+    /// only stay fixed: on a goal it is 0 on every side, and off one no
+    /// route exists.
     fn spot(&self, cell: Cell, player: Cell) -> Spot {
         match &self.keeper {
-            Some(keeper) => (cell as usize * SIDES + keeper.sides.holding(cell, player)) as Spot,
+            Some(KeeperSides { blocks, .. }) => {
+                let side = if blocks.in_keeper(cell) {
+                    blocks.side(cell, player)
+                } else {
+                    0
+                };
+                (cell as usize * SIDES + usize::from(side)) as Spot
+            }
             None => cell,
         }
     }
@@ -314,7 +338,9 @@ impl Heuristic {
     /// the cell it came from.
     fn pushed(&self, to: Cell, d: usize) -> Spot {
         match &self.keeper {
-            Some(keeper) => (to as usize * SIDES + keeper.sides.toward(to, OPPOSITE[d])) as Spot,
+            Some(KeeperSides { blocks, .. }) => {
+                (to as usize * SIDES + usize::from(blocks.toward(to, OPPOSITE[d]))) as Spot
+            }
             None => to,
         }
     }
@@ -543,7 +569,6 @@ mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use crate::push::canonicalize;
     use crate::reach::Reach;
-    use crate::sides::Sides;
     use crate::testkit::{Lcg, catalog, explored_catalog, remaining};
     use sokomind_core::{Board, Cell, NONE, OPPOSITE, WALL};
     use std::{collections::VecDeque, mem::size_of};
@@ -597,14 +622,8 @@ mod tests {
     /// Tallies `[feasible, infeasible]` per path: singleton, re-solve, dual
     /// repair.
     fn walk(board: &Board, steps: usize, rng: &mut Lcg, counts: &mut [[u32; 2]; 3]) {
-        for keeper_sides in [false, true] {
-            walk_with(
-                &Heuristic::new(board, keeper_sides),
-                board,
-                steps,
-                rng,
-                counts,
-            );
+        for keeper in [None, Some(board.initial().player)] {
+            walk_with(&Heuristic::new(board, keeper), board, steps, rng, counts);
         }
     }
 
@@ -704,7 +723,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(board.labels(), [b'A', b'B']);
-        let heuristic = Heuristic::new(&board, false);
+        let heuristic = Heuristic::new(&board, None);
         let at = |x: usize, y: usize| (y * board.width() + x) as Cell;
         let (a, b) = (0, 1);
         // A corner is dead for every label.
@@ -728,7 +747,7 @@ mod tests {
     #[test]
     fn dead_matches_pull() {
         for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board, false);
+            let heuristic = Heuristic::new(&board, None);
             let labels = board.labels();
             let goal_cells = heuristic.goal_cells();
             assert_eq!(goal_cells.len(), labels.len(), "{id}");
@@ -758,19 +777,19 @@ mod tests {
     }
 
     /// The arena accounts exactly the distance table and the dead masks,
-    /// plus with keeper sides the sides, which check their own share.
+    /// plus with keeper sides the per-spot dead masks and the blocks.
     #[test]
     fn bytes_per_cell_matches_the_tables() {
         let board = Board::parse(WIDE).unwrap();
         let cells = board.tiles().len();
-        for keeper_sides in [false, true] {
-            let h = Heuristic::new(&board, keeper_sides);
-            let keeper = h.keeper.as_ref().map_or(0, |keeper| {
-                keeper.dead_spots.len() * size_of::<u32>() + cells * Sides::BYTES_PER_CELL
+        for keeper in [None, Some(board.initial().player)] {
+            let h = Heuristic::new(&board, keeper);
+            let sides = h.keeper.as_ref().map_or(0, |keeper| {
+                keeper.dead_spots.len() * size_of::<u32>() + keeper.blocks.heap_bytes()
             });
             assert_eq!(
-                h.distances.len() * size_of::<u16>() + h.dead.len() * size_of::<u32>() + keeper,
-                cells * Heuristic::bytes_per_cell(board.labels().len(), keeper_sides)
+                h.distances.len() * size_of::<u16>() + h.dead.len() * size_of::<u32>() + sides,
+                cells * Heuristic::bytes_per_cell(board.labels().len(), keeper.is_some())
             );
         }
     }
@@ -803,8 +822,8 @@ mod tests {
     fn heuristic_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
             let exact = remaining(board, states, edges);
-            for keeper_sides in [false, true] {
-                let heuristic = Heuristic::new(board, keeper_sides);
+            for keeper in [None, Some(board.initial().player)] {
+                let heuristic = Heuristic::new(board, keeper);
                 let estimates: Vec<_> = states
                     .iter()
                     .map(|state| heuristic.estimate(state))

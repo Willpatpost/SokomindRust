@@ -484,7 +484,7 @@ mod tests {
         // boxes, to its end past at least two.
         let mut seen = [0; 4];
         for (id, board) in catalog() {
-            let heuristic = Heuristic::new(&board, false);
+            let heuristic = Heuristic::new(&board, None);
             let n = board.labels().len();
             let mut state = board.initial();
             for _ in 0..1_000 {
@@ -545,8 +545,8 @@ mod tests {
     fn stand_walk_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
             let exact = remaining(board, states, edges);
-            for keeper_sides in [false, true] {
-                let heuristic = Heuristic::new(board, keeper_sides);
+            for keeper in [None, Some(board.initial().player)] {
+                let heuristic = Heuristic::new(board, keeper);
                 let values: Vec<_> = states
                     .iter()
                     .map(|state| estimates(board, &heuristic, state))
@@ -581,8 +581,8 @@ mod tests {
     fn stand_walk_after_a_push_matches_a_fresh_scan() {
         let (mut pushes, mut onward) = (0, 0);
         for (id, board, states, edges) in explored_catalog() {
-            for keeper_sides in [false, true] {
-                let heuristic = Heuristic::new(board, keeper_sides);
+            for keeper in [None, Some(board.initial().player)] {
+                let heuristic = Heuristic::new(board, keeper);
                 let mut reach = Reach::new(board.tiles().len());
                 let n = board.labels().len();
                 for (parent, state) in states.iter().enumerate() {
@@ -645,8 +645,8 @@ mod tests {
         ];
         let mut raised = 0;
         for (id, board) in catalog() {
-            for keeper_sides in [false, true] {
-                let heuristic = Heuristic::new(&board, keeper_sides);
+            for keeper in [None, Some(board.initial().player)] {
+                let heuristic = Heuristic::new(&board, keeper);
                 // The start as the engine seeds it, canonical.
                 let mut start = board.initial();
                 canonicalize(&board, &mut start);

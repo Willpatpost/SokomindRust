@@ -165,7 +165,7 @@ the box's cell, and can push only from a stand there. Optimal therefore keeps
 one distance per goal for each side of each cell, so a box whose next push
 needs a side the keeper cannot reach pays for the pushes that bring it round.
 Other boxes keep their sides through a push, so the estimate stays admissible
-and consistent. Its tables take 299 bytes per cell at 32 boxes instead of 68.
+and consistent. Its tables take 282 bytes per cell at 32 boxes instead of 68.
 Fast and Quality keep the per-cell distances. In their weighted searches the
 sharper estimate misled the stage ladder: huge found no route at any limit
 from 8,192 to 128,000 states.
