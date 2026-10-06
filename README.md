@@ -232,8 +232,11 @@ c4-standard-32 node: every budget from 64
 MiB up stages at the same point and generates the same states first. The
 reference's own benchmark reports about 5.3 s for 893 moves on its development
 machine (Node on Windows), so the two times come from different machines.
-Quality does not shorten it before its limit, which a larger budget only moves
-later (about 1.35 s at 64 MiB, 1.85 s at 128 MiB, 2.9 s at 256 MiB). The
+Quality's search does not shorten it before its memory limit, which a larger
+budget only moves later. The polish then takes it to 485 moves (226 pushes) at
+every budget, about 0.3 s after the search ends: at the production limits it
+returns at about 2.0 s at 64 MiB, 2.65 s at 128 MiB and 4.1 s at 256 MiB (job
+48673; `docs/route-polish.md` has the catalog-wide numbers). The
 sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:

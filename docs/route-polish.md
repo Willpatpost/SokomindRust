@@ -2,8 +2,9 @@
 
 Quality mode's search shortens its route by finding a better one in the arena.
 On large boards it stops short: on Grand Hall (`huge`) the staged route of 812
-moves comes back from Quality unchanged, because the restart's arena fills long
-before weight 3 reaches anything shorter. Much of such a route's length is walk:
+moves came back from the search unchanged, because the restart's arena fills
+long before weight 3 reaches anything shorter. The polish takes it to 485
+(see Measured). Much of such a route's length is walk:
 the keeper crosses the board to push one box a step, then crosses back. The
 polish attacks that directly. After the search, it rearranges when each box's
 pushes happen, which no arena-bound search over whole states can afford on a
@@ -132,6 +133,42 @@ Every unit floods for itself, so no flood outlives a unit. Queue keys pack the
 bit-flipped f, then the bit-flipped h, then the node id. Two entries never
 share a key, so the pop order is fixed. A polish ends the same in slices of one
 pop as in slices of 2^20, and natively as under WASM.
+
+## Measured
+
+Job 48673, on a c4-standard-32 node. It compares aa68600 (no polish) with
+8e855e8, in Quality mode, using the catalog example, which replays every route.
+The search is the same up to the handoff, so expanded and generated counts are
+identical. The base run's moves and time are the route and time before the
+polish.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.**
+  - 22 of the 57 Quality routes are shorter. None is longer, and the other 35
+    are unchanged.
+  - The largest gains:
+    - huge: 812 → 485;
+    - gen-v2-370002: 491 → 377;
+    - gen-v2-350070: 309 → 231;
+    - gen-v2-340053-466f: 175 → 123;
+    - gen-v2-330146: 178 → 128.
+  - Total Quality search time rose from 7.98 s to 8.87 s (+11%). The largest
+    increases are gen-v2-370002 (+0.34 s) and huge (+0.29 s).
+  - Push counts move both ways (huge 268 → 226, gen-v2-350108-80cb 99 → 103).
+    The objective is moves, so a job may trade a push for a shorter walk.
+- **Grand Hall.** The route is 485 moves (226 pushes) at every budget
+  measured:
+  - 20,000 and 1,000,000 states at 64 MiB;
+  - the production limits (60M states, 5 s) at 64, 128 and 256 MiB.
+- **Timing at the production limits.**
+  - The search ends at its memory limit at about 1.7, 2.3 and 3.9 s.
+  - The polish ends about 0.3 s later, at 2.0, 2.65 and 4.13 s, inside the
+    5 s limit.
+  - `reserved_bytes` is identical with and without the polish.
+
+485 is a local optimum under single-box rescheduling. The reference's
+rescheduler alone took its Grand Hall route from 789 to 503 moves. Its best
+route, 476 moves, also needed window rewrite, eight rounds and a chosen seed.
+Those are the moves listed next.
 
 ## Left out, for now
 
