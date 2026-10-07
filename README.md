@@ -286,6 +286,12 @@ and what it measured. These were rejected, for soundness or by measurement:
 - Sokomind2's linear-conflict and interaction-boost terms, and goal cuts as a
   heuristic term: none is a lower bound, and the first two gave a false optimal
   proof and a false bound there.
+- Starting each expansion's assignment solve from the goal potentials its
+  label group's last solve left, instead of from zero: the estimates stay
+  exact and every counter matched, but it was slower in every mode (job
+  48561, one c4-standard-32 node, alternating rounds): Optimal by 1.5% on the
+  catalog at 1M states, 64 MiB and 10 s, and by 3.3% on the huge, large and
+  open-field runs at 1M states and 256 MiB; Fast and Quality by 0.8 to 2.3%.
 
 Board text has one line per row: `O` is a wall, a space floor, `R` the robot,
 `X` a box whose goals are `S`, and any other uppercase letter a box whose goals

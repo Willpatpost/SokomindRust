@@ -125,8 +125,28 @@ freeze uses it too.
   gen-v2-350108-80cb0432), and shortens two Fast and three Quality routes.
 - Optimal proves the same 25 cases either way, every proof agreeing, and runs
   17% faster without the corral check at these limits. The check stays in
-  Optimal for now. Whether it earns its cost there, at larger limits or on the
-  lower bounds of the cases it does not prove, is open.
+  Optimal anyway, because it raises the lower bounds of the cases it does not
+  prove, and at larger limits it proves more (below).
+
+Job 48564 measured what Optimal loses without it: the tree against itself
+with the check off in Optimal only, three alternating rounds on one
+c4-standard-32 node. That tree also warm-started the assignment, which
+changes no search decision and was later dropped (README lists it among the
+rejected approaches). Every proof agreed and Fast and Quality were identical.
+
+- At 20k states and 64 MiB (the benchmark's limits) it proves the same 23
+  cases, 15% faster, but 15 lower bounds fall: large from 84 to 73, the
+  other 14 by 1.
+- At 1M states, 64 MiB and 10 s it proves the same 25 cases, 15% faster, but
+  15 lower bounds fall: large from 116 to 108, the other 14 by 1 or 2.
+- Large in Optimal at 1 GiB: with the check it proves the 148-move optimum
+  after 2,756,466 generated states, so a 4M-state run proves it too; without
+  the check the 4M run stops at a lower bound of 138, and an 11M run proves it
+  only after 4,552,497 states, 30% slower. Huge and open-field keep the same
+  bounds at 1M, 4M and 11M states.
+
+So the exact search keeps the check: removing it trades lower bounds and, at
+larger limits, proofs for speed.
 
 ### Flag floors
 
