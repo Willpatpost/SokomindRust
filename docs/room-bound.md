@@ -230,10 +230,17 @@ search adds 2 for the distance and up to 8 for the worklists.
 
 The build tries each candidate, smallest first, unless:
 
-- it encloses a room whose build failed, so its own would very likely fail too;
+- it encloses a room whose build failed behind a door no wider than its own,
+  so its own would very likely fail too;
 - or the tables of the rooms it encloses reached more than cap / 16
   (`ENCLOSED_SHARE`) states in their forward searches: its own search holds
   theirs, so it would very likely pass the cap and waste its work.
+
+A door's width is the number of its neighbors in the room, 1 to 3. Boxes enter
+a room behind a narrower door in fewer ways, so it may hold far fewer states
+than a failed room it encloses. On Grand Hall the 25-cell room behind door
+(12,7), of width 3, fails, while the 26-cell room that encloses it behind door
+(11,7), of width 1, builds both its tables.
 
 A room that encloses no built room tries its whole-room table, then, if that
 failed or its key needs more than 63 bits, the two halves of the room, split at
@@ -241,8 +248,8 @@ the door's line, when neither is empty. It keeps whatever builds. A room that
 encloses built rooms tries only its whole-room table, and replaces them if it
 builds; otherwise they stay. A failure is a forward search past the cap, a
 buffer the ledger or the allocator refuses, a table past the kept limit, or the
-work budget running out. It marks the room, so every room that encloses it is
-skipped.
+work budget running out. It marks the room, so every room that encloses it
+behind a door at least as wide is skipped.
 
 A replacement never lowers the tables' sum, so the build keeps the larger room
 without comparing the two at the start. R(C, C, LAB_C) is at least the sum of

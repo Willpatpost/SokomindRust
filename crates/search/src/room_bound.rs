@@ -257,6 +257,16 @@ fn encloses(cells: &[Cell], room: &Room) -> bool {
     cells.binary_search(&room.cells()[0]).is_ok()
 }
 
+/// The width of `door` for a room with the sorted `cells`: the door's
+/// neighbors in the room, 1 to 3, since one of its sides is never a room.
+fn door_width(board: &Board, door: Cell, cells: &[Cell]) -> u8 {
+    let neighbors = &board.neighbors()[usize::from(door)];
+    neighbors
+        .iter()
+        .filter(|&&cell| cell != NONE && cells.binary_search(&cell).is_ok())
+        .count() as u8
+}
+
 /// A built room and its tables, one or two.
 struct RoomTables {
     room: Room,
@@ -299,6 +309,8 @@ struct Attempt {
     tables: Vec<Table>,
     /// Whether a build size-failed.
     failed: bool,
+    /// The door's width (see `RoomBuild`).
+    width: u8,
     /// Whether the room encloses built rooms, which it replaces if its
     /// whole-room table builds.
     replaces: bool,
@@ -319,9 +331,15 @@ impl Attempt {
 /// The resumable build of the room bound, run before the search proper.
 ///
 /// The candidates go smallest first. Each is tried unless:
-/// - it encloses a room whose build size-failed, so its own would too;
+/// - it encloses a room whose build size-failed behind a door no wider than
+///   its own, so its own would very likely fail too;
 /// - or the rooms it encloses reached more than `cap / ENCLOSED_SHARE`
 ///   states in all.
+///
+/// A door's width is its number of neighbors in the room. Boxes enter a
+/// room behind a narrower door in fewer ways, so it may hold far fewer
+/// states than a failed room it encloses, as a room behind a width-1 door
+/// past a width-3 one does, and is tried.
 ///
 /// A room that encloses built rooms tries only its whole-room table, and if
 /// that builds, replaces them: their tables are freed. Otherwise they stay.
@@ -331,7 +349,7 @@ impl Attempt {
 ///
 /// A size failure is a forward search past `cap`, a refused buffer, a table
 /// past the kept limit, or the work budget running out. It marks the room,
-/// so each room enclosing it is skipped.
+/// so each room enclosing it behind a door at least as wide is skipped.
 ///
 /// A replacement never lowers the tables' sum: R(C, C, LAB_C) >= the sum of
 /// R(E, P, LAB) over the enclosed rooms' tables, in every state. Each LAB
@@ -350,8 +368,8 @@ pub(crate) struct RoomBuild {
     /// The doors and sorted cells of the candidates, `next..` still to try.
     candidates: Vec<(Cell, Vec<Cell>)>,
     next: usize,
-    /// The first cell of each room that size-failed.
-    failed: Vec<Cell>,
+    /// The first cell and door width of each room that size-failed.
+    failed: Vec<(Cell, u8)>,
     /// The built rooms, pairwise disjoint.
     built: Vec<RoomTables>,
     attempt: Option<Attempt>,
@@ -490,10 +508,11 @@ impl RoomBuild {
             (next.0, take(&mut next.1))
         };
         self.next += 1;
+        let width = door_width(board, door, &cells);
         let poisoned = self
             .failed
             .iter()
-            .any(|cell| cells.binary_search(cell).is_ok());
+            .any(|&(cell, failed)| width >= failed && cells.binary_search(&cell).is_ok());
         let (mut replaces, mut reached, mut kept) = (false, 0, 0);
         for built in self.built.iter().filter(|b| encloses(&cells, &b.room)) {
             replaces = true;
@@ -513,7 +532,7 @@ impl RoomBuild {
         let bytes = room.bytes() - charged + moves.bytes() + tables.capacity() * size_of::<Table>();
         if self.ledger.reserve(bytes).is_err() {
             self.ledger.free(charged);
-            self.failed.push(first);
+            self.failed.push((first, width));
             return;
         }
         if replaces {
@@ -528,6 +547,7 @@ impl RoomBuild {
             build: None,
             tables,
             failed: false,
+            width,
             replaces,
         });
     }
@@ -540,13 +560,14 @@ impl RoomBuild {
             build,
             tables,
             failed,
+            width,
             replaces,
             ..
         } = attempt;
         debug_assert!(build.is_none());
         self.ledger.free(moves.bytes());
         if failed {
-            self.failed.push(room.cells()[0]);
+            self.failed.push((room.cells()[0], width));
         }
         let Self { built, ledger, .. } = self;
         let keep = !tables.is_empty();
