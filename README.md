@@ -190,7 +190,22 @@ fill. When the Fast phase reaches its stage point with no route, the stage
 search runs first, and the restart keeps its route, if it finds one, as the
 bound. Only a full arena or the stage search's end restarts it, and at most
 once: a route that alone fills the arena ends it there instead, and a time limit
-that hits first ends Quality in whichever phase it is in.
+that hits first ends Quality in whichever phase it is in. When Quality ends on
+its own with a route, at an empty queue or a limit, it polishes the route
+before it reports (`crates/search/src/polish.rs`): one box at a time, a small
+A* keeps every other box's pushes in their order and searches for a shorter
+schedule of that box's own pushes among them, every walk as short as the boxes
+then allow. A route is kept only when it replays shorter. A run ends once a
+full pass over the boxes gains nothing, and where it ends depends on the order
+it visits them in, so the polish makes up to eight runs from the search's
+route, each in its own box order, and keeps the shortest. It then frees boxes
+in pairs, those that end nearest each other first, so two boxes can trade
+order, or goals when they share a label. It runs in the arena's share of
+the budget after the arena frees its records, so the reserved bytes do not
+change. A long search that stops improving its route also polishes it in
+episodes, in the part of that share the arena does not hold, and then goes on;
+an episode's route never bounds the search, and the end polish still runs.
+`docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -215,7 +230,8 @@ The objective is total remaining moves, not pushes. Not ported from the
 reference: its advanced portfolio, its region pattern database with exit cap
 (the whole-board variant below was measured instead), its push-admissible
 restricted linear conflict and interaction boost (each would be a gated
-heuristic change), generators, and Quality route repair. On Grand Hall (`huge`),
+heuristic change), generators, and Quality route repair other than the box
+rescheduling and two-box repair that the polish ports. On Grand Hall (`huge`),
 which plain Fast and Quality do not route in 8M states even at the 1024 MiB cap
 (about 7.5 s; job 47772), the stage search finds an 812-move route (268 pushes)
 in about 0.95 s in both Fast and Quality at 64, 128 and 256 MiB on a
@@ -223,9 +239,17 @@ c4-standard-32 node: every budget from 64
 MiB up stages at the same point and generates the same states first. The
 reference's own benchmark reports about 5.3 s for 893 moves on its development
 machine (Node on Windows), so the two times come from different machines.
-Quality does not shorten it before its limit, which a larger budget only moves
-later (about 1.35 s at 64 MiB, 1.85 s at 128 MiB, 2.9 s at 256 MiB). The
-sealed-corral check covers the reference's corral deadlock check, at the same
+Quality's search does not shorten it before its memory limit, which a larger
+budget only moves later. The polish then takes it to 475 moves (228 pushes), in
+eight runs of about 0.2 s each after the search ends: at the production limits
+it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and 4.7 s at 256 MiB (job
+48685). Given more time, its pair jobs take it to 458 moves at 15 s and to 436
+moves (222 pushes) at 30 s, at 64 MiB (job 48688). A larger budget ends the
+search later, and so the end polish, which episodes make up for: at 5 s, 256 MiB
+returns 475 (484 without episodes) and 1024 MiB 475 (the unpolished 812
+without), and 1024 MiB reaches 458 at 15 s and 436 at 30 s (job 48691).
+`docs/route-polish.md` has the catalog-wide numbers.
+The sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:
 
@@ -470,10 +494,13 @@ original), and the validate script, whose step list must match `ci.yml`'s,
 and need no WASM build. `bench:check` runs `crates/search/examples/catalog.rs` on
 every catalog puzzle in every mode at the baseline's 20,000 states and 64 MiB
 and compares the results with `benchmarks/catalog-baseline.json`. It fails on a
-false proof or bound, a regression (rules in `scripts/bench-gate.mjs`), a route,
-proof, status or bound improvement the baseline does not record yet (so that a
-later loss back to the old value cannot pass), or a changed catalog, never on
-timings; `npm run bench:update` rewrites the baseline after review.
+false proof or bound, a hard regression (a longer or lost route, a lost proof,
+or an Optimal status or bound that drops; rules in `scripts/bench-gate.mjs`),
+or a changed catalog, never on timings. Soft findings (counts past tolerance,
+more reserved bytes, a Fast or Quality status drop) and improvements the
+baseline does not record yet are reported without failing; `npm run
+bench:update` rewrites the baseline after review, so later runs are held to
+the gains.
 `test:parity` builds the WASM package and runs the native corpus again, at the
 catalog example's defaults of 20,000 states and 64 MiB (CI passes it the records
 `bench:check` wrote instead), then checks that the WASM search matches each

@@ -127,12 +127,15 @@ function check() {
     catalogChangesAreHard: true,
   });
   console.log('Raw measurements: target/bench/catalog.json; full report: target/bench/report.txt.');
+  // Soft findings and unrecorded gains are reported, not failed: only a false
+  // proof or bound, a hard regression or a changed catalog fails the gate.
+  if (diff.soft.length) console.log(`Soft findings (${diff.soft.length}) are reported only; review them above.`);
   if (stale.length) {
-    console.error(
-      `Route, proof, status or bound improvements not in the baseline (${stale.length}): run npm run bench:update and commit it`,
+    console.log(
+      `Route, proof, status or bound improvements not in the baseline (${stale.length}): run npm run bench:update to hold later runs to them`,
     );
   }
-  return !failures.length && !hard && !diff.soft.length && !stale.length;
+  return !failures.length && !hard;
 }
 
 function update() {

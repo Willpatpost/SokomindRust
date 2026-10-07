@@ -230,7 +230,7 @@ fn hash(player: Cell, boxes: &[Cell]) -> u64 {
 /// half, so every bit of `x` reaches both the low bits [`home`] takes and
 /// the top bits [`tag`] takes.
 #[inline]
-fn mix(x: u64) -> u64 {
+pub(crate) fn mix(x: u64) -> u64 {
     let m = x.wrapping_mul(0x9e3779b97f4a7c15);
     m ^ (m >> 32)
 }
@@ -492,6 +492,19 @@ impl Arena {
     /// aside, not the amount allocated.
     pub(crate) fn reserved_bytes(&self) -> usize {
         self.reserved_bytes
+    }
+    /// Bytes of that charge the arena holds now: its table, and room for its
+    /// chunks' records, with their box cells and queue entries, counted as
+    /// [`Arena::capacity`] counts them. Every chunk but the last holds
+    /// [`CHUNK`] records and none passes `node_limit + 1`, so the room is the
+    /// smaller of the two. It never exceeds the arena's share of
+    /// [`Arena::reserved_bytes`], and is 0 once [`Arena::release`] ran.
+    /// Counted in u64, so wasm32 counts the same.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        let per_state =
+            (size_of::<Record>() + self.boxes * size_of::<Cell>() + size_of::<Key>()) as u64;
+        let records = (self.chunks.len() << CHUNK_SHIFT).min(self.node_limit + 1) as u64;
+        self.table.len() as u64 * size_of::<u32>() as u64 + records * per_state
     }
     pub(crate) fn len(&self) -> usize {
         self.len
@@ -812,6 +825,21 @@ impl Arena {
         self.resident = 0;
         self.queue.clear();
         self.starved = self.table.is_empty();
+        #[cfg(debug_assertions)]
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+    /// Frees every chunk, the queue and the table, for a search that is done
+    /// with its states but still reports on them, such as a route polish
+    /// that reuses the budget. The length, counters, limit and flags stay,
+    /// so afterwards only [`Arena::len`], [`Arena::counters`],
+    /// [`Arena::reserved_bytes`] and [`Arena::limit_status`] may be read.
+    pub(crate) fn release(&mut self) {
+        self.chunks = Vec::new();
+        self.queue.release();
+        self.table = Vec::new();
+        self.resident = 0;
         #[cfg(debug_assertions)]
         {
             self.generation = self.generation.wrapping_add(1);

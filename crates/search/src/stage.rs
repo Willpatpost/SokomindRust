@@ -244,7 +244,7 @@ impl Scratch {
 }
 
 /// A vector of `len` copies of `value`, reserved at exactly that length.
-fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, TryReserveError> {
+pub(crate) fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, TryReserveError> {
     let mut vec = Vec::new();
     vec.try_reserve_exact(len)?;
     vec.resize(len, value);
