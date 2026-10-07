@@ -336,9 +336,9 @@ pub(crate) fn admit(
         return None;
     }
     // Before its first push the child's keeper walks to the stand of a
-    // statically legal push, so g + h + that walk still bounds every
-    // route through the child. A prune only: queue keys and stored
-    // estimates stay push-only.
+    // statically legal push, so g + h + the part of that walk h does not
+    // charge still bounds every route through the child. A prune only:
+    // queue keys and stored estimates stay the assignment's.
     if h > 0
         && let Some(best) = best
     {
@@ -371,14 +371,19 @@ pub(crate) fn admit(
     })
 }
 
-/// The root's estimate: its assignment's pushes plus the keeper's walk
-/// to its first push, bounded by [`stand_walk`], the Manhattan
-/// distance to the nearest stand of a statically legal push. Those
-/// walking moves are disjoint from the counted pushes, so the sum stays
-/// admissible. A root with no statically legal push has no route and
-/// adds no walk. Only the root queues this walk: `admit` uses the stand
-/// walk on children only as a prune, which keeps queue keys and stored
-/// estimates push-only.
+/// The root's estimate: its assignment's cost `pushes` plus the keeper's
+/// walk to its first push that the assignment does not charge, bounded by
+/// [`stand_walk`], less the keeper's own [`charge`](Heuristic::charge). The
+/// assignment charges each push's stand the walk since the keeper last
+/// stood where a box can; a start keeper elsewhere may have walked less to
+/// the first stand, by at most its own charge, and `stand_walk` adds that
+/// charge back where the Manhattan walk covers it. Those walking moves are
+/// disjoint from the counted ones, so the sum stays admissible, and a push
+/// lowers it by at most one, since its own stand caps the stand walk. A
+/// root with no statically legal push has no route and adds no walk. Only
+/// the root queues this walk: `admit` uses the stand walk on children only
+/// as a prune, which keeps queue keys and stored estimates the
+/// assignment's.
 pub(crate) fn root_estimate(
     board: &Board,
     heuristic: &Heuristic,
@@ -390,18 +395,24 @@ pub(crate) fn root_estimate(
     }
     let boxes = &state.boxes[..board.labels().len()];
     let occupied = |cell: Cell| boxes.contains(&cell);
-    pushes + stand_walk(board, heuristic, state.player, boxes, occupied, 1)
+    let walk = stand_walk(board, heuristic, state.player, boxes, occupied, 1);
+    (pushes + walk).saturating_sub(heuristic.charge(state.player))
 }
 
-/// The Manhattan distance from `player` to the nearest stand of a
-/// statically legal push, or 0 when there is none. Pushing box `j` in
-/// direction `e` is statically legal when the cell ahead of it and the
-/// stand behind it are floor that `occupied` leaves free, and the box is
-/// not [`dead_after`](Heuristic::dead_after) the push, which reads only the
+/// The least, over the stands of statically legal pushes, of the
+/// Manhattan distance from `player` to the stand plus `player`'s
+/// [`charge`](Heuristic::charge) less the stand's, never below 0; or 0
+/// when there is no such push. Pushing box `j` in direction `e` is
+/// statically legal when the cell ahead of it and the stand behind it are
+/// floor that `occupied` leaves free, and the box is not
+/// [`dead_after`](Heuristic::dead_after) the push, which reads only the
 /// cell ahead and the direction. The first push of every route from an
 /// unsolved state is one of these, made with exactly these boxes, so the
-/// walk to its stand bounds the route's walking moves, which the
-/// assignment's pushes do not count. Callers skip solved states.
+/// walk to its stand bounds the route's walking moves. The assignment
+/// already charges the stand's charge of that walk, its tail since the
+/// keeper last stood where a box can, so only the rest counts here: from
+/// a keeper at charge 0, at least the distance less the stand's charge.
+/// Callers skip solved states.
 ///
 /// Stops early once the answer is known to be below `enough` (0 asks for
 /// the exact walk): the result is below `enough` exactly when the exact
@@ -421,10 +432,13 @@ fn stand_walk(
     let walk =
         |cell: Cell| (x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width)) as u32;
     let neighbors = board.neighbors();
+    let base = heuristic.charge(player);
+    let most = heuristic.most_charge();
     let mut best = u32::MAX;
     for (j, &cell) in boxes.iter().enumerate() {
-        // A stand is next to its box, so at most one step closer.
-        if walk(cell) > best {
+        // A stand is next to its box, so at most one step closer, and its
+        // charge is at most `most`.
+        if walk(cell) + base > best.saturating_add(most) {
             continue;
         }
         for (e, &opposite) in OPPOSITE.iter().enumerate() {
@@ -438,7 +452,7 @@ fn stand_walk(
             {
                 continue;
             }
-            best = best.min(walk(stand));
+            best = best.min((walk(stand) + base).saturating_sub(heuristic.charge(stand)));
             if best < enough {
                 return best;
             }
@@ -525,22 +539,18 @@ mod tests {
         stand_walk(board, heuristic, player, boxes, occupied, 0)
     }
 
-    /// (h, h') with h' = h + walk, and 0 when solved; `None` without an
-    /// assignment.
-    fn estimates(board: &Board, heuristic: &Heuristic, state: &State) -> Option<(u32, u32)> {
-        let h = heuristic.estimate(state)?;
-        if h == 0 {
-            return Some((0, 0));
-        }
-        let boxes = &state.boxes[..board.labels().len()];
-        Some((h, h + walk(board, heuristic, state.player, boxes)))
+    /// The root estimate of `state`, `None` without an assignment.
+    fn root(board: &Board, heuristic: &Heuristic, state: &State) -> Option<u32> {
+        let pushes = heuristic.estimate(state)?;
+        Some(root_estimate(board, heuristic, state, pushes))
     }
 
-    /// Admissible: never above the exact remaining moves. Consistent: a
-    /// move lowers h' by at most 1 wherever it lowers h by at most 1,
-    /// which is every move, since the push-distance estimate is consistent.
-    /// On every catalog board whose primitive state space fits the
-    /// testkit's exploration cap.
+    /// The root estimate of every state, with keeper sides and without, is
+    /// admissible: never above the exact remaining moves. And consistent: a
+    /// walk moves each of its terms by at most one, and a push's own stand
+    /// caps its stand walk, leaving the assignment less the stand's charge,
+    /// which a push lowers by at most one. On every catalog board whose
+    /// primitive state space fits the testkit's exploration cap.
     #[test]
     fn stand_walk_is_admissible_and_consistent() {
         for (id, board, states, edges) in explored_catalog() {
@@ -549,10 +559,10 @@ mod tests {
                 let heuristic = Heuristic::new(board, keeper);
                 let values: Vec<_> = states
                     .iter()
-                    .map(|state| estimates(board, &heuristic, state))
+                    .map(|state| root(board, &heuristic, state))
                     .collect();
                 for (from, state) in states.iter().enumerate() {
-                    let Some((h, value)) = values[from] else {
+                    let Some(value) = values[from] else {
                         assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}");
                         continue;
                     };
@@ -562,9 +572,7 @@ mod tests {
                         exact[from]
                     );
                     for &(to, _) in &edges[from] {
-                        if let Some((next_h, next)) = values[to]
-                            && h <= next_h + 1
-                        {
+                        if let Some(next) = values[to] {
                             assert!(value <= next + 1, "{id}: {value} then {next} at {state:?}");
                         }
                     }
@@ -618,38 +626,37 @@ mod tests {
         assert!(onward > 0 && onward < pushes, "{onward} {pushes}");
     }
 
-    /// The root estimate is pushes + stand walk, never below pushes + box
-    /// walk (the step to the nearest box's side, recomputed below), and
-    /// above it on some catalog boards. tutorial-push checks by hand: its
-    /// only statically legal first push, right, needs a stand 3 steps from
-    /// the keeper, 2 more than the step to the box's side, so its root is
+    /// Without keeper sides, whose charges change the walk, the root
+    /// estimate is pushes + stand walk, never below pushes + box walk (the
+    /// step to the nearest box's side, recomputed below), and above it on
+    /// some catalog boards. tutorial-push checks by hand: its only
+    /// statically legal first push, right, needs a stand 3 steps from the
+    /// keeper, 2 more than the step to the box's side, so its root is
     /// 1 + 3 = 4, the optimum the crate example proves.
     #[test]
     fn stand_walk_never_lowers_the_root_estimate() {
         let mut raised = 0;
         for (id, board) in catalog() {
-            for keeper in [None, Some(board.initial().player)] {
-                let heuristic = Heuristic::new(&board, keeper);
-                // The start as the engine seeds it, canonical.
-                let mut start = board.initial();
-                canonicalize(&board, &mut start);
-                let pushes = heuristic.estimate(&start).unwrap();
-                let width = board.width();
-                let (x, y) = (start.player as usize % width, start.player as usize / width);
-                let box_walk = start.boxes[..board.labels().len()]
-                    .iter()
-                    .map(|&cell| {
-                        x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
-                    })
-                    .min()
-                    .unwrap() as u32;
-                let root = root_estimate(&board, &heuristic, &start, pushes);
-                assert!(root >= pushes + box_walk, "{id}");
-                if id == "tutorial-push" {
-                    assert_eq!(root, 4);
-                }
-                raised += usize::from(root > pushes + box_walk);
+            let heuristic = Heuristic::new(&board, None);
+            // The start as the engine seeds it, canonical.
+            let mut start = board.initial();
+            canonicalize(&board, &mut start);
+            let pushes = heuristic.estimate(&start).unwrap();
+            let width = board.width();
+            let (x, y) = (start.player as usize % width, start.player as usize / width);
+            let box_walk = start.boxes[..board.labels().len()]
+                .iter()
+                .map(|&cell| {
+                    x.abs_diff(cell as usize % width) + y.abs_diff(cell as usize / width) - 1
+                })
+                .min()
+                .unwrap() as u32;
+            let root = root_estimate(&board, &heuristic, &start, pushes);
+            assert!(root >= pushes + box_walk, "{id}");
+            if id == "tutorial-push" {
+                assert_eq!(root, 4);
             }
+            raised += usize::from(root > pushes + box_walk);
         }
         assert!(raised > 0);
     }

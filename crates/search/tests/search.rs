@@ -645,7 +645,8 @@ mod fixtures {
 /// The root bound counts the walk to the nearest statically legal push's
 /// stand, which can lie past the nearest box. The bound stays at or below
 /// the optimum and the run still proves it. TWO is a control whose keeper
-/// already stands behind a legal push.
+/// already stands behind a legal push, so only the pushes and their stand
+/// charges count.
 #[test]
 fn stand_walk_keeps_the_root_bound_admissible() {
     // The catalog's tutorial-push, also the fixtures module's tutorial_push

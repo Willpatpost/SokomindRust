@@ -165,10 +165,19 @@ the box's cell, and can push only from a stand there. Optimal therefore keeps
 one distance per goal for each side of each cell, so a box whose next push
 needs a side the keeper cannot reach pays for the pushes that bring it round.
 Other boxes keep their sides through a push, so the estimate stays admissible
-and consistent. Its tables take 282 bytes per cell at 32 boxes instead of 68.
+and consistent. Its tables take 283 bytes per cell at 32 boxes instead of 68.
 Fast and Quality keep the per-cell distances. In their weighted searches the
 sharper estimate misled the stage ladder: huge found no route at any limit
 from 8,192 to 128,000 states.
+
+Optimal's pushes also pay their stand's charge: the floor distance from the
+nearest cell where a box of some label could still reach a goal. A keeper
+pushing from a charged stand has walked at least that far since it last stood
+on such a cell, and a push leaves the keeper on its box's old cell, so the walks
+charged to different pushes do not overlap. The estimate less the keeper's own
+charge therefore stays admissible and consistent; a keeper that has just pushed
+has none. The start's stand walk counts only the part of its walk that the
+stand's charge leaves out. The charge costs one byte per cell.
 
 All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first

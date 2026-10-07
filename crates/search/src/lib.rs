@@ -84,7 +84,7 @@ use std::ops::RangeInclusive;
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
 /// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,698
-/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells (11,167,263 in Optimal,
+/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells (11,167,215 in Optimal,
 /// whose heuristic tables are larger) and 33,554,431 at one box (the engine
 /// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
 /// request at this limit therefore ends with [`Status::MemoryLimit`], never
