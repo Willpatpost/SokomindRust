@@ -150,8 +150,8 @@ impl Ledger {
 /// The candidate rooms: for each cell of `inside` taken as a door, each
 /// side of it but the largest that holds a start box or a goal and has at
 /// most `MAX_ROOM` cells. A side is a component of `inside` less the door.
-/// Each comes with its cells sorted, and the list runs smallest first, by
-/// size, door, then first cell.
+/// Each comes with its cells sorted, and the list runs narrowest door first
+/// (see `RoomBuild`), by door width, size, door, then first cell.
 ///
 /// The candidates are laminar: any two nest or are disjoint. Let T be
 /// |inside|. A candidate Q is not its door's largest side, and the sides
@@ -162,9 +162,9 @@ impl Ledger {
 /// its other sides, which all touch d1, so it is connected. It misses d2, so
 /// it lies in one side of d2, the one holding d1: Q2. Then |Q1| + |Q2| >= T,
 /// against 2|Q1| <= T - 1 and 2|Q2| <= T - 1. Nor are two candidates equal:
-/// a room's cells fix its door, the one cell outside them next to them. So,
-/// smallest first, each room built before Q lies inside Q or apart from it,
-/// which any one of its cells tells.
+/// a room's cells fix its door, the one cell outside them next to them. So
+/// a room built before Q holds Q, lies inside Q, or lies apart from it, and
+/// one cell of the smaller of the two tells which.
 ///
 /// A side's flood stops at more than `MAX_ROOM` cells, so a door costs
 /// O(`MAX_ROOM`) rather than O(|inside|). A side cut off is too large to
@@ -241,7 +241,14 @@ fn candidates(
     ledger.release(marked);
     ledger.release(stamp);
     ledger.release(sides);
-    out.sort_unstable_by_key(|(door, cells)| (cells.len(), *door, cells[0]));
+    out.sort_unstable_by_key(|(door, cells)| {
+        (
+            door_width(board, *door, cells),
+            cells.len(),
+            *door,
+            cells[0],
+        )
+    });
     Ok(out)
 }
 
@@ -251,8 +258,9 @@ fn hall_bytes(board: &Board) -> usize {
     board.tiles().len() * Heuristic::bytes_per_cell(board.labels().len(), true)
 }
 
-/// Whether a room with the sorted `cells` encloses `room`. Rooms nest or are
-/// disjoint (see `candidates`), so one cell of `room` tells.
+/// Whether a room with the sorted `cells` encloses `room`, given that `room`
+/// does not hold it. Rooms nest or are disjoint (see `candidates`), so one
+/// cell of `room` tells.
 fn encloses(cells: &[Cell], room: &Room) -> bool {
     cells.binary_search(&room.cells()[0]).is_ok()
 }
@@ -342,7 +350,9 @@ impl Attempt {
 
 /// The resumable build of the room bound, run before the search proper.
 ///
-/// The candidates go smallest first. Each is tried unless:
+/// The candidates go narrowest door first, then smallest. Each is tried
+/// unless:
+/// - it lies inside a built room, whose parts already hold its cells;
 /// - it encloses a room whose build size-failed behind a door no wider than
 ///   its own, so its own would very likely fail too;
 /// - or the rooms it encloses reached more than `cap / ENCLOSED_SHARE`
@@ -350,8 +360,12 @@ impl Attempt {
 ///
 /// A door's width is its number of neighbors in the room. Boxes enter a
 /// room behind a narrower door in fewer ways, so it may hold far fewer
-/// states than a failed room it encloses, as a room behind a width-1 door
-/// past a width-3 one does, and is tried.
+/// states than a room it encloses behind a wider door. On huge, the 26-cell
+/// room behind a width-1 door builds in 10.3M states per table, while the
+/// 25-cell room inside it, behind a width-3 door, passes the cap or the
+/// memory with both halves. Smallest first, the build paid for those
+/// failures before the outer room; narrowest first builds the outer room,
+/// then skips the inner one, which lies inside it.
 ///
 /// A room that encloses built rooms tries only its whole-room table, and if
 /// that builds, replaces them: their tables are freed. Otherwise they stay.
@@ -381,8 +395,8 @@ pub(crate) struct RoomBuild {
     /// The doors and sorted cells of the candidates, `next..` still to try.
     candidates: Vec<(Cell, Vec<Cell>)>,
     next: usize,
-    /// The first cell and door width of each room that size-failed.
-    failed: Vec<(Cell, u8)>,
+    /// The first cell, door width and size of each room that size-failed.
+    failed: Vec<(Cell, u8, usize)>,
     /// The built rooms, pairwise disjoint.
     built: Vec<RoomTables>,
     attempt: Option<Attempt>,
@@ -522,17 +536,21 @@ impl RoomBuild {
         };
         self.next += 1;
         let width = door_width(board, door, &cells);
-        let poisoned = self
-            .failed
-            .iter()
-            .any(|&(cell, failed)| width >= failed && cells.binary_search(&cell).is_ok());
+        // Rooms nest or are disjoint, so a room meeting this one holds it if
+        // larger and lies inside it if smaller.
+        let poisoned = self.failed.iter().any(|&(cell, failed, size)| {
+            width >= failed && size < cells.len() && cells.binary_search(&cell).is_ok()
+        });
+        let inside_built = self.built.iter().any(|b| {
+            b.room.cells().len() > cells.len() && b.room.cells().binary_search(&cells[0]).is_ok()
+        });
         let (mut replaces, mut reached, mut kept) = (false, 0, 0);
         for built in self.built.iter().filter(|b| encloses(&cells, &b.room)) {
             replaces = true;
             reached += built.reached();
             kept += built.kept();
         }
-        if poisoned || reached > self.cap / ENCLOSED_SHARE {
+        if inside_built || poisoned || reached > self.cap / ENCLOSED_SHARE {
             self.ledger.release(cells);
             return;
         }
@@ -545,7 +563,7 @@ impl RoomBuild {
         let bytes = room.bytes() - charged + moves.bytes() + tables.capacity() * size_of::<Table>();
         if self.ledger.reserve(bytes).is_err() {
             self.ledger.free(charged);
-            self.failed.push((first, width));
+            self.failed.push((first, width, room.cells().len()));
             return;
         }
         if replaces {
@@ -580,7 +598,8 @@ impl RoomBuild {
         debug_assert!(build.is_none());
         self.ledger.free(moves.bytes());
         if failed {
-            self.failed.push((room.cells()[0], width));
+            self.failed
+                .push((room.cells()[0], width, room.cells().len()));
         }
         let Self { built, ledger, .. } = self;
         let keep = !tables.is_empty();

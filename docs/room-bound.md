@@ -7,8 +7,8 @@ how its build fits the search's memory and time, the measurements behind it,
 with the SLURM job that produced each number, and the approaches it replaced.
 
 On Grand Hall (`huge`) it raises the start's bound from 214 to 255, and the
-lower bound at 30 s and 1 GiB from 244 to 278 (see
-[Measurements](#measurements)).
+lower bound at 30 s from 241 to 277 at 256 MiB and from 244 to 279 at 1 GiB
+(see [Measurements](#measurements)).
 
 ## The bound
 
@@ -196,8 +196,8 @@ of its sides but the largest that holds a start box or a goal and has at most
 A side's flood stops past 62 cells, so a door costs O(62) rather than O(floor).
 
 The candidates are laminar: any two nest or are disjoint (`candidates` in
-`room_bound.rs` proves it). So the build tries them smallest first, and one
-cell of a room built earlier tells whether a candidate encloses it.
+`room_bound.rs` proves it). So one cell of a room built earlier tells whether
+it holds a candidate, lies inside it, or lies apart from it.
 
 A table's label set is the labels with a start box or a goal on its part.
 
@@ -228,8 +228,9 @@ search adds 2 for the distance and up to 8 for the worklists.
 
 ### Order, replacement and skips
 
-The build tries each candidate, smallest first, unless:
+The build tries each candidate, narrowest door first, then smallest, unless:
 
+- it lies inside a built room, whose parts already hold its cells;
 - it encloses a room whose build failed behind a door no wider than its own,
   so its own would very likely fail too;
 - or the tables of the rooms it encloses reached more than cap / 16
@@ -238,9 +239,20 @@ The build tries each candidate, smallest first, unless:
 
 A door's width is the number of its neighbors in the room, 1 to 3. Boxes enter
 a room behind a narrower door in fewer ways, so it may hold far fewer states
-than a failed room it encloses. On Grand Hall the 25-cell room behind door
-(12,7), of width 3, fails, while the 26-cell room that encloses it behind door
-(11,7), of width 1, builds both its tables.
+than a room it encloses behind a wider door. On Grand Hall the 25-cell room
+behind door (12,7), of width 3, fails with both halves, while the 26-cell room
+that encloses it behind door (11,7), of width 1, builds both its tables.
+Smallest first, the build paid for the two failed halves, 23.1M units, before
+it reached the 26-cell room. Narrowest first, it builds the 26-cell room first
+and skips the 25-cell one, which lies inside it. That halves Grand Hall's
+build, from 47.6M units to 24.5M at 256 MiB and from 55.4M to 24.5M at 1 GiB,
+and lowers its peak at 1 GiB from 288.6 MiB to 172.3 MiB (job 49011).
+
+The rooms nest or are disjoint, so one cell tells how two that meet relate: a
+built room holds the candidate if it is larger and holds the candidate's first
+cell. Otherwise it lies inside the candidate if the candidate holds its first
+cell. The built parts therefore stay disjoint whatever the order, which is all
+the sum needs.
 
 A room that encloses no built room tries its whole-room table, then, if that
 failed or its key needs more than 63 bits, the two halves of the room, split at
@@ -304,6 +316,12 @@ calls bounds it like pops, and the build is deterministic, with no clock of its
 own. A search stopped during the build reports the start's bound without the
 tables.
 
+A unit took 170 to 260 ns on the probe machine (job 49011): about 170 over the
+catalog at 20k states, 183 at 5 s and 64 MiB, and 200 to 260 on Grand Hall's
+tables, the slower with 1 GiB. Grand Hall's build, 24.5M units, took 4.9 to
+6.3 s, so at 5 s with 256 MiB or more it may not finish, and that search then
+ends with the start's bound, 214, below the 240 or 241 that M alone reaches.
+
 ### After the build
 
 The start is seeded again in the re-sized arena, queued with max(M, S). The
@@ -359,6 +377,63 @@ That build's two blockers shaped the production one:
 - It peaked at 493 MiB per Grand Hall table, with about 10 MiB kept each,
   outside the budget, against the web's 64 MiB default.
 
+### The production build (job 49011)
+
+The same parts on the c4-standard-32 probe machine compared Optimal at `main`
+(`ff664bc`) with this build. Every catalog case ran at 20k states and 64 MiB,
+and at 5 s and 64 MiB. Grand Hall, `large` and `open-field` also ran at 1M
+states with 256 MiB, at 11M with 1 GiB, and at 5 s and 30 s with 64, 256 and
+1024 MiB. Each run ran once.
+
+Soundness: 27 proven optima, no proof that disagrees, no bound or start's bound
+above a proven optimum, and no unsolvable proof. Clippy passed.
+
+| Board | Limits | M alone | With the room bound |
+| --- | --- | --- | --- |
+| `huge` | 1M states, 256 MiB | 238 (0.8 s) | 275 (8.2 s) |
+| `huge` | 11M states, 1 GiB | 243 (9.9 s) | 279 (31.8 s) |
+| `huge` | 30 s, 256 MiB | 241 | 277 |
+| `huge` | 30 s, 1 GiB | 244 | 279 |
+| `huge` | 5 s or 30 s, 64 MiB | 238 | 238, its tables pass the cap |
+| `huge` | 5 s, 256 MiB | 241 | 214, the build unfinished |
+| `huge` | 5 s, 1 GiB | 240 | 214, the build unfinished |
+| `large` | 1M states, 256 MiB | 145 | proved 148 in 0.35 s |
+| `large` | 5 s to 11M states, 64 MiB to 1 GiB | proved 148 in 1.1 to 1.3 s | proved 148 in 0.3 to 0.4 s |
+
+`open-field` has no candidate and matched `main` in every run. At 20k states,
+29 catalog boards build tables, and 20 of them raise the start's bound, by 233
+moves in all. There the open boards' summed bound rose from 3218 to 3376, 14
+higher and none lower. At 5 s and 64 MiB it rose from 3360 to 3511, 13 higher
+and none lower, with one more board proved (320093). At those limits the
+build's peak was at most 45.6 MiB and its kept tables at most 12.5 MiB. Peak
+resident memory at 64 MiB reached 65.9 MiB, as `main`'s did, the process's own
+overhead above the budget.
+
+At 5 s with 256 MiB or 1 GiB, Grand Hall's build of 24.5M units takes 4.9 to
+6.3 s, so the search may stop inside it and report the start's bound, 214. A
+copy of this build with probe-only tracing finished at 4.9 s at 256 MiB and
+reached 269, and at 1 GiB the build ran past 5 s in both. These two runs are the
+only ones where the room bound lowers a bound below M alone's.
+
+Two earlier probes of the production build led here:
+
+- Job 48969 skipped every room enclosing a failed one. On Grand Hall the 25-cell
+  room, which fails, then skipped the 26-cell room that builds, and no table was
+  built.
+- Job 48991 passed the skip only through a door at least as wide, and Grand
+  Hall reached 275 to 279 as above. Smallest first, its build tried the 25-cell
+  room's halves before the 26-cell room, 47.6M to 55.4M units in all (job
+  49011's copy). On gen-v2-370002 at 5 s and 64 MiB, the halves that hold every
+  label of their failed room left the bound at 170, against 173 for M alone.
+- Job 48991 also measured `ENCLOSED_SHARE` at 4 and 8. They raised the open
+  boards' sum at 20k states, where the 1M cap binds, by 12 and 7, but not at
+  5 s and 64 MiB (3508 and 3507, against 3508 at 16), and matched 16 in every
+  larger run. It stays 16.
+
+Before narrowest first, the room bound added 89,729 bytes to the wasm module,
+from 257,025 to 346,754 (jobs 48991 and 49011). Most of it is `RoomBuild::step`
+and the sorts of the move lists (job 48992).
+
 ## Rejected approaches
 
 - **A side split with box identities.** Splitting the room into two halves and
@@ -376,9 +451,25 @@ That build's two blockers shaped the production one:
   search's edges, stored. It peaked at 493 MiB on Grand Hall's largest table.
   The inverse move lists walk the same edges with no storage.
 - **Largest room first.** Trying the 27-cell room behind Grand Hall's door
-  (10,7) first wasted about 7 s on halves that passed the cap. Smallest first,
-  with the skip and replace rules, builds the nested 26-cell room's tables
-  first and never tries a room whose enclosed tables are already large.
+  (10,7) first wasted about 7 s on halves that passed the cap. With the skip
+  and replace rules, the build never tries a room whose enclosed tables are
+  already large.
+- **Smallest room first.** Production's first order. On Grand Hall it paid
+  23.1M units for the failed halves of the 25-cell room before it built the
+  26-cell room around it (job 49011). Narrowest door first gives the same
+  bounds at `big` and `prod` and halves that build. At 20k states it raises
+  the open boards' summed bound by 6 more, three boards higher and one lower
+  (gen-v2-320041-027a9b04, 73 to 69, still above M alone's 65).
+- **Poison through any door.** The first production build skipped every room
+  enclosing a failed one. On Grand Hall the failed 25-cell room then skipped the
+  26-cell room around it, and no table was built (job 48969). Poison now passes
+  only through a door at least as wide as the failed room's.
+- **A chain skip.** Skipping every room after one fails at the cap would, on
+  Grand Hall, have tried the 27-cell room in place of the 26-cell one.
+- **Halves holding every label.** They repeat their failed room's forward
+  search (see [Order, replacement and skips](#order-replacement-and-skips)).
+  With them, gen-v2-370002 ended at 170 at 5 s and 64 MiB, against 173 for M
+  alone (job 48991). Without them it reaches 173 (job 49011).
 - **Tables outside the budget.** The memory budget bounds the search, so the
   tables and the build's buffers count against it. A search with too little
   memory for a room's tables builds only those that fit, and goes on with M

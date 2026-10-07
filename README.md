@@ -272,12 +272,16 @@ paid for as pops, a fixed number of its work units each, and stops at a work
 budget scaled to the state limit. Its buffers fit the budget the fixed buffers
 and the arena leave, and the tables it keeps, at most a quarter of the budget
 less the fixed buffers, are charged to it, so the arena is sized again, never
-larger. In probe 48775, a build of the same tables outside the budget raised
-Grand Hall's start bound from 214 to 255, and its bound from 238 to 275 at 1M
-states and 256 MiB, from 243 to 279 at 11M states and 1 GiB, and from 244 to 278
-at 30 s and 1 GiB. It proved large at 1M states, where the estimate alone
-stopped at 145, and in 0.48 s instead of 1.54 s at 11M. The open catalog cases'
-bounds summed 3456 instead of 3218 at 20,000 states.
+larger. In probe 49011 it raised Grand Hall's start bound from 214 to 255, and
+its bound from 238 to 275 at 1M states and 256 MiB, from 243 to 279 at 11M
+states and 1 GiB, from 241 to 277 at 30 s and 256 MiB, and from 244 to 279 at
+30 s and 1 GiB. It proved large in 0.3 to 0.4 s, at 1M states, where the
+estimate alone stopped at 145, and in the runs where the estimate alone took
+1.1 to 1.3 s. The open catalog cases' bounds summed 3376 instead of 3218 at
+20,000 states, and 3511 instead of 3360 at 5 s and 64 MiB, with one more case
+proved and none lower. At 64 MiB Grand Hall's tables do not fit, and at 5 s
+with 256 MiB or 1 GiB its build of about 5 to 6 s may not finish, leaving its
+bound at the start's 214 against 241 and 240 with the estimate alone.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
