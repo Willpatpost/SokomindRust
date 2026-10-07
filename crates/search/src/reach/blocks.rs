@@ -217,6 +217,11 @@ impl Blocks {
             }
         }
     }
+    /// The label of the side of floor cell `x` holding its neighbor in
+    /// direction `d`, which must exist.
+    pub(crate) fn toward(&self, x: Cell, d: usize) -> u8 {
+        (self.vertices[x as usize].labels >> (2 * d)) & 3
+    }
     /// Whether floor cell `x` is in the keeper's floor component.
     pub(crate) fn in_keeper(&self, x: Cell) -> bool {
         self.vertices[x as usize].links & IN_KEEPER != 0
@@ -357,6 +362,11 @@ mod tests {
             }
         }
         let label = |c: usize| canonical[sides[c]].unwrap();
+        for (d, y) in near.into_iter().enumerate() {
+            if let Some(y) = y {
+                assert_eq!(blocks.toward(cell, d), label(y), "{at} d {d}");
+            }
+        }
         let tin = |c: usize| blocks.span(c as Cell).start;
         let members: Vec<usize> = (0..whole.len())
             .filter(|&c| c != x && whole[c] == whole[x])

@@ -752,7 +752,7 @@ mod tests {
     #[test]
     fn capacity_matches_bytes_for() {
         for board in [huge(), widest()] {
-            let heuristic = Heuristic::new(&board);
+            let heuristic = Heuristic::new(&board, None);
             let start = board.initial();
             let ladder = Ladder::new(&board, &heuristic, &start, 1 << 20, 5, false);
             let ladder = ladder.expect("the ladder's buffers");

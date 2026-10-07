@@ -699,7 +699,7 @@ mod tests {
         fn new(board: &Board) -> Self {
             Self {
                 board: board.clone(),
-                heuristic: Heuristic::new(board),
+                heuristic: Heuristic::new(board, None),
                 reach: Reach::new(board.tiles().len()),
                 deadlock: Deadlock::new(board),
                 corral: Corral::new(board),
