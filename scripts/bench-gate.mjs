@@ -205,11 +205,11 @@ function fields(c) {
  * A move the other way on a ruled field is improved, and every other difference
  * is changed. Keys only in prev are missing, and keys only in cur are extra.
  *
- * bench:check fails on any hard or soft finding and on the improvements
- * mustRecord selects, and through formatReport counts missing and extra cases
- * as hard. bench:update records soft findings, improvements and missing or
- * extra cases, and refuses hard findings unless run with --accept-regressions.
- * Changed findings and S1 and S2 improvements never fail either. Invariant
+ * bench:check fails on any hard finding, and through formatReport counts
+ * missing and extra cases as hard; it reports soft findings and the
+ * improvements mustRecord selects without failing. bench:update records soft
+ * findings, improvements and missing or extra cases, and refuses hard findings
+ * unless run with --accept-regressions. Changed findings never fail. Invariant
  * failures (see invariants) fail every caller, with no override.
  * @param {readonly Case[]} prev
  * @param {readonly Case[]} cur
@@ -279,11 +279,11 @@ export function compare(prev, cur, { sameConfig }) {
 const RESULT_RULES = new Set(['R1', 'R2', 'R3', 'R4', 'S3']);
 
 /**
- * The improvements bench:check fails on until bench:update records them: those
- * under a result rule (R1-R4, S3). The baseline value is the floor those rules
- * hold later runs to, so a gain left out of it would let a later loss back to
- * the old value pass. S1 and S2 judge cost, not results, so their improvements
- * stay informational.
+ * The improvements bench:check asks bench:update to record: those under a
+ * result rule (R1-R4, S3). The baseline value is the floor those rules hold
+ * later runs to, so a gain left out of it would let a later loss back to the
+ * old value pass. S1 and S2 judge cost, not results, so their improvements are
+ * not listed.
  * @param {Diff} diff
  * @returns {Finding[]}
  */
