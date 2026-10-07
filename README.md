@@ -279,9 +279,11 @@ states and 1 GiB, from 241 to 277 at 30 s and 256 MiB, and from 244 to 279 at
 estimate alone stopped at 145, and in the runs where the estimate alone took
 1.1 to 1.3 s. The open catalog cases' bounds summed 3376 instead of 3218 at
 20,000 states, and 3511 instead of 3360 at 5 s and 64 MiB, with one more case
-proved and none lower. At 64 MiB Grand Hall's tables do not fit, and at 5 s
-with 256 MiB or 1 GiB its build of about 5 to 6 s may not finish, leaving its
-bound at the start's 214 against 241 and 240 with the estimate alone.
+proved and none lower. At 64 MiB Grand Hall's tables do not fit. At 5 s with
+256 MiB or 1 GiB its build, about 4 s since the table slots hold hash bits
+(probe 49016), finishes, and the bound reaches 272 or 273 against 241 and 240
+with the estimate alone. On a machine slow enough that the build does not
+finish, the bound stays at the start's 214.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
