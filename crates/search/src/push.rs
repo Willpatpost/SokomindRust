@@ -121,8 +121,9 @@ impl Parent {
 
 /// A push of the parent's box `i` in direction `d`, from `from` to `to`,
 /// with the keeper on `stand`, that passed the static check in [`legal`].
-/// Only [`legal`] builds one and only [`admit`] and [`excess`] read it, so
-/// a caller can pass on nothing but a statically legal push.
+/// Only [`legal`] builds one and only [`admit`], [`excess`] and
+/// [`Push::moved`] read it, so a caller can pass on nothing but a
+/// statically legal push.
 pub(crate) struct Push {
     i: usize,
     d: usize,
@@ -131,10 +132,21 @@ pub(crate) struct Push {
     stand: Cell,
 }
 
+impl Push {
+    /// The box moved, the cell it lands on and the direction, `(i, to, d)`,
+    /// which the room bound's incremental hall estimate reads.
+    #[inline]
+    pub(crate) fn moved(&self) -> (usize, Cell, usize) {
+        (self.i, self.to, self.d)
+    }
+}
+
 /// A child that passed every prune in [`admit`].
 pub(crate) struct Child {
     pub(crate) node: Node,
-    /// Its estimate in full; `node.h` holds it only while it fits.
+    /// The h to queue: its estimate in full, which `node.h` holds only
+    /// while it fits. The exact search's room bound may raise it, and
+    /// `node.h` then keeps the estimate (see `Engine::admit`).
     pub(crate) h: u32,
     /// The table slot [`Arena::find`] returned for its state.
     pub(crate) slot: Slot,

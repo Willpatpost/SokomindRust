@@ -18,7 +18,9 @@
 //!   and goes on.
 //! - [`Mode::Optimal`]: admissible A*, and the only mode that yields a
 //!   [`Proof`]: that the route is shortest, that the optimum lies between
-//!   two bounds, or that no route exists.
+//!   two bounds, or that no route exists. It first builds exact tables for
+//!   the board's single-door rooms within its budget, and queues by the
+//!   larger of their bound and the estimate below (docs/room-bound.md).
 //!
 //! Every mode queues by one estimate of the remaining moves: a minimum-cost
 //! assignment of each label's boxes to its goals, counted in pushes. The
@@ -68,6 +70,7 @@ mod polish;
 mod proof;
 mod push;
 mod reach;
+mod room_bound;
 mod stage;
 #[cfg(test)]
 mod testkit;
@@ -149,7 +152,16 @@ pub enum Mode {
     /// route either found.
     Quality,
     /// Admissible A* over moves: a shortest route, proved once the search
-    /// finishes.
+    /// finishes. Before the search proper it builds the room bound: for each
+    /// single-door room that holds a box or a goal, exact tables of the
+    /// moves its boxes need inside it, in a relaxed problem. It then queues
+    /// each state by the larger of that bound and the assignment estimate.
+    /// The build is paid for as pops (see [`Search::advance`]) and stops at
+    /// a work budget scaled to the state limit. Its buffers fit the budget
+    /// the fixed buffers and the arena leave. The tables it keeps, at most a
+    /// quarter of what the fixed buffers leave, and their hall heuristic are
+    /// charged to the budget, so they lower the state limit that
+    /// `memory_mib` allows (docs/room-bound.md).
     Optimal,
 }
 impl Mode {
@@ -337,7 +349,9 @@ pub struct SearchStats {
     pub pruned_deadlocks: u64,
     /// Children rejected because an equal/cheaper version is known or closed.
     pub pruned_duplicates: u64,
-    /// Children rejected because no label-compatible goal assignment exists.
+    /// Children rejected because no label-compatible goal assignment exists,
+    /// or, in Optimal, because a room table shows that none of them has a
+    /// solution (docs/room-bound.md).
     pub pruned_assignment: u64,
     /// Popped nodes or children rejected by an incumbent cost bound.
     pub pruned_bound: u64,
@@ -438,6 +452,9 @@ impl Search {
     /// reserved now. Records and the state table grow as the search fills
     /// them, never past that size, and a growth the allocator refuses also
     /// ends the search with [`Status::MemoryLimit`], even below `max_states`.
+    /// An Optimal search sizes the arena once more when its room bound is
+    /// built, never larger, with the tables charged to the budget (see
+    /// [`Mode::Optimal`]).
     ///
     /// `start` may be any valid position on `board`, such as a live game's;
     /// equal-label boxes may come in any order. No state is expanded until
@@ -539,28 +556,33 @@ impl Search {
     pub fn generated(&self) -> u32 {
         self.engine().generated()
     }
-    /// Bytes charged against the memory budget, fixed when the search was
-    /// built: the fixed buffers and the whole arena at its full state limit.
-    /// The arena grows toward this as the search fills it but never past it,
-    /// so it is a ceiling, not the bytes allocated so far. Its state table
-    /// has two sizes: at most 2^16 slots (256 KiB) at first, then the full
-    /// size. On wasm32 linear memory never shrinks, so a search that grows
-    /// its table can leave linear memory up to that freed first table,
-    /// 256 KiB, past this ceiling, and one that ran the stage search up to
-    /// 200,000 bytes more, for the stage search's freed buffers, which the
-    /// route need not reuse. A Quality search's polish frees the arena's
-    /// records, queue and table before it allocates its own buffers within
-    /// the arena's share; on wasm32 the allocator may not fit them into the
-    /// freed blocks, so linear memory can grow by up to that share again. An
-    /// episode (see [`Mode::Quality`]) allocates while the arena keeps its
-    /// records, only in the part of the share they leave free, and frees its
-    /// buffers before the search resumes; on wasm32 the arena's later blocks
-    /// may not reuse them either, so linear memory can grow by up to the
-    /// share again for each episode. The allocator's slack comes on top: it
-    /// grows linear memory by whole requests rounded up to 64 KiB, even when
-    /// the free space at the top of the heap falls just short, so each growth
-    /// can leave up to 64 KiB more there, and up to one of the arena's record
-    /// blocks plus 192 KiB can stay unused.
+    /// Bytes charged against the memory budget: the fixed buffers and the whole
+    /// arena at its full state limit, set when the search was built. The arena
+    /// grows toward this as the search fills it but never past it, so it is a
+    /// ceiling, not the bytes allocated so far. While an Optimal search builds
+    /// its room bound, this is the whole budget, which the build's buffers may
+    /// fill besides the fixed buffers and the arena holding the start. Once the
+    /// build ends, the arena is sized again, never larger, with the tables the
+    /// search keeps counted among the fixed buffers. On wasm32 the arena's
+    /// later blocks may not reuse the build's freed buffers, so linear memory
+    /// can grow by up to the arena's share again. The arena's state table has
+    /// two sizes: at most 2^16 slots (256 KiB) at first, then the full size. On
+    /// wasm32 linear memory never shrinks, so a search that grows its table can
+    /// leave linear memory up to that freed first table, 256 KiB, past this
+    /// ceiling, and one that ran the stage search up to 200,000 bytes more, for
+    /// the stage search's freed buffers, which the route need not reuse. A
+    /// Quality search's polish frees the arena's records, queue and table
+    /// before it allocates its own buffers within the arena's share; on wasm32
+    /// the allocator may not fit them into the freed blocks, so linear memory
+    /// can grow by up to that share again. An episode (see [`Mode::Quality`])
+    /// allocates while the arena keeps its records, only in the part of the
+    /// share they leave free, and frees its buffers before the search resumes;
+    /// on wasm32 the arena's later blocks may not reuse them either, so linear
+    /// memory can grow by up to the share again for each episode. The
+    /// allocator's slack comes on top: it grows linear memory by whole requests
+    /// rounded up to 64 KiB, even when the free space at the top of the heap
+    /// falls just short, so each growth can leave up to 64 KiB more there, and
+    /// up to one of the arena's record blocks plus 192 KiB can stay unused.
     pub fn reserved_bytes(&self) -> usize {
         self.engine().reserved_bytes()
     }
@@ -584,8 +606,13 @@ impl Search {
     /// route, a pop is one unit of its polish, and the status stays
     /// [`Status::Running`] until the polish ends. A Quality search due an
     /// episode returns as it starts; a pop is then one unit of the episode,
-    /// and once it ends the rest of the pops go to the search. Slicing the
-    /// work this way lets a worker yield, report or stop between calls.
+    /// and once it ends the rest of the pops go to the search. An Optimal
+    /// search first builds its room bound (see [`Mode::Optimal`]): a pop is
+    /// then a fixed number of the build's work units, each about one state
+    /// of a table's search, and once it ends the rest of the pops go to the
+    /// search. Slicing the work this way lets a worker yield, report or stop
+    /// between calls; an Optimal search stopped during its build keeps the
+    /// bound of its start without the room tables.
     pub fn advance(&mut self, pops: u32) {
         self.engine_mut().advance(pops);
     }

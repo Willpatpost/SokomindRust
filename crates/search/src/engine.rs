@@ -8,6 +8,7 @@ use crate::{
     polish::{self, Polish},
     push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
+    room_bound::{BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent},
     stage::{self, Done, Ladder},
 };
 use sokomind_core::{ACTIONS, Board, MAX_CELLS, MAX_ROUTE, OPPOSITE, State};
@@ -80,6 +81,14 @@ pub(crate) struct Policy {
     /// arena does not hold, and then goes on (see [`EPISODE_FLOOR`]).
     /// Route-only, so never Exact's; Fast's first route stands as found.
     polish: bool,
+    /// Whether the search builds the room bound (room_bound.rs) before the
+    /// search proper, in slices paid as pops, and then queues max(M, S),
+    /// with S the room tables' sum plus the hall part. The tables are
+    /// charged to the budget: the arena is re-sized for them and the start
+    /// queued again. Exact only: it raises bounds, and the build costs time a
+    /// weighted search spends finding its route. Job 48775 raised Grand
+    /// Hall's root bound from 214 to 255 (docs/room-bound.md).
+    room_bound: bool,
 }
 impl Policy {
     /// Admissible A*; exact soundness never depends on consistency.
@@ -95,6 +104,7 @@ impl Policy {
         keeper_sides: true,
         partial_fill: Some(90),
         polish: false,
+        room_bound: true,
     };
     /// First route wins, with no bound on its length. Fast never proves.
     /// When the search reaches its stage point with no route, the stage
@@ -117,6 +127,7 @@ impl Policy {
         keeper_sides: false,
         partial_fill: None,
         polish: false,
+        room_bound: false,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits,
     /// then polishes the route; polishes it in episodes on the way when the
@@ -133,6 +144,7 @@ impl Policy {
         keeper_sides: false,
         partial_fill: None,
         polish: true,
+        room_bound: false,
     };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
     /// arena fills the search starts over as plain [`Self::QUALITY`],
@@ -213,7 +225,12 @@ const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // distances (`Heuristic::distance`), which such a heuristic does not keep.
 // A partially expanding policy is admissible and runs alone, with no next
 // phase, restart or stage, so its arena only grows and every key it
-// re-queues bounds a route it left out.
+// re-queues bounds a route it left out. A room-bound policy is admissible
+// and runs alone too, and is no `then` or `restart` target, so the build
+// runs only from `Engine::new`, under the root policy. It counts keeper
+// sides, so the hall part, which shares M's moves, is feasible wherever M
+// is, and it never stages, since the arena's re-size sets the fill point to
+// the new limit.
 const _: () = {
     let all = Policy::ALL;
     let mut i = 0;
@@ -224,9 +241,11 @@ const _: () = {
         if let Some(next) = p.restart {
             assert!(next.then.is_none() && next.restart.is_none());
             assert!(!next.stage && next.keeper_sides == p.keeper_sides);
+            assert!(!next.room_bound);
         }
         if let Some(next) = p.then {
             assert!(!next.stage && next.keeper_sides == p.keeper_sides);
+            assert!(!next.room_bound);
         }
         if p.stage {
             assert!(p.stop_on_goal_push && p.weight > 1);
@@ -234,6 +253,10 @@ const _: () = {
         if let Some(percent) = p.partial_fill {
             assert!(percent <= 100 && p.weight == 1);
             assert!(p.then.is_none() && p.restart.is_none() && !p.stage);
+        }
+        if p.room_bound {
+            assert!(p.weight == 1 && p.then.is_none() && p.restart.is_none());
+            assert!(!p.stage && p.keeper_sides);
         }
         i += 1;
     }
@@ -283,6 +306,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 keeper_sides,
                 partial_fill,
                 polish,
+                room_bound,
             } = *a;
             weight == b.weight
                 && stop_on_goal_pop == b.stop_on_goal_pop
@@ -299,6 +323,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                     _ => false,
                 }
                 && polish == b.polish
+                && room_bound == b.room_bound
         }
         (None, None) => true,
         _ => false,
@@ -363,6 +388,16 @@ pub(crate) struct Engine {
     /// the other; while a polisher holds its own route there, it is charged
     /// to the polisher's allowance.
     polished: Option<Vec<u8>>,
+    /// The room bound once it is built and charged to the budget (see
+    /// `Policy::room_bound`). `None` while it builds, and for good when it
+    /// built no table or the arena could not be re-sized for its tables.
+    rooms: Option<RoomBound>,
+    /// Some while the room bound builds, before the search proper, which
+    /// waits with only the start in its arena, queued with M alone.
+    room_build: Option<RoomBuild>,
+    /// The memory budget, which the arena is re-sized against once the
+    /// room bound is built.
+    memory_mib: usize,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -451,6 +486,15 @@ fn fixed_bytes(cells: usize, boxes: usize, keeper_sides: bool) -> u64 {
         .saturating_add(FIXED_SCRATCH as u64)
 }
 
+/// The arena length from which `policy` expands partially (see
+/// `Policy::partial_fill`) in an arena of `node_limit` nodes, or
+/// `usize::MAX` when it never does.
+fn partial_at(policy: &Policy, node_limit: usize) -> usize {
+    policy.partial_fill.map_or(usize::MAX, |percent| {
+        (node_limit as u64 * u64::from(percent) / 100) as usize
+    })
+}
+
 impl Engine {
     pub(crate) fn new(
         board: Board,
@@ -477,9 +521,7 @@ impl Engine {
         } else {
             node_limit
         };
-        let partial_at = policy.partial_fill.map_or(usize::MAX, |percent| {
-            (node_limit as u64 * u64::from(percent) / 100) as usize
-        });
+        let partial_at = partial_at(&policy, node_limit);
         let heuristic = Heuristic::new(&board, policy.keeper_sides.then_some(start.player));
         let deadlock = Deadlock::new(&board);
         let corral = Corral::new(&board);
@@ -505,8 +547,23 @@ impl Engine {
             polish: None,
             episode_at: u32::MAX,
             polished: None,
+            rooms: None,
+            room_build: None,
+            memory_mib,
         };
         search.seed();
+        // The build's share is what the budget leaves besides the fixed
+        // buffers and the arena holding the start.
+        if policy.room_bound && search.status == Status::Running {
+            search.room_build = RoomBuild::new(
+                &search.board,
+                &search.start,
+                search.arena.node_limit(),
+                memory_mib,
+                fixed,
+                search.arena.held_bytes(),
+            );
+        }
         Ok(search)
     }
     /// Inserts and queues the start in an arena that is empty or holds only
@@ -581,8 +638,23 @@ impl Engine {
     pub(crate) fn generated(&self) -> u32 {
         self.discarded + self.arena.len() as u32
     }
+    /// The ceiling on the search's buffers: the whole budget while the room
+    /// bound builds, since the build's buffers may fill what the fixed
+    /// buffers and the arena leave, and the arena's reservation otherwise,
+    /// which counts the room bound's bytes once the arena is re-sized.
     pub(crate) fn reserved_bytes(&self) -> usize {
-        self.arena.reserved_bytes()
+        if self.room_build.is_some() {
+            self.memory_mib << 20
+        } else {
+            self.arena.reserved_bytes()
+        }
+    }
+    /// The bytes charged to the budget besides the arena: the fixed buffers
+    /// and the room bound's tables and hall part.
+    fn charged_bytes(&self) -> u64 {
+        let (cells, boxes) = (self.board.tiles().len(), self.board.labels().len());
+        fixed_bytes(cells, boxes, self.policy.keeper_sides)
+            .saturating_add(self.rooms.as_ref().map_or(0, RoomBound::bytes))
     }
     /// The arena's counters and the engine's in one value. The destructures
     /// and the literal name every field, so a counter added to any of the
@@ -631,11 +703,13 @@ impl Engine {
     }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach. A
-    /// running stage ladder is dropped with its unfinished stage, and a
-    /// running polish with its unfinished job, keeping its best route.
+    /// running stage ladder is dropped with its unfinished stage, a running
+    /// polish with its unfinished job, keeping its best route, and a running
+    /// room build with its tables, leaving the start queued with M alone.
     pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
             self.staging = None;
+            self.room_build = None;
             if let Some(polisher) = &mut self.polish {
                 polisher.stop();
             }
@@ -724,9 +798,8 @@ impl Engine {
             && let Ok(route) = self.route_to(id)
         {
             let boxes = self.board.labels().len();
-            let fixed = fixed_bytes(self.board.tiles().len(), boxes, self.policy.keeper_sides);
             let allowance = (self.arena.reserved_bytes() as u64)
-                .saturating_sub(fixed)
+                .saturating_sub(self.charged_bytes())
                 .saturating_sub(self.polished_bytes());
             self.incumbent = None;
             self.arena.release();
@@ -787,6 +860,61 @@ impl Engine {
             early: at < self.arena.node_limit(),
         });
         true
+    }
+    /// Runs the room bound's build for `pops` pop slots of
+    /// [`BUILD_UNITS_PER_POP`] units each, and returns the slots left: 0
+    /// while it still runs. No pop runs while the build does, so the arena
+    /// holds only the start, queued with M. A build that ends with tables
+    /// re-sizes the arena with the room bound's bytes charged to the budget
+    /// and queues the start again with max(M, S) in place of that entry; its
+    /// record keeps M, as every record does. The start is inserted once, so
+    /// generated stays within the state limit. With no table, or when the
+    /// re-size refuses, the search goes on with M alone.
+    // Cold and out of line, as advance_staged: advance calls it only while
+    // the build runs.
+    #[cold]
+    #[inline(never)]
+    fn advance_build(&mut self, pops: u32) -> u32 {
+        let Some(build) = &mut self.room_build else {
+            return pops;
+        };
+        let mut units = (pops as usize).saturating_mul(BUILD_UNITS_PER_POP);
+        let Some(rooms) = build.step(&self.board, &self.start, &self.heuristic, &mut units) else {
+            return 0;
+        };
+        self.room_build = None;
+        let left = (units / BUILD_UNITS_PER_POP) as u32;
+        let Some(rooms) = rooms else {
+            return left;
+        };
+        // Never `None`: a table whose search never reached a goal from the
+        // start is not kept, and the hall part is feasible wherever M is. A
+        // missing projection would still prove the start unsolvable, since
+        // its relaxed problem has no solution.
+        let s = rooms.root(&self.start);
+        self.rooms = Some(rooms);
+        if !self.arena.recharge(self.charged_bytes(), self.memory_mib) {
+            // The arena, unchanged, leaves no room for the tables.
+            self.rooms = None;
+            return left;
+        }
+        // Exact never stages, so the fill point is the limit.
+        let node_limit = self.arena.node_limit();
+        self.fill_at = node_limit;
+        self.partial_at = partial_at(&self.policy, node_limit);
+        let root = self.arena.dequeue();
+        debug_assert!(self.arena.len() == 1 && root.is_some_and(|key| key.id() == 0));
+        if let Some(root) = root {
+            // The entry's h is M's root estimate.
+            if let Some(s) = s {
+                let h = root.h().max(s.min(MAX_QUEUED_H));
+                self.arena
+                    .enqueue(push::key(0, h, self.policy.weight), h, root.id());
+            } else {
+                self.status = Status::Exhausted;
+            }
+        }
+        left
     }
     /// Runs the stage ladder one unit per pop until it ends or the pops run
     /// out, and returns the pops left: 0 while the ladder still runs. A
@@ -856,9 +984,10 @@ impl Engine {
         pops
     }
     /// Work is sliced by pops so a worker can yield, report, or cancel. A
-    /// pop is one queue pop, one stage ladder unit while the ladder runs the
-    /// search, or one polish unit while a polish runs; a search that hands
-    /// over to the ladder, or starts an episode, returns at once.
+    /// pop is one queue pop, [`BUILD_UNITS_PER_POP`] room build units while
+    /// the room bound builds, one stage ladder unit while the ladder runs
+    /// the search, or one polish unit while a polish runs; a search that
+    /// hands over to the ladder, or starts an episode, returns at once.
     /// Stale, solved and dominated pops count toward `pops` without
     /// expanding anything.
     pub(crate) fn advance(&mut self, mut pops: u32) {
@@ -868,6 +997,10 @@ impl Engine {
         }
         // Each pop runs these steps in order, and the first check that
         // rejects something skips the rest for it:
+        // - build: while the room bound builds, before the search proper, a
+        //   pop is BUILD_UNITS_PER_POP of its units instead (room_bound.rs).
+        //   Once it is built, the arena is re-sized and the start re-queued,
+        //   and the pops left go on below.
         // - stage: while the stage ladder runs the search, a pop is one of
         //   its units instead: one rank unit, one movers unit, one stage
         //   expansion, one accept unit (a ban or one check), one commit, or
@@ -886,7 +1019,9 @@ impl Engine {
         // - admit, per push: dead cell (pruned_dead_cells), g bound
         //   (pruned_bound), freeze deadlock (pruned_deadlocks), then the
         //   settled child's duplicate (pruned_duplicates), assignment
-        //   (pruned_assignment), g + h bound and stand walk (pruned_bound).
+        //   (pruned_assignment), g + h bound and stand walk (pruned_bound),
+        //   then with the room bound a missing projection
+        //   (pruned_assignment) and the g + S bound (pruned_bound).
         // - insert: a partial expansion leaves out an unsolved child past
         //   the node's queued f, and after its last push queues the node
         //   again at the least f it left out. Every other child is stored
@@ -902,6 +1037,12 @@ impl Engine {
         //   pairs gains nothing, an episode keeps its route if shorter and
         //   the pops left go on below; the end polish ends the search with
         //   the status it stopped on.
+        if self.room_build.is_some() {
+            pops = self.advance_build(pops);
+            if self.status != Status::Running || self.room_build.is_some() {
+                return;
+            }
+        }
         if self.staging.is_some() {
             pops = self.advance_staged(pops);
             if self.status != Status::Running || self.staging.is_some() {
@@ -1013,6 +1154,9 @@ impl Engine {
         // The least f of a child left out.
         let mut deferred = None::<u64>;
         let mut parent_group = ParentGroup::EMPTY;
+        // Set up by the first child the room bound prices, so a search
+        // without it never fills one in.
+        let mut room_parent = None::<RoomParent>;
         // The bound and the reopen flag, read again after each insert, the
         // only call here that changes the incumbent or the policy: it can
         // record a shorter route, or hand a solved push to a next phase and
@@ -1025,6 +1169,8 @@ impl Engine {
                 let Some(push) = push::legal(&self.board, &self.reach, i, from, d) else {
                     continue;
                 };
+                // parent_h is M even with the room bound: this f bounds the
+                // child's M-based f, which bounds its queued one from below.
                 if partial
                     && let Some(excess) =
                         push::excess(&self.heuristic, &self.reach, parent_h, &push)
@@ -1038,7 +1184,7 @@ impl Engine {
                 let Some(child) = self.admit(
                     &parent,
                     parent_h,
-                    &mut parent_group,
+                    (&mut parent_group, &mut room_parent),
                     push,
                     reopen_closed,
                     best,
@@ -1076,14 +1222,16 @@ impl Engine {
     }
     /// Runs one push through [`push::admit`] with the kernel of this
     /// engine's [`Parts`], lent per push because each insert needs the
-    /// whole engine. `reopen_closed` and `best` are the values
-    /// [`Self::expand`] keeps current across its inserts.
+    /// whole engine, then prices the child with the room bound, if any.
+    /// `reopen_closed` and `best` are the values [`Self::expand`] keeps
+    /// current across its inserts, and the caches are the parent's, shared
+    /// by its children: M's label group, and the room bound's hall part.
     #[inline]
     fn admit(
         &mut self,
         parent: &Parent,
         parent_h: u32,
-        parent_group: &mut ParentGroup,
+        (parent_group, room_parent): (&mut ParentGroup, &mut Option<RoomParent>),
         push: Push,
         reopen_closed: bool,
         best: Option<u32>,
@@ -1092,7 +1240,8 @@ impl Engine {
             (reopen_closed, best),
             (self.policy.reopen_closed, self.incumbent_moves())
         );
-        push::admit(
+        let moved = push.moved();
+        let mut child = push::admit(
             &mut self.parts().kernel(),
             parent,
             parent_h,
@@ -1100,7 +1249,29 @@ impl Engine {
             push,
             reopen_closed,
             best,
-        )
+        )?;
+        // The child is queued with max(M, S), admissible as both are
+        // (docs/room-bound.md). Its record keeps M, so a cheaper duplicate
+        // reuses M and is priced again here. The prunes push::admit ran with
+        // M hold for any admissible h, and the stand walk must stay on M: it
+        // adds moves M leaves uncounted, which S may count.
+        if let Some(rooms) = &self.rooms {
+            let cache = room_parent.get_or_insert(RoomParent::EMPTY);
+            let Some(s) = rooms.child_estimate(&parent.node.state, cache, &child.node.state, moved)
+            else {
+                self.skipped.pruned_assignment += 1;
+                return None;
+            };
+            if s > child.h {
+                let g = u64::from(child.node.g);
+                if best.is_some_and(|best| g + u64::from(s) >= u64::from(best)) {
+                    self.skipped.pruned_bound += 1;
+                    return None;
+                }
+                child.h = s.min(MAX_QUEUED_H);
+            }
+        }
+        Some(child)
     }
     /// Stores and queues an admitted child, recording it when it is solved.
     /// At the stage point, below the limit, an unsolved child hands the
@@ -1191,12 +1362,11 @@ impl Engine {
             return false;
         };
         let boxes = self.board.labels().len();
-        let fixed = fixed_bytes(self.board.tiles().len(), boxes, self.policy.keeper_sides);
         // The arena holds no more than its share, so this is at most the
         // share's free part, and an episode allocates only while the search
         // waits: the budget holds whatever the arena does.
         let allowance = (self.arena.reserved_bytes() as u64)
-            .saturating_sub(fixed)
+            .saturating_sub(self.charged_bytes())
             .saturating_sub(self.arena.held_bytes())
             .saturating_sub(self.polished_bytes());
         if !Polish::fits(allowance, self.arena.meta(id).g) {
@@ -1448,20 +1618,32 @@ mod tests {
 
     /// The board of `an_empty_goal_behind_a_settled_corral_is_dead` in the
     /// corral tests: A pushed into the corridor before B has passed seals
-    /// B's goal off. Both modes prune such a state with the sealed-corral
-    /// check and still end Solved with the 18-move route, which Exact proves
-    /// shortest.
+    /// B's goal off. Every run ends Solved with the 18-move route, which
+    /// Exact proves shortest. Fast and Exact without its room bound prune
+    /// such a state with the sealed-corral check. With the room bound, Exact
+    /// never expands one, so the check that Exact's search counts runs
+    /// without it.
     #[test]
     fn corral_check_prunes_a_goal_sealed_too_early() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
-        for (mode, policy) in [("exact", Policy::EXACT), ("fast", Policy::FAST)] {
+        let roomless = Policy {
+            room_bound: false,
+            ..Policy::EXACT
+        };
+        for (mode, policy, corrals) in [
+            ("exact", Policy::EXACT, false),
+            ("exact without rooms", roomless, true),
+            ("fast", Policy::FAST, true),
+        ] {
             let engine = run(&board, policy, STATES);
             assert_eq!(
                 (engine.status(), engine.best_moves()),
                 (Status::Solved, Some(18)),
                 "{mode}"
             );
-            assert!(engine.stats().pruned_corrals > 0, "{mode}");
+            if corrals {
+                assert!(engine.stats().pruned_corrals > 0, "{mode}");
+            }
         }
     }
 

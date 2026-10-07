@@ -476,6 +476,29 @@ impl Arena {
             bytes: bytes_for(low) as usize,
         })
     }
+    /// Resizes the limit of an arena that holds at most one record, the
+    /// start, for `fixed_bytes` of fixed buffers, as [`Arena::capacity`]
+    /// sizes it, never above the current limit and allocating nothing. A
+    /// limit always fits one state, so the start stays. Returns false, with
+    /// nothing changed, when the budget no longer fits a state, or when the
+    /// first chunk or the table already exceed what the new limit's buffers
+    /// hold, so the arena still never grows past [`Arena::reserved_bytes`].
+    pub(crate) fn recharge(&mut self, fixed_bytes: u64, memory_mib: usize) -> bool {
+        debug_assert!(self.len <= 1 && self.resident == self.len);
+        let Ok(Capacity { limit, bytes }) =
+            Self::capacity(fixed_bytes, self.boxes, self.node_limit, memory_mib)
+        else {
+            return false;
+        };
+        let first = (self.node_limit + 1).min(CHUNK);
+        if limit + 1 < first || final_table(limit + 1) < self.table.len() {
+            return false;
+        }
+        self.scaled_down |= limit < self.node_limit;
+        self.node_limit = limit;
+        self.reserved_bytes = bytes;
+        true
+    }
     /// The status of a search the full arena stops: [`Status::MemoryLimit`]
     /// when the budget scaled the limit down or a growth allocation failed
     /// below it, [`Status::StateLimit`] otherwise.

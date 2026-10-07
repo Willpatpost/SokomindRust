@@ -98,7 +98,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | Path | Responsibility |
 | --- | --- |
 | `crates/core` | Dependency-free parser, compact state, rules, delta undo, strict replay |
-| `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs; the bounded stage ladder (`stage.rs`, `stage/`) that Fast and Quality hand a routeless search to |
+| `crates/search` | Dependency-free push A*: one policy-driven engine over a budgeted arena and transposition table, reachability, label assignment heuristic, and sound deadlock and sealed-corral pruning; exact proofs and Optimal's room bound (`room_bound.rs`, `room_bound/`); the bounded stage ladder (`stage.rs`, `stage/`) that Fast and Quality hand a routeless search to |
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX: bounded and rate-limited native CPU jobs |
@@ -119,7 +119,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `deploy` | NGINX configuration |
 | `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |
 | `benchmarks` | Reviewed benchmark baselines (see Validation) |
-| `docs` | Design notes for the stage ladder and the sealed-corral check: why each looks the way it does, and the measurements behind it |
+| `docs` | Design notes for the stage ladder, the sealed-corral check, route polish and the room bound: why each looks the way it does, and the measurements behind it |
 | `Dockerfile`, `compose.yaml` | Images and the full stack (see Full stack with Docker) |
 | `.github/workflows/ci.yml` | CI (see Validation) |
 
@@ -258,6 +258,30 @@ instead of 3150 at the CI limit of 20,000 states, and at 5 s 3360 instead of
 from the start, as plain PEA* does, raised the 64 MiB sum to 3435, but took
 3.97 s over those proofs and lowered 4 cases' bounds at 256 MiB and 8 at 1 GiB;
 starting at half the limit lowered one at 1 GiB.
+
+Before its search proper, Optimal builds the room bound (`docs/room-bound.md`).
+Each single-door room that holds a box or a goal gets exact tables of the moves
+that end inside it, in a relaxed problem that keeps only some labels' boxes in
+the room and lets them enter through the door for free. Tables over disjoint
+parts add, and so does the estimate with every push that ends in a part made
+free. Optimal queues each state by the larger of that sum and the estimate,
+which stays admissible and consistent, and prunes a state a table has no entry
+for, since it has no solution. Fast and Quality skip it: it raises bounds, and
+its build costs time a weighted search spends finding its route. The build is
+paid for as pops, a fixed number of its work units each, and stops at a work
+budget scaled to the state limit. Its buffers fit the budget the fixed buffers
+and the arena leave, and the tables it keeps, at most a quarter of the budget
+less the fixed buffers, are charged to it, so the arena is sized again, never
+larger. In probe 49011 it raised Grand Hall's start bound from 214 to 255, and
+its bound from 238 to 275 at 1M states and 256 MiB, from 243 to 279 at 11M
+states and 1 GiB, from 241 to 277 at 30 s and 256 MiB, and from 244 to 279 at
+30 s and 1 GiB. It proved large in 0.3 to 0.4 s, at 1M states, where the
+estimate alone stopped at 145, and in the runs where the estimate alone took
+1.1 to 1.3 s. The open catalog cases' bounds summed 3376 instead of 3218 at
+20,000 states, and 3511 instead of 3360 at 5 s and 64 MiB, with one more case
+proved and none lower. At 64 MiB Grand Hall's tables do not fit, and at 5 s
+with 256 MiB or 1 GiB its build of about 5 to 6 s may not finish, leaving its
+bound at the start's 214 against 241 and 240 with the estimate alone.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
