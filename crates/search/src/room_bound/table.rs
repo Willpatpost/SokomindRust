@@ -38,6 +38,15 @@ use std::mem::{size_of, take};
 const EMPTY: u64 = u64::MAX;
 /// A free slot of the forward search's slot table.
 const FREE: u32 = u32::MAX;
+/// Bits of a slot that hold a state's id.
+const ID_BITS: u32 = 25;
+/// Low `ID_BITS` set: extracts an id.
+const ID_MASK: u32 = (1 << ID_BITS) - 1;
+/// Bits of a slot above its id, which hold its key's [`tag`].
+const TAG_BITS: u32 = u32::BITS - ID_BITS;
+// Ids stay below the cap, so a bound slot's low bits are never all ones,
+// and it never reads as `FREE`.
+const _: () = assert!(super::MAX_CAP < ID_MASK as u64);
 /// A distance the backward search has not reached.
 const INFINITE: u16 = u16::MAX;
 /// The largest value a table stores. A larger distance is stored as this
@@ -56,6 +65,11 @@ const SCAN: usize = 16;
 /// The bits `x` needs.
 fn bits(x: usize) -> usize {
     (usize::BITS - x.leading_zeros()) as usize
+}
+
+/// Hash `h`'s tag, already shifted into a slot's top `TAG_BITS`.
+fn tag(h: u64) -> u32 {
+    ((h >> (u64::BITS - TAG_BITS)) as u32) << ID_BITS
 }
 
 /// A table's values: open addressing over the keys, with linear probing.
@@ -121,8 +135,11 @@ struct States {
     /// The keys by id, `CHUNK` per chunk. Only the first chunk grows; the
     /// rest are allocated full.
     chunks: Vec<Vec<u64>>,
-    /// Open addressing over the keys, with linear probing: ids, or `FREE`.
-    /// Never more than 3/4 full.
+    /// Open addressing over the keys, with linear probing: `FREE`, or an
+    /// id in the low `ID_BITS` with its key's [`tag`] above. A probe reads a
+    /// slot's key only when the tags match, one time in 128 for another
+    /// key. On a large table a key read is a cache miss, and a probe passes
+    /// a few slots, since the table may be 3/4 full. Never fuller.
     slots: Vec<u32>,
     len: usize,
 }
@@ -136,26 +153,29 @@ impl States {
         self.chunks[id / CHUNK][id % CHUNK]
     }
 
-    /// The id of `key`, or the free slot where it goes.
-    fn probe(&self, key: u64) -> Result<u32, usize> {
-        let mask = self.slots.len() - 1;
-        let mut at = mix(key) as usize & mask;
+    /// The id of `key`, whose hash is `h`, or the free slot where it goes.
+    fn probe(&self, key: u64, h: u64) -> Result<u32, usize> {
+        let (mask, tag) = (self.slots.len() - 1, tag(h));
+        let mut at = h as usize & mask;
         loop {
             match self.slots[at] {
                 FREE => return Err(at),
-                id if self.get(id as usize) == key => return Ok(id),
+                slot if slot & !ID_MASK == tag && self.get((slot & ID_MASK) as usize) == key => {
+                    return Ok(slot & ID_MASK);
+                }
                 _ => at = (at + 1) & mask,
             }
         }
     }
 
     fn find(&self, key: u64) -> Option<u32> {
-        self.probe(key).ok()
+        self.probe(key, mix(key)).ok()
     }
 
     /// Adds `key` when it is new, failing past `cap` states.
     fn add(&mut self, key: u64, cap: usize, ledger: &mut Ledger) -> Result<(), SizeFailure> {
-        let Err(at) = self.probe(key) else {
+        let h = mix(key);
+        let Err(at) = self.probe(key, h) else {
             return Ok(());
         };
         if self.len >= cap {
@@ -172,7 +192,7 @@ impl States {
         }
         let last = self.chunks.last_mut().expect("a chunk with room");
         ledger.push(last, key)?;
-        self.slots[at] = self.len as u32;
+        self.slots[at] = tag(h) | self.len as u32;
         self.len += 1;
         if self.len * 4 > self.slots.len() * 3 {
             self.grow(ledger)?;
@@ -187,11 +207,12 @@ impl States {
         let mut slots = ledger.filled(2 * self.slots.len(), FREE)?;
         let mask = slots.len() - 1;
         for id in 0..self.len {
-            let mut at = mix(self.get(id)) as usize & mask;
+            let h = mix(self.get(id));
+            let mut at = h as usize & mask;
             while slots[at] != FREE {
                 at = (at + 1) & mask;
             }
-            slots[at] = id as u32;
+            slots[at] = tag(h) | id as u32;
         }
         ledger.release(std::mem::replace(&mut self.slots, slots));
         Ok(())
@@ -504,7 +525,7 @@ impl TableBuild {
         part: u64,
         cap: usize,
     ) -> Option<Self> {
-        debug_assert!(cap < FREE as usize);
+        debug_assert!(cap as u64 <= super::MAX_CAP);
         let labels = room.labels(board, start, part);
         let (k, n) = (labels.len(), room.cells().len());
         let width = bits(k);

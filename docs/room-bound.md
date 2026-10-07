@@ -209,7 +209,9 @@ between work units:
 1. A forward breadth-first search from the start's projection stores every
    reachable state, up to a cap. A state is a `u64` key, a code per cell of Q
    and the node above them, kept in fixed chunks of 65,536 that never move,
-   with an open-addressing table of `u32` ids at most 3/4 full.
+   with an open-addressing table of `u32` slots at most 3/4 full. A slot
+   holds a state's id and 7 bits of its key's hash, so a probe reads a key,
+   a likely cache miss, only when those bits match.
 2. A scan of the states seeds the goal states at distance 0.
 3. A backward 0/1 breadth-first search from them walks the moves in reverse,
    with a `u16` distance per state and two level worklists. It generates each
@@ -317,11 +319,13 @@ calls bounds it like pops, and the build is deterministic, with no clock of its
 own. A search stopped during the build reports the start's bound without the
 tables.
 
-A unit took 170 to 260 ns on the probe machine (job 49011): about 170 over the
-catalog at 20k states, 183 at 5 s and 64 MiB, and 200 to 260 on Grand Hall's
-tables, the slower with 1 GiB. Grand Hall's build, 24.5M units, took 4.9 to
-6.3 s, so at 5 s with 256 MiB or more it may not finish, and that search then
-ends with the start's bound, 214, below the 240 or 241 that M alone reaches.
+A unit took 160 to 195 ns on the probe machine (job 49016): about 167 over the
+catalog at 20k states, 169 at 5 s and 64 MiB, and 161 to 195 on Grand Hall's
+tables. Grand Hall's build, 24.5M units, took 3.9 to 4.8 s, and 4.0 to 4.3 s in
+its eight runs at 5 s, so at 5 s with 256 MiB or 1 GiB it finished and the
+search reached 272 or 273. The margin is under a second. On a slower machine
+the build may not finish in 5 s, and that search then ends with the start's
+bound, 214, below the 240 or 241 that M alone reaches.
 
 ### After the build
 
@@ -415,7 +419,8 @@ At 5 s with 256 MiB or 1 GiB, Grand Hall's build of 24.5M units takes 4.9 to
 6.3 s, so the search may stop inside it and report the start's bound, 214. A
 copy of this build with probe-only tracing finished at 4.9 s at 256 MiB and
 reached 269, and at 1 GiB the build ran past 5 s in both. These two runs are the
-only ones where the room bound lowers a bound below M alone's.
+only ones where the room bound lowers a bound below M alone's. The slot tags
+below fix both.
 
 Two earlier probes of the production build led here:
 
@@ -435,6 +440,37 @@ Two earlier probes of the production build led here:
 Before narrowest first, the room bound added 89,729 bytes to the wasm module,
 from 257,025 to 346,754 (jobs 48991 and 49011). Most of it is `RoomBuild::step`
 and the sorts of the move lists (job 48992).
+
+### Slot tags (job 49016)
+
+The forward search's slots first held only a state's id, so a probe read the
+key of every state it passed, a likely cache miss each. A slot now also holds 7
+bits of its key's hash, as the arena's do, and a probe reads a key only when
+they match. Job 49016 compared `main` (`3bc27d8`) with the tags in job 49011's
+parts, and ran Grand Hall three more times each at 5 s with 256 MiB and 1 GiB
+and at 1M states with 256 MiB. Copies of both builds with probe-only tracing
+timed each table's phases.
+
+The results were identical in all 133 runs that no clock stopped, and the
+traced tables were identical in all 81 traced runs where both builds finished.
+Soundness held as in job 49011, and clippy passed.
+
+| Measure | `main` | With the tags |
+| --- | --- | --- |
+| A unit in Grand Hall's 24.5M-unit build | 214 to 266 ns | 161 to 195 ns |
+| A unit over the catalog, 20k states / 5 s, 64 MiB | 200 / 209 ns | 167 / 169 ns |
+| Grand Hall's build, 1M states, 256 MiB (4 runs) | 5.25 to 6.45 s | 3.95 to 4.78 s |
+| Grand Hall's build, 5 s, 256 MiB or 1 GiB (8 runs) | unfinished | 4.04 to 4.33 s |
+| Grand Hall's bound, 5 s, 256 MiB or 1 GiB | 214 | 272 to 273 |
+
+Each 26-cell table on Grand Hall reaches 10,253,873 states. Its forward search
+fell from 2.26 to 3.14 s (220 to 307 ns a state) to 1.76 to 2.22 s (172 to
+216 ns), and its backward search from 129 to 193 ms to 108 to 138 ms. Every
+other bound matched `main`, and the catalog's summed search time fell from 5.7
+to 5.0 s at 20k states and from 58.9 to 56.1 s at 5 s and 64 MiB. Peak resident
+memory rose only where the build now finishes and the search goes on, by
+14.9 MiB at 256 MiB and 92 MiB at 1 GiB, within the budget. The wasm module grew
+172 bytes, from 358,211 to 358,383.
 
 ## Rejected approaches
 
