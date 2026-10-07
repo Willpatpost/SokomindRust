@@ -1591,10 +1591,12 @@ mod tests {
     /// An arena that cannot grow ends the search with `MemoryLimit` and the
     /// f of the expansion it cut short, and never restarts, so it discards
     /// nothing, even under a restart policy: a fresh search would need the
-    /// same allocation. Growth is refused from the start, so the search
-    /// stops once its first chunk is full. The board is the one of
-    /// `corral_check_prunes_a_goal_sealed_too_early`, whose route needs 18
-    /// moves.
+    /// same allocation. The one exception is Exact's start, which the room
+    /// bound's build re-seeds once it keeps tables, before the search
+    /// proper; the re-size allocates nothing. Growth is refused from the
+    /// start, so the search stops once its first chunk is full. The board is
+    /// the one of `corral_check_prunes_a_goal_sealed_too_early`, whose route
+    /// needs 18 moves.
     #[test]
     fn a_refused_growth_stops_with_memory_limit() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
@@ -1607,9 +1609,10 @@ mod tests {
                 Engine::new(board.clone(), board.initial(), policy, STATES, 16).unwrap();
             engine.arena.refuse_growth(true);
             drive(&mut engine);
+            let reseeded = u32::from(engine.rooms.is_some());
             assert_eq!(
                 (engine.status(), engine.discarded),
-                (Status::MemoryLimit, 0)
+                (Status::MemoryLimit, reseeded)
             );
             assert!(engine.interrupted_f.is_some() && engine.best_moves().is_none());
         }
@@ -1617,20 +1620,32 @@ mod tests {
 
     /// The board of `an_empty_goal_behind_a_settled_corral_is_dead` in the
     /// corral tests: A pushed into the corridor before B has passed seals
-    /// B's goal off. Both modes prune such a state with the sealed-corral
-    /// check and still end Solved with the 18-move route, which Exact proves
-    /// shortest.
+    /// B's goal off. Every run ends Solved with the 18-move route, which
+    /// Exact proves shortest. Fast and Exact without its room bound prune
+    /// such a state with the sealed-corral check. With the room bound, Exact
+    /// never expands one, so the check that Exact's search counts runs
+    /// without it.
     #[test]
     fn corral_check_prunes_a_goal_sealed_too_early() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
-        for (mode, policy) in [("exact", Policy::EXACT), ("fast", Policy::FAST)] {
+        let roomless = Policy {
+            room_bound: false,
+            ..Policy::EXACT
+        };
+        for (mode, policy, corrals) in [
+            ("exact", Policy::EXACT, false),
+            ("exact without rooms", roomless, true),
+            ("fast", Policy::FAST, true),
+        ] {
             let engine = run(&board, policy, STATES);
             assert_eq!(
                 (engine.status(), engine.best_moves()),
                 (Status::Solved, Some(18)),
                 "{mode}"
             );
-            assert!(engine.stats().pruned_corrals > 0, "{mode}");
+            if corrals {
+                assert!(engine.stats().pruned_corrals > 0, "{mode}");
+            }
         }
     }
 

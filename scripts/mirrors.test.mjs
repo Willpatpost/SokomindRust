@@ -519,7 +519,7 @@ test("the README, reserved_bytes' doc, parity.mjs and the arena's own comments q
   assert.equal(read('README.md', /up to (\d+) KiB past the budget/), kib);
   assert.equal(read('crates/search/src/lib.rs', /at most 2\^(\d+) slots/), shift);
   assert.equal(read('crates/search/src/lib.rs', /\((\d+) KiB\) at first/), kib);
-  assert.equal(read('crates/search/src/lib.rs', /freed first table,\s+\/\/\/ (\d+) KiB/), kib);
+  assert.equal(read('crates/search/src/lib.rs', /freed first table,(?:\s+\/\/\/)? (\d+) KiB/), kib);
   assert.equal(read('crates/search/src/arena.rs', /smaller: 2\^(\d+) slots/), shift);
   assert.equal(read('crates/search/src/arena.rs', /slots, (\d+) KiB, so/), kib);
   assert.equal(read('crates/search/src/arena.rs', /INITIAL_TABLE slots \((\d+) KiB\)/), kib);
@@ -531,9 +531,9 @@ test("the README and reserved_bytes' doc quote engine.rs's ROUTE_ALLOWANCE, and 
     read('crates/search/src/engine.rs', /const ROUTE_ALLOWANCE: usize = (\d+) \* MAX_ROUTE;/)
     * read('crates/core/src/game.rs', /pub const MAX_ROUTE: usize = ([\d_]+);/);
   assert.equal(read('README.md', /stage search up to ([\d,]+) bytes/), allowance);
-  assert.equal(read('crates/search/src/lib.rs', /stage search up to\s+\/\/\/ ([\d,]+) bytes more/), allowance);
+  assert.equal(read('crates/search/src/lib.rs', /stage search up to(?:\s+\/\/\/)? ([\d,]+) bytes more/), allowance);
   const states = read('crates/search/src/stage.rs', /pub\(crate\) const MIN_STATES: usize = (\d+);/);
-  assert.equal(read('crates/search/src/lib.rs', /under a limit of ([\d,]+) states or\s+\/\/\/ more, a bounded/), states);
+  assert.equal(read('crates/search/src/lib.rs', /under a limit of ([\d,]+) states or(?:\s+\/\/\/)? more, a bounded/), states);
   assert.equal(read('crates/search/src/lib.rs', /no route under a limit of ([\d,]+) states or more runs/), states);
 });
 
