@@ -267,6 +267,101 @@ fn random_board(rng: &mut Lcg) -> String {
     rows.join("\n")
 }
 
+/// A walled 4..=5 x 4..=5 hall beside a room of three to six cells, grown at
+/// random from the cell behind a one-cell door in the wall between them. One
+/// or two boxes, sometimes one of them an A, start off the hall's rim, the
+/// last sometimes in the room. One or two of their goals lie in the room,
+/// deepest first along the door's row, where pushes through the door reach,
+/// so the exact search builds the room's table, whose bound and prunes then
+/// fire. About a quarter of the spare hall floor is walled, but never the two
+/// cells in front of the door. Every board parses; many are unsolvable.
+fn room_board(rng: &mut Lcg) -> String {
+    let (hall, height) = (4 + rng.below(2), 4 + rng.below(2));
+    let width = hall + 1 + 2 + rng.below(2);
+    let door = rng.below(height);
+    let mut room = vec![(hall + 1, door)];
+    for _ in 0..2 + rng.below(4) {
+        loop {
+            let (x, y) = room[rng.below(room.len())];
+            let next = match rng.below(4) {
+                0 => (x + 1, y),
+                1 => (x - 1, y),
+                2 => (x, y + 1),
+                _ => (x, y.wrapping_sub(1)),
+            };
+            if next.0 > hall && next.0 < width && next.1 < height && !room.contains(&next) {
+                room.push(next);
+                break;
+            }
+        }
+    }
+    let at = |(x, y): (usize, usize)| y * width + x;
+    let mut corridor: Vec<usize> = (hall + 1..)
+        .take_while(|&x| room.contains(&(x, door)))
+        .map(|x| at((x, door)))
+        .collect();
+    let mut cells = vec![b'O'; width * height];
+    for cell in (0..cells.len()).filter(|&c| c % width < hall) {
+        cells[cell] = b' ';
+    }
+    cells[at((hall, door))] = b' ';
+    let mut room: Vec<usize> = room.into_iter().map(at).collect();
+    for &cell in &room {
+        cells[cell] = b' ';
+    }
+    let mut boxes = vec![b'X'; 1 + rng.below(2)];
+    if rng.below(3) == 0 {
+        let index = rng.below(boxes.len());
+        boxes[index] = b'A';
+    }
+    let mut free: Vec<usize> = (0..cells.len())
+        .filter(|&c| (1..hall - 1).contains(&(c % width)) && (1..height - 1).contains(&(c / width)))
+        .collect();
+    for (index, &label) in boxes.iter().enumerate() {
+        let start = if index + 1 == boxes.len() && rng.below(4) == 0 {
+            let start = rng.take(&mut room);
+            corridor.retain(|&c| c != start);
+            start
+        } else {
+            rng.take(&mut free)
+        };
+        cells[start] = label;
+    }
+    let mut free: Vec<usize> = (0..cells.len())
+        .filter(|&c| c % width < hall && cells[c] == b' ')
+        .collect();
+    let in_room = 1 + rng.below(2);
+    for (index, &label) in boxes.iter().enumerate() {
+        let goal = if label == b'X' {
+            b'S'
+        } else {
+            label.to_ascii_lowercase()
+        };
+        let cell = if index >= in_room {
+            rng.take(&mut free)
+        } else if let Some(cell) = corridor.pop() {
+            room.retain(|&c| c != cell);
+            cell
+        } else {
+            rng.take(&mut room)
+        };
+        cells[cell] = goal;
+    }
+    cells[rng.take(&mut free)] = b'R';
+    for cell in free {
+        if (cell / width != door || cell % width < hall - 2) && rng.below(100) < 25 {
+            cells[cell] = b'O';
+        }
+    }
+    let wall = "O".repeat(width + 2);
+    let mut rows = vec![wall.clone()];
+    for row in cells.chunks(width) {
+        rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
+    }
+    rows.push(wall);
+    rows.join("\n")
+}
+
 /// The names the server API and the wasm worker exchange with their clients.
 #[test]
 fn mode_and_status_names_are_stable() {
@@ -497,15 +592,15 @@ fn capped_optimal_bound_keeps_the_interrupted_f() {
     assert_eq!(capped.lower_bound(), root);
 }
 
-/// All three modes against the BFS oracle on seeded random boards, plus two
-/// limited exact runs per board. Boards whose oracle would see more than
-/// 10,000 states are skipped to keep the test fast in debug builds.
-#[test]
-fn engines_agree_with_bfs_on_generated_boards() {
+/// All three modes against the BFS oracle on 200 boards from `generate`,
+/// plus two limited exact runs per board. Boards whose oracle would see more
+/// than 10,000 states are skipped to keep the test fast in debug builds.
+/// Returns how many of the boards tested were solvable and unsolvable.
+fn engines_agree_on_generated(generate: fn(&mut Lcg) -> String) -> (usize, usize) {
     let mut rng = Lcg(1);
     let (mut solvable, mut unsolvable) = (0, 0);
     for _ in 0..200 {
-        let rows = random_board(&mut rng);
+        let rows = generate(&mut rng);
         let board = Board::parse(&rows).unwrap();
         let Some(optimum) = bfs_within(&board, 10_000) else {
             continue;
@@ -525,8 +620,26 @@ fn engines_agree_with_bfs_on_generated_boards() {
             assert_consistent(&board, &mut search, optimum, &context);
         }
     }
+    (solvable, unsolvable)
+}
+
+#[test]
+fn engines_agree_with_bfs_on_generated_boards() {
+    let (solvable, unsolvable) = engines_agree_on_generated(random_board);
     assert!(
         solvable >= 40 && unsolvable >= 40,
+        "{solvable} solvable, {unsolvable} unsolvable"
+    );
+}
+
+/// The room bound's tables, its raised children and its two prunes (a
+/// projection no table reached a goal from, and g + S at or past the
+/// incumbent) against the oracle.
+#[test]
+fn engines_agree_with_bfs_on_generated_room_boards() {
+    let (solvable, unsolvable) = engines_agree_on_generated(room_board);
+    assert!(
+        solvable >= 60 && unsolvable >= 80,
         "{solvable} solvable, {unsolvable} unsolvable"
     );
 }
