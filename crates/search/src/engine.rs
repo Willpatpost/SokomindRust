@@ -53,8 +53,10 @@ pub(crate) struct Policy {
     /// its status is final: single-box rescheduling (polish.rs) within the
     /// arena's share of the budget, in several runs with different box
     /// orders, then box pairs, which keeps a route only when it replays
-    /// shorter. Route-only, so never Exact's; Fast's first route stands as
-    /// found.
+    /// shorter. A search that goes long enough without improving its route
+    /// also polishes it in an episode, within the part of the share the
+    /// arena does not hold, and then goes on (see [`EPISODE_FLOOR`]).
+    /// Route-only, so never Exact's; Fast's first route stands as found.
     polish: bool,
 }
 impl Policy {
@@ -91,7 +93,8 @@ impl Policy {
         polish: false,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits,
-    /// then polishes the route.
+    /// then polishes the route; polishes it in episodes on the way when the
+    /// search stalls.
     pub(crate) const QUALITY: Self = Self {
         weight: 3,
         stop_on_goal_pop: false,
@@ -124,7 +127,8 @@ impl Policy {
     /// at the stage point the ladder declines, and a routeless fill gives the
     /// plain Quality result. When the route's path alone leaves no room for
     /// the start, the search stops at the fill with that route. Whichever
-    /// phase ends the search with a route polishes it.
+    /// phase ends the search with a route polishes it, and either polishes
+    /// a stalled route in episodes.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         then: Some(&Self::QUALITY_RESTART),
         restart: Some(&Self::QUALITY),
@@ -287,10 +291,27 @@ pub(crate) struct Engine {
     /// Whether the root policy may still stage. A resumed search keeps a
     /// policy with `stage` set, so the flag lives here.
     may_stage: bool,
-    /// Some once a polishing policy's search has ended with a route: the
-    /// polisher then owns the route, the arena is released, and the search
-    /// runs the polish until its status is final. Never with an incumbent.
+    /// Some while a polish runs: an episode, while a polishing search waits
+    /// with its arena and incumbent kept and goes on once the polish ends,
+    /// or the end polish, once the search has ended with a route: the
+    /// polisher then owns the route, the arena is released, no incumbent
+    /// remains, and the status is final once the polish ends.
     polish: Option<Polish>,
+    /// The expansion count at which a polishing search polishes its
+    /// incumbent in an episode, or `u32::MAX` when none is due: set when the
+    /// incumbent improves, cleared when an episode starts, so an incumbent
+    /// gets one episode at most.
+    episode_at: u32,
+    /// The shortest route an episode found, while it is shorter than the
+    /// incumbent. It never bounds the search: the search, and the end polish
+    /// of its incumbent, run pop for pop as they would with no episode, so
+    /// given the pops, the result is never longer than theirs; only a time
+    /// limit sees the episode's time. Between polishes it is one of the route
+    /// allowance's two routes, since [`Self::solution`] then never rebuilds
+    /// the incumbent's longer route, and a polisher's start rebuilds only
+    /// the other; while a polisher holds its own route there, it is charged
+    /// to the polisher's allowance.
+    polished: Option<Vec<u8>>,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -353,6 +374,16 @@ const ROUTE_ALLOWANCE: usize = 2 * MAX_ROUTE;
 /// allocated past the budget.
 const FIXED_SCRATCH: usize = ROUTE_ALLOWANCE + 64 * 1024;
 const _: () = assert!(Ladder::bytes_for(MAX_CELLS) <= ROUTE_ALLOWANCE);
+
+/// When a polishing search's incumbent last improved at `e` expansions, an
+/// episode polishes it at `e + max(e, EPISODE_FLOOR)`, and the search goes
+/// on once the polish ends. Probe 48691 (docs/route-polish.md) chose this:
+/// waiting 4e more instead gained too little at 256 and 1024 MiB; ending the
+/// search there instead lost routes whose late improvements came 4-246x
+/// after it; and letting the episode's route bound the search pruned the
+/// search's own later improvements. The floor keeps episodes off short
+/// searches: none starts in CI's catalog at 20k states.
+const EPISODE_FLOOR: u32 = 1 << 16;
 
 /// The bytes a search charges its budget besides the arena: the flood,
 /// deadlock and corral buffers and the heuristic tables per cell, plus
@@ -417,6 +448,8 @@ impl Engine {
             fill_at,
             may_stage: policy.stage,
             polish: None,
+            episode_at: u32::MAX,
+            polished: None,
         };
         search.seed();
         Ok(search)
@@ -452,19 +485,39 @@ impl Engine {
     pub(crate) fn status(&self) -> Status {
         self.status
     }
-    /// The best route's length: the polisher's while it holds the route,
-    /// otherwise the incumbent's.
+    /// The best route's length: the shortest of the polisher's, the best
+    /// episode's and the incumbent's.
     pub(crate) fn best_moves(&self) -> Option<u32> {
-        match &self.polish {
-            Some(polisher) => Some(polisher.moves()),
-            None => self.incumbent_moves(),
-        }
+        let held = self.polish.as_ref().map(Polish::moves);
+        let polished = self.polished.as_ref().map(|route| route.len() as u32);
+        [held, polished, self.incumbent_moves()]
+            .into_iter()
+            .flatten()
+            .min()
     }
     /// The incumbent's g, the bound the search prunes with. The search reads
     /// this rather than [`Self::best_moves`], since no polisher runs while it
-    /// does.
+    /// does and an episode's route never bounds it.
     fn incumbent_moves(&self) -> Option<u32> {
         self.incumbent.map(|i| self.arena.meta(i).g)
+    }
+    /// Makes the solved record `id`, shorter than any incumbent, the
+    /// incumbent. A polishing search then schedules the incumbent's episode
+    /// (see [`EPISODE_FLOOR`]) and drops an episode's route that is no
+    /// longer shorter. Starting over keeps the incumbent without this, since
+    /// it improves nothing.
+    fn record(&mut self, id: u32) {
+        self.incumbent = Some(id);
+        if self.policy.polish {
+            self.episode_at = self
+                .expanded
+                .saturating_add(self.expanded.max(EPISODE_FLOOR));
+            let g = self.arena.meta(id).g;
+            self.polished = self
+                .polished
+                .take()
+                .filter(|route| (route.len() as u32) < g);
+        }
     }
     pub(crate) fn expanded(&self) -> u32 {
         self.expanded
@@ -606,15 +659,20 @@ impl Engine {
     /// status, the arena is released so its share of the budget holds the
     /// polisher's jobs, and the status is final once the polish ends. A
     /// route that does not rebuild ends the search here, and
-    /// [`Self::solution`] reports the error.
+    /// [`Self::solution`] reports the error. The incumbent is polished even
+    /// when an episode polished it before: the end polish has the whole
+    /// share, which an episode's runs and pairs may not have had.
     fn end(&mut self, status: Status) {
+        debug_assert!(self.polish.is_none());
         if self.policy.polish
             && let Some(id) = self.incumbent
             && let Ok(route) = self.route_to(id)
         {
             let boxes = self.board.labels().len();
             let fixed = fixed_bytes(self.board.tiles().len(), boxes);
-            let allowance = (self.arena.reserved_bytes() as u64).saturating_sub(fixed);
+            let allowance = (self.arena.reserved_bytes() as u64)
+                .saturating_sub(fixed)
+                .saturating_sub(self.polished_bytes());
             self.incumbent = None;
             self.arena.release();
             self.polish = Some(Polish::new(route, status, allowance, boxes));
@@ -708,7 +766,7 @@ impl Engine {
         let starved = self.arena.starved();
         match done {
             Done::Solved(id) => {
-                self.incumbent = Some(id);
+                self.record(id);
                 // FTQR starts over as plain Quality, the staged route the
                 // bound to beat.
                 let restarted = !starved && self.restart();
@@ -744,8 +802,8 @@ impl Engine {
     }
     /// Work is sliced by pops so a worker can yield, report, or cancel. A
     /// pop is one queue pop, one stage ladder unit while the ladder runs the
-    /// search, or one polish unit once a polishing search has ended with a
-    /// route; a search that hands over to the ladder returns at once.
+    /// search, or one polish unit while a polish runs; a search that hands
+    /// over to the ladder, or starts an episode, returns at once.
     /// Stale, solved and dominated pops count toward `pops` without
     /// expanding anything.
     pub(crate) fn advance(&mut self, mut pops: u32) {
@@ -776,11 +834,15 @@ impl Engine {
         //   stage point, or a full arena, hands the search to the stage
         //   ladder; a full arena may instead start it over or end it, and so
         //   may a solved push.
-        // - polish: once a polishing search has ended with a route, a pop is
-        //   one polish unit instead: starting a run or a job, one of a job's
-        //   setup layers, or one of its pops. When the last run has ended
-        //   and a full pass over the pairs gains nothing, the search ends
-        //   with the status it stopped on.
+        // - episode: after an expansion, a polishing search whose incumbent
+        //   is due an episode (EPISODE_FLOOR) starts one if a job fits the
+        //   part of the budget the arena does not hold.
+        // - polish: while a polish runs, a pop is one polish unit instead:
+        //   starting a run or a job, one of a job's setup layers, or one of
+        //   its pops. When the last run has ended and a full pass over the
+        //   pairs gains nothing, an episode keeps its route if shorter and
+        //   the pops left go on below; the end polish ends the search with
+        //   the status it stopped on.
         if self.staging.is_some() {
             pops = self.advance_staged(pops);
             if self.status != Status::Running || self.staging.is_some() {
@@ -788,8 +850,10 @@ impl Engine {
             }
         }
         if self.polish.is_some() {
-            self.advance_polish(pops);
-            return;
+            pops = self.advance_polish(pops);
+            if self.status != Status::Running || self.polish.is_some() {
+                return;
+            }
         }
         for _ in 0..pops {
             let parent = match self.pop() {
@@ -798,6 +862,11 @@ impl Engine {
                 Popped::Stop => return,
             };
             if self.expand(parent).is_break() {
+                return;
+            }
+            // One compare per expansion: episode_at is u32::MAX unless a
+            // polishing search's incumbent is due an episode.
+            if self.expanded >= self.episode_at && self.start_episode() {
                 return;
             }
         }
@@ -824,7 +893,7 @@ impl Engine {
         let node = &parent.node;
         if self.board.solved(&node.state) {
             if self.incumbent_moves().is_none_or(|best| node.g < best) {
-                self.incumbent = Some(parent.index);
+                self.record(parent.index);
             }
             if self.policy.stop_on_goal_pop && !self.next_phase() {
                 self.end(Status::Solved);
@@ -965,7 +1034,8 @@ impl Engine {
                 // Keep a solution discovered at the exact limit, for the
                 // restart to carry or the stop to report.
                 if goal {
-                    self.incumbent = Some(self.arena.insert(node, slot));
+                    let id = self.arena.insert(node, slot);
+                    self.record(id);
                 }
                 // The rest of this expansion belongs to the discarded arena.
                 if self.spend_stage() && self.incumbent.is_none() && self.start_staging(parent) {
@@ -983,7 +1053,7 @@ impl Engine {
             .enqueue(push::key(node.g, h, self.policy.weight), h, id);
         // Keep a solution even if a limit occurs before its pop.
         if goal {
-            self.incumbent = Some(id);
+            self.record(id);
             // A next phase takes over the rest of this expansion.
             if self.policy.stop_on_goal_push && !self.next_phase() {
                 self.end(Status::Solved);
@@ -1009,22 +1079,75 @@ impl Engine {
         self.spend_stage();
         !goal && self.start_staging(parent)
     }
-    /// Runs the polish one unit per pop, and once it ends gives the search
-    /// the status it ended with.
-    // Cold and out of line, as advance_staged: it runs only after a Quality
-    // search has ended.
+    /// Polishes the incumbent in an episode if a job fits the part of the
+    /// arena's share it does not hold, less the best episode route; the
+    /// search waits, its arena and incumbent kept, until the polish ends.
+    /// Clears the episode either way, so the incumbent gets no other. False
+    /// when no job fits or the route does not rebuild.
     #[cold]
     #[inline(never)]
-    fn advance_polish(&mut self, pops: u32) {
-        let Some(polisher) = &mut self.polish else {
-            return;
+    fn start_episode(&mut self) -> bool {
+        self.episode_at = u32::MAX;
+        // u32::MAX also means none is due, so a count that reached it would
+        // land here: only a polishing search may polish.
+        let (true, Some(id)) = (self.policy.polish, self.incumbent) else {
+            return false;
         };
-        for _ in 0..pops {
-            if polisher.step(&self.board, &self.heuristic, &self.start, &mut self.reach) {
-                self.status = polisher.ending();
-                return;
-            }
+        let boxes = self.board.labels().len();
+        let fixed = fixed_bytes(self.board.tiles().len(), boxes);
+        // The arena holds no more than its share, so this is at most the
+        // share's free part, and an episode allocates only while the search
+        // waits: the budget holds whatever the arena does.
+        let allowance = (self.arena.reserved_bytes() as u64)
+            .saturating_sub(fixed)
+            .saturating_sub(self.arena.held_bytes())
+            .saturating_sub(self.polished_bytes());
+        if !Polish::fits(allowance, self.arena.meta(id).g) {
+            return false;
         }
+        let Ok(route) = self.route_to(id) else {
+            return false;
+        };
+        self.polish = Some(Polish::new(route, Status::Running, allowance, boxes));
+        true
+    }
+    /// The bytes the best episode route holds, which a polisher's allowance
+    /// leaves out.
+    fn polished_bytes(&self) -> u64 {
+        self.polished.as_ref().map_or(0, |route| route.len() as u64)
+    }
+    /// Runs the polish one unit per pop. Once the end polish ends, gives the
+    /// search the status it ended with; once an episode ends, keeps its
+    /// route if shorter than the best episode route and the incumbent, frees
+    /// the rest, and returns the pops left for the search. Returns 0 when
+    /// the pops run out first.
+    // Cold and out of line, as advance_staged: it runs only after a Quality
+    // search has ended or stalled.
+    #[cold]
+    #[inline(never)]
+    fn advance_polish(&mut self, pops: u32) -> u32 {
+        let Some(polisher) = &mut self.polish else {
+            return pops;
+        };
+        let Some(n) = (0..pops)
+            .find(|_| polisher.step(&self.board, &self.heuristic, &self.start, &mut self.reach))
+        else {
+            return 0;
+        };
+        if polisher.ending() != Status::Running {
+            self.status = polisher.ending();
+            return 0;
+        }
+        // An episode ended. With its polisher gone, best_moves is the
+        // shorter of the best episode route and the incumbent.
+        if let Some(route) = self.polish.take().map(Polish::into_best)
+            && self
+                .best_moves()
+                .is_none_or(|best| (route.len() as u32) < best)
+        {
+            self.polished = Some(route);
+        }
+        pops - n - 1
     }
     /// Rebuilds the route to the solved record `id` as direction indices and
     /// replays it from the start: it must reach its first solved state at its
@@ -1056,13 +1179,24 @@ impl Engine {
         }
         Ok(route)
     }
-    /// The best route as letters, replayed from the start: the polisher's
-    /// while it holds the route, otherwise the incumbent's, rebuilt. Costs
-    /// O(route), plus one flood per push for the incumbent's, so call it once
-    /// per improved route.
+    /// The best route as letters, replayed from the start: the shortest the
+    /// polisher or an episode holds, unless the incumbent is shorter, which
+    /// is then rebuilt; a tie keeps the held route. Costs O(route), plus one
+    /// flood per push for the incumbent's, so call it once per improved
+    /// route.
     pub(crate) fn solution(&mut self) -> Result<Option<String>, SolutionError> {
-        if let Some(polisher) = &self.polish {
-            let route = polisher.best();
+        let held = [
+            self.polish.as_ref().map(Polish::best),
+            self.polished.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|route| route.len());
+        if let Some(route) = held
+            && self
+                .incumbent_moves()
+                .is_none_or(|g| route.len() <= g as usize)
+        {
             if polish::replay(&self.board, &self.start, route)? != route.len() {
                 return Err(SolutionError::Counters);
             }

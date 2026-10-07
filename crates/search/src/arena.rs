@@ -493,6 +493,19 @@ impl Arena {
     pub(crate) fn reserved_bytes(&self) -> usize {
         self.reserved_bytes
     }
+    /// Bytes of that charge the arena holds now: its table, and room for its
+    /// chunks' records, with their box cells and queue entries, counted as
+    /// [`Arena::capacity`] counts them. Every chunk but the last holds
+    /// [`CHUNK`] records and none passes `node_limit + 1`, so the room is the
+    /// smaller of the two. It never exceeds the arena's share of
+    /// [`Arena::reserved_bytes`], and is 0 once [`Arena::release`] ran.
+    /// Counted in u64, so wasm32 counts the same.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        let per_state =
+            (size_of::<Record>() + self.boxes * size_of::<Cell>() + size_of::<Key>()) as u64;
+        let records = (self.chunks.len() << CHUNK_SHIFT).min(self.node_limit + 1) as u64;
+        self.table.len() as u64 * size_of::<u32>() as u64 + records * per_state
+    }
     pub(crate) fn len(&self) -> usize {
         self.len
     }

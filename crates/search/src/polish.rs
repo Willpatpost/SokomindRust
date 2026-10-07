@@ -1,5 +1,6 @@
-//! Route polish: once a Quality search ends with a route, shortens it by
-//! rescheduling one box, or two, at a time. A job keeps every other box's
+//! Route polish: once a Quality search ends with a route, or as an episode
+//! while a long one waits, shortens it by rescheduling one box, or two, at
+//! a time. A job keeps every other box's
 //! pushes, in their order, and runs A* over where the freed boxes' own
 //! pushes go among them: from the start to the goal cells they ended on,
 //! either way round when the two share a label, with every walk taken as
@@ -105,9 +106,10 @@ pub(crate) struct Polish {
     /// replay-verified to reach the first solved state at its last move.
     route: Vec<u8>,
     ending: Status,
-    /// Bytes a job may hold: the arena's share of the budget, which the
-    /// engine released before polishing, less the seed, the best route and
-    /// the pair list.
+    /// Bytes a job may hold: what the engine gives the polish, less the
+    /// seed, the best route and the pair list. That is the arena's share of
+    /// the budget once the search has ended and released the arena, or the
+    /// part of the share the arena does not hold while the search waits.
     allowance: u64,
     /// The run under way, from 0, and how many the polish makes. Once the
     /// last run has ended, `run` is `runs`: the pair phase.
@@ -151,13 +153,27 @@ impl Polish {
             job: None,
         }
     }
+    /// Whether a polish of a route of `moves` moves can start any job
+    /// within `allowance` bytes. When false, every job is refused, since
+    /// each holds a store of [`Nodes::MIN`] nodes and a queue of
+    /// [`MIN_QUEUE`] entries beside the seed and the best route; when true,
+    /// a job may still be refused for its own buffers.
+    pub(crate) fn fits(allowance: u64, moves: u32) -> bool {
+        allowance >= 2 * u64::from(moves) + Nodes::bytes(Nodes::MIN) + MIN_QUEUE as u64 * ENTRY
+    }
     pub(crate) fn moves(&self) -> u32 {
         self.best.len() as u32
     }
     pub(crate) fn best(&self) -> &[u8] {
         &self.best
     }
-    /// The status the search ended with before polishing.
+    /// The best route, the polish done with.
+    pub(crate) fn into_best(self) -> Vec<u8> {
+        self.best
+    }
+    /// The status the search ended with before polishing, or
+    /// [`Status::Running`] when the search has not ended and goes on once
+    /// the polish does.
     pub(crate) fn ending(&self) -> Status {
         self.ending
     }
