@@ -786,9 +786,13 @@ impl Arena {
     pub(crate) fn counters(&self) -> &TableCounters {
         &self.counters
     }
-    /// Marks the node expanded.
-    pub(crate) fn close(&mut self, id: u32) {
-        self.record_mut(id).link |= Record::CLOSED;
+    /// Marks the node expanded, returning whether it was still open: a
+    /// node partial expansion re-queued is closed already when it pops again.
+    pub(crate) fn close(&mut self, id: u32) -> bool {
+        let record = self.record_mut(id);
+        let open = !record.has(Record::CLOSED);
+        record.link |= Record::CLOSED;
+        open
     }
     /// Queues `id` at `f`, with `h` as the tie-break; see [`Key`].
     ///
