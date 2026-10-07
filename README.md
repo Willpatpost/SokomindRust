@@ -234,7 +234,32 @@ admissible A* (weight 1) with reopenings, the only source of proofs. It reports
 cancellation stops it with a route, it reports `optimal` if the frontier's
 lower bound has reached the route's length, otherwise `bounded` (verified route
 plus a sound lower bound and gap). A run stopped before any route carries no
-proof. Every mode shares a sound post-push deadlock rule, the greatest freeze
+proof.
+
+Once its arena holds 90% of its node limit, Optimal expands partially (PEA*):
+each expansion but the start's stores only the children whose f is at most the
+node's queued f, and queues the node again at the least f it left out. That key
+bounds every route through the children left out, so the frontier's lower bound
+stays sound. A child that may be solved is always stored, and a node queued
+again at the estimate's cap expands in full. Most children left out are never
+built: a push moves one box by one edge of the graph the estimate measures, and
+every other box keeps its cell and side, so the child's f is at least the
+parent's g and estimate plus the walk to the stand less the stand's charge.
+Partial expansion trades re-expansions for stored children, which pays only
+once memory binds, so it starts late, and it counts records rather than bytes
+so that native and WASM run one search. In probe 48731 (one c4-standard-32
+node) it lowered no open case's bound at any budget. It raised Grand Hall's
+from 235 to 238 at 1M states and 256 MiB, and from 240 to 243 at 11M states and
+1 GiB, in 10.3 s instead of 4.9 s; large's from 141 to 145 at 1M states; and
+open-field's from 90 to 92 at 11M. The open catalog cases' bounds summed 3218
+instead of 3150 at the CI limit of 20,000 states, and at 5 s 3360 instead of
+3292 at 64 MiB, 3467 instead of 3411 at 256 MiB and 3450 instead of 3449 at
+1 GiB, while the 26 proofs took the same 1.18 s at 64 MiB. Expanding partially
+from the start, as plain PEA* does, raised the 64 MiB sum to 3435, but took
+3.97 s over those proofs and lowered 4 cases' bounds at 256 MiB and 8 at 1 GiB;
+starting at half the limit lowered one at 1 GiB.
+
+Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
 either neighbor is a wall or frozen box or both are dead cells for its label.
 On every expanded state it covers the reference's fully blocked 2x2 wall/box

@@ -4,7 +4,8 @@
 //! ([`Parent::of`]), the expand prologue ([`Parts::open`]), the static
 //! legality check ([`legal`]), the admit chain in its prune order
 //! ([`admit`]), the queue key's f ([`key`]), the bound on the keeper's
-//! walk to a state's first push ([`stand_walk`], [`root_estimate`]), and
+//! walk to a state's first push ([`stand_walk`], [`root_estimate`]), the
+//! bound partial expansion defers an unbuilt child by ([`excess`]), and
 //! the [`SkipCounters`] its prunes share with the engine's own skips.
 //!
 //! It is separate from the engine so that the stage ladder (stage/) can
@@ -120,8 +121,8 @@ impl Parent {
 
 /// A push of the parent's box `i` in direction `d`, from `from` to `to`,
 /// with the keeper on `stand`, that passed the static check in [`legal`].
-/// Only [`legal`] builds one and only [`admit`] reads it, so a caller can
-/// pass on nothing but a statically legal push.
+/// Only [`legal`] builds one and only [`admit`] and [`excess`] read it, so
+/// a caller can pass on nothing but a statically legal push.
 pub(crate) struct Push {
     i: usize,
     d: usize,
@@ -167,17 +168,18 @@ pub(crate) struct Parts<'a> {
     pub(crate) corral: &'a mut Corral,
     pub(crate) arena: &'a mut Arena,
     pub(crate) skipped: &'a mut SkipCounters,
-    /// The search's count of expanded nodes, which [`Parts::open`] raises.
+    /// The search's count of expanded nodes, which [`Parts::open`] raises
+    /// once per node, however often partial expansion re-queues it.
     pub(crate) expanded: &'a mut u32,
 }
 
 impl Parts<'_> {
     /// The expand prologue, which every search runs on a popped node before
-    /// its pushes: counts and closes the node, floods its keeper into
-    /// `reach` and refreshes `deadlock` to its boxes, as each [`Kernel`]
-    /// expects, then returns the node's estimate. Returns `None` instead,
-    /// counted in `pruned_corrals`, when the sealed-corral check finds no
-    /// solution from the node, which then gets no children.
+    /// its pushes: closes the node, counting it the first time, floods its
+    /// keeper into `reach` and refreshes `deadlock` to its boxes, as each
+    /// [`Kernel`] expects, then returns the node's estimate. Returns `None`
+    /// instead, counted in `pruned_corrals`, when the sealed-corral check
+    /// finds no solution from the node, which then gets no children.
     // Always inlined, as admit and stand_walk: once the stage ladder became a
     // second caller of open and admit, LLVM kept both and admit's stand_walk
     // out of line, and plain searches ran 2-4% slower with the same work
@@ -186,8 +188,9 @@ impl Parts<'_> {
     // about 1% stays on large.
     #[inline(always)]
     pub(crate) fn open(&mut self, parent: &Parent) -> Option<u32> {
-        *self.expanded += 1;
-        self.arena.close(parent.index);
+        if self.arena.close(parent.index) {
+            *self.expanded += 1;
+        }
         self.reach.fill(self.board, &parent.node.state);
         let boxes = &parent.node.state.boxes[..self.board.labels().len()];
         self.deadlock.refresh(boxes);
@@ -259,6 +262,37 @@ pub(crate) fn legal(board: &Board, reach: &Reach, i: usize, from: Cell, d: usize
         to,
         stand,
     })
+}
+
+/// How far past g + h of a parent other than the root the f of `push`'s
+/// child lies at least, read without building the child, where `parent_h`
+/// is the parent's estimate; `None` when the bound cannot rule out a solved
+/// child, which partial expansion always builds.
+///
+/// A push moves one box along one reverse-push edge of [`Heuristic`]: from
+/// `from`, with the keeper on the stand's side, to `to`, with the keeper on
+/// `from`'s side, at one plus the stand's charge. Every other box keeps its
+/// spot, since the walls alone fix a side and the keeper's walk to the
+/// stand and its step onto `from` cross no box. So the child's estimate is
+/// at least `parent_h - 1 - charge(stand)`, and its f, the parent's g plus
+/// the walk w plus the push plus that estimate, at least g + `parent_h` +
+/// w - charge(stand). A charge rises by at most one per keeper step, and a
+/// parent's keeper stands where its push left it, at charge 0, so w is at
+/// least the stand's charge and the excess never falls below 0. The root's
+/// keeper may carry a charge, so the bound fails there. When `parent_h`
+/// exceeds 1 + charge(stand), the child's estimate is positive and the
+/// child unsolved.
+#[inline]
+pub(crate) fn excess(
+    heuristic: &Heuristic,
+    reach: &Reach,
+    parent_h: u32,
+    push: &Push,
+) -> Option<u32> {
+    let charge = heuristic.charge(push.stand);
+    let walk = u32::from(reach.distance(push.stand));
+    debug_assert!(walk >= charge);
+    (parent_h > 1 + charge).then_some(walk.saturating_sub(charge))
 }
 
 /// Runs one push through every prune after the static check, counting

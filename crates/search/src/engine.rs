@@ -56,6 +56,21 @@ pub(crate) struct Policy {
     /// route at any limit from 8,192 to 128,000 states. The heuristic is
     /// built once per search, so a search keeps its root policy's value.
     keeper_sides: bool,
+    /// Partial expansion (PEA*) once the arena holds this percent of its
+    /// node limit: every expansion but the root's then stores only the
+    /// children with f at most the node's queued f, and queues the node
+    /// again at the least f it left out, read from the built child or,
+    /// before building it, bounded by [`push::excess`]. Every child left
+    /// out has f above the old key and at least the new one, so the least
+    /// key still bounds the optimum, and each re-pop raises the node's
+    /// queued h until [`MAX_QUEUED_H`], where it expands in full. It trades
+    /// re-expansions for fewer stored children, which pays only once memory
+    /// binds; a record count rather than bytes keeps native and WASM on one
+    /// search. Exact only: its arena only grows, so once partial, every
+    /// expansion stays so. Probe 48731 at 90 raised Grand Hall's bound from
+    /// 240 to 243 at 11M states and 1 GiB, and lowered no open case's bound
+    /// at any budget (README, Optimal).
+    partial_fill: Option<u8>,
     /// Whether a search that ends on its own with a route polishes it before
     /// its status is final: single-box rescheduling (polish.rs) within the
     /// arena's share of the budget, in several runs with different box
@@ -78,6 +93,7 @@ impl Policy {
         restart: None,
         stage: false,
         keeper_sides: true,
+        partial_fill: Some(90),
         polish: false,
     };
     /// First route wins, with no bound on its length. Fast never proves.
@@ -99,6 +115,7 @@ impl Policy {
         restart: None,
         stage: true,
         keeper_sides: false,
+        partial_fill: None,
         polish: false,
     };
     /// Keeps improving the incumbent until the queue empties or a limit hits,
@@ -114,6 +131,7 @@ impl Policy {
         restart: None,
         stage: false,
         keeper_sides: false,
+        partial_fill: None,
         polish: true,
     };
     /// Quality mode's second phase: [`Self::QUALITY`], except that when its
@@ -193,6 +211,9 @@ const _: () = assert!(Policy::QUALITY.weight < Policy::FAST.weight);
 // through every switch, so its targets count keeper sides as it does. No
 // policy both counts keeper sides and polishes: polish reads per-cell push
 // distances (`Heuristic::distance`), which such a heuristic does not keep.
+// A partially expanding policy is admissible and runs alone, with no next
+// phase, restart or stage, so its arena only grows and every key it
+// re-queues bounds a route it left out.
 const _: () = {
     let all = Policy::ALL;
     let mut i = 0;
@@ -209,6 +230,10 @@ const _: () = {
         }
         if p.stage {
             assert!(p.stop_on_goal_push && p.weight > 1);
+        }
+        if let Some(percent) = p.partial_fill {
+            assert!(percent <= 100 && p.weight == 1);
+            assert!(p.then.is_none() && p.restart.is_none() && !p.stage);
         }
         i += 1;
     }
@@ -256,6 +281,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 restart,
                 stage,
                 keeper_sides,
+                partial_fill,
                 polish,
             } = *a;
             weight == b.weight
@@ -267,6 +293,11 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 && same(restart, b.restart)
                 && stage == b.stage
                 && keeper_sides == b.keeper_sides
+                && match (partial_fill, b.partial_fill) {
+                    (Some(a), Some(b)) => a == b,
+                    (None, None) => true,
+                    _ => false,
+                }
                 && polish == b.polish
         }
         (None, None) => true,
@@ -304,6 +335,10 @@ pub(crate) struct Engine {
     /// the [`stage::FILL_MIB`] capacity, or the node limit once the stage is
     /// spent or when the policy never stages.
     fill_at: usize,
+    /// The arena length from which expansions are partial (see
+    /// `Policy::partial_fill`), or `usize::MAX` for a policy that never
+    /// expands partially.
+    partial_at: usize,
     /// Whether the root policy may still stage. A resumed search keeps a
     /// policy with `stage` set, so the flag lives here.
     may_stage: bool,
@@ -442,6 +477,9 @@ impl Engine {
         } else {
             node_limit
         };
+        let partial_at = policy.partial_fill.map_or(usize::MAX, |percent| {
+            (node_limit as u64 * u64::from(percent) / 100) as usize
+        });
         let heuristic = Heuristic::new(&board, policy.keeper_sides.then_some(start.player));
         let deadlock = Deadlock::new(&board);
         let corral = Corral::new(&board);
@@ -462,6 +500,7 @@ impl Engine {
             interrupted_f: None,
             staging: None,
             fill_at,
+            partial_at,
             may_stage: policy.stage,
             polish: None,
             episode_at: u32::MAX,
@@ -837,19 +876,23 @@ impl Engine {
         // - pop: an empty queue ends the search. A stale entry (stale_pops)
         //   is skipped, a solved node is recorded and skipped or ends the
         //   search, and a node the bound prunes (pruned_bound) is skipped.
-        // - expand: count and close the node, flood its keeper, refresh the
-        //   deadlock occupancy, and skip every push of a state with a
-        //   sealed corral (pruned_corrals). Otherwise try every push,
-        //   box-major and in direction order. A push into a wall or a box,
-        //   or from a stand the keeper cannot reach, is dropped uncounted.
+        // - expand: close the node, counting it the first time, flood its
+        //   keeper, refresh the deadlock occupancy, and skip every push of a
+        //   state with a sealed corral (pruned_corrals). Otherwise try every
+        //   push, box-major and in direction order. A push into a wall or a
+        //   box, or from a stand the keeper cannot reach, is dropped
+        //   uncounted, and so is one a partial expansion leaves out by its
+        //   walk bound (push::excess).
         // - admit, per push: dead cell (pruned_dead_cells), g bound
         //   (pruned_bound), freeze deadlock (pruned_deadlocks), then the
         //   settled child's duplicate (pruned_duplicates), assignment
         //   (pruned_assignment), g + h bound and stand walk (pruned_bound).
-        // - insert: store and queue the child and record a solved one. The
-        //   stage point, or a full arena, hands the search to the stage
-        //   ladder; a full arena may instead start it over or end it, and so
-        //   may a solved push.
+        // - insert: a partial expansion leaves out an unsolved child past
+        //   the node's queued f, and after its last push queues the node
+        //   again at the least f it left out. Every other child is stored
+        //   and queued, and a solved one recorded. The stage point, or a
+        //   full arena, hands the search to the stage ladder; a full arena
+        //   may instead start it over or end it, and so may a solved push.
         // - episode: after an expansion, a polishing search whose incumbent
         //   is due an episode (EPISODE_FLOOR) starts one if a job fits the
         //   part of the budget the arena does not hold.
@@ -949,13 +992,26 @@ impl Engine {
     /// push the static check ([`push::legal`]) passes goes to
     /// [`Self::admit`], and each child it admits to [`Self::insert`], unless
     /// the prologue's sealed-corral check finds no solution from the node,
-    /// which then gets no children. Breaks when the search ended or handed
-    /// over to the stage ladder during the expansion.
+    /// which then gets no children. A partial expansion (see
+    /// `Policy::partial_fill`) leaves out each push whose child's f lies
+    /// past the node's queued f, by [`push::excess`] or once admitted, and
+    /// queues the node again at the least such f. Breaks when the search
+    /// ended or handed over to the stage ladder during the expansion.
     #[inline]
     fn expand(&mut self, parent: Parent) -> ControlFlow<()> {
         let Some(parent_h) = self.parts().open(&parent) else {
             return ControlFlow::Continue(());
         };
+        // Never the root, whose keeper may carry a charge (see push::excess),
+        // nor a node whose queued h cannot rise further.
+        let partial = self.arena.len() >= self.partial_at
+            && parent.node.g > 0
+            && parent.queued_h < MAX_QUEUED_H;
+        debug_assert!(!partial || self.heuristic.charge(parent.node.state.player) == 0);
+        let g = u64::from(parent.node.g);
+        let limit = g + u64::from(parent.queued_h);
+        // The least f of a child left out.
+        let mut deferred = None::<u64>;
         let mut parent_group = ParentGroup::EMPTY;
         // The bound and the reopen flag, read again after each insert, the
         // only call here that changes the incumbent or the policy: it can
@@ -969,6 +1025,16 @@ impl Engine {
                 let Some(push) = push::legal(&self.board, &self.reach, i, from, d) else {
                     continue;
                 };
+                if partial
+                    && let Some(excess) =
+                        push::excess(&self.heuristic, &self.reach, parent_h, &push)
+                {
+                    let f = g + u64::from(parent_h) + u64::from(excess);
+                    if f > limit {
+                        deferred = Some(deferred.map_or(f, |least| least.min(f)));
+                        continue;
+                    }
+                }
                 let Some(child) = self.admit(
                     &parent,
                     parent_h,
@@ -979,6 +1045,12 @@ impl Engine {
                 ) else {
                     continue;
                 };
+                // A solved child is always stored, whatever its f.
+                let f = u64::from(child.node.g) + u64::from(child.h);
+                if partial && child.h > 0 && f > limit {
+                    deferred = Some(deferred.map_or(f, |least| least.min(f)));
+                    continue;
+                }
                 match self.insert(&parent, child) {
                     Inserted::Queued => {
                         best = self.incumbent_moves();
@@ -992,6 +1064,13 @@ impl Engine {
                     Inserted::Staged | Inserted::Stopped => return ControlFlow::Break(()),
                 }
             }
+        }
+        if let Some(f) = deferred {
+            // In place of the entry just popped, so the queue holds no more
+            // entries than before. f > limit, so the queued h rises.
+            let h = (f - g).min(u64::from(MAX_QUEUED_H)) as u32;
+            let key = push::key(parent.node.g, h, self.policy.weight);
+            self.arena.enqueue(key, h, parent.index);
         }
         ControlFlow::Continue(())
     }
