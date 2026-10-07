@@ -209,7 +209,9 @@ between work units:
 1. A forward breadth-first search from the start's projection stores every
    reachable state, up to a cap. A state is a `u64` key, a code per cell of Q
    and the node above them, kept in fixed chunks of 65,536 that never move,
-   with an open-addressing table of `u32` ids at most 3/4 full.
+   with an open-addressing table of `u32` slots at most 3/4 full. A slot
+   holds a state's id and 7 bits of its key's hash, so a probe reads a key,
+   a likely cache miss, only when those bits match.
 2. A scan of the states seeds the goal states at distance 0.
 3. A backward 0/1 breadth-first search from them walks the moves in reverse,
    with a `u16` distance per state and two level worklists. It generates each
