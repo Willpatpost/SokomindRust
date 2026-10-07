@@ -83,7 +83,7 @@ use std::ops::RangeInclusive;
 /// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so no budget in
-/// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,601
+/// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,698
 /// states at `MAX_BOXES` boxes on `MAX_CELLS` cells and 33,554,431 at one box
 /// (the engine test `memory_binds_a_full_limit_at_every_budget`). A search
 /// that fills a request at this limit therefore ends with

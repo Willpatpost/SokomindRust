@@ -891,7 +891,9 @@ impl Engine {
             return Popped::Skip;
         };
         let node = &parent.node;
-        if self.board.solved(&node.state) {
+        // Every queued h is admissible, so 0 for a solved state, and testing
+        // it first skips the box scan on nearly every pop.
+        if parent.queued_h == 0 && self.board.solved(&node.state) {
             if self.incumbent_moves().is_none_or(|best| node.g < best) {
                 self.record(parent.index);
             }
