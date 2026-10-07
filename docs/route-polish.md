@@ -25,8 +25,25 @@ stopped on to the polisher. From then on, one pop of `Search::advance` is one
 polish unit, and the status stays `Running` until the polish ends. It then
 becomes the status the search stopped on.
 
-A caller's stop (`TimeLimit` or `Cancelled`) ends a running polish. The search
-keeps the shortest route found so far. A search stopped by the caller before it
+A long search also polishes its route before it ends, in episodes. When the
+incumbent last improved at `e` expansions and the search reaches
+`e + max(e, 2^16)` (`EPISODE_FLOOR`) without improving it again, the engine
+rebuilds the incumbent's route and hands it to a polisher, keeping the arena,
+its queue and its table. Pops then go to the polish, as at the end, and once
+the polish ends the search goes on where it stopped. An incumbent gets one
+episode at most, and each new one schedules its own. The engine keeps the
+episode's best route while it is shorter than the incumbent. It never bounds
+the search, though, and the end polish still runs on the incumbent, with the
+whole share. So, pop for pop, the search and its end polish run as they
+would with no episode, and the result is the shorter of the best episode
+route and the end polish's route, never longer. Only a time limit sees the
+difference: an episode's time is time the search does not get. The trigger
+counts expansions, not time, so an episode starts at the same point in any
+slicing, natively and under WASM. The floor keeps episodes off short
+searches: none starts in the catalog at CI's 20,000 states.
+
+A caller's stop (`TimeLimit` or `Cancelled`) ends a running polish, an
+episode or the end polish. The search keeps the shortest route found so far. A search stopped by the caller before it
 ends on its own is not polished. The caller asked for the answer now, so the
 polish does not run then.
 
@@ -187,9 +204,23 @@ the process. The route, a job's found route and a solution's letters fit in
 the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). Besides the
 seed and the best route, the polisher never holds more than two of them at
 once. So `reserved_bytes` does not change.
+
+An episode runs beside the live arena. Its allowance is the arena's share
+less what the arena holds (`Arena::held_bytes`: its table and its record
+blocks, at most the node limit's) and less the episode route the engine
+keeps. The search waits while the episode runs, so the arena does not grow
+until the episode has freed its buffers. An episode whose allowance cannot
+hold a job's smallest buffers (`Polish::fits`) does not start. Between
+polishes, the kept episode route is one of `ROUTE_ALLOWANCE`'s two routes:
+it is shorter than the incumbent, so a solution returns it without
+rebuilding the incumbent's route, and a polisher's start rebuilds only the
+other. While a polisher runs, the kept route is charged to its allowance.
+
 On wasm32 linear memory never shrinks, and the allocator may not fit the
 polish into the arena's freed blocks, so linear memory can grow by up to the
-arena's share again (see `Search::reserved_bytes`).
+arena's share again (see `Search::reserved_bytes`). The arena's later blocks
+may not reuse an episode's freed buffers either, so each episode can add up
+to the share again.
 
 ## Slicing and determinism
 
@@ -207,7 +238,10 @@ A unit is one of:
 Every unit floods for itself, so no flood outlives a unit. Queue keys pack the
 bit-flipped f, then the bit-flipped h, then the node id. Two entries never
 share a key, so the pop order is fixed. A polish ends the same in slices of one
-pop as in slices of 2^20, and natively as under WASM.
+pop as in slices of 2^20, and natively as under WASM. An episode is due at an
+expansion count and checked after each expansion, and `Search::advance`
+returns as one starts, so episodes start and end at the same points in any
+slicing too.
 
 ## Measured
 
@@ -330,7 +364,43 @@ identical in every variant: same expanded counts, same `reserved_bytes`.
 - **Larger budgets.** At 5 s the routes are 485 at 256 MiB, where the search
   ends late enough that only 7 runs finish, and 812 at 1024 MiB, where the
   search has not ended by 5 s, so nothing is polished (see When it runs).
-  Pairs do not change these.
+  Pairs do not change these. Episodes, below, do.
+
+**Episodes.** Job 48691, on c4-standard-32 nodes, ran a throwaway build
+(289089e) that set when an episode starts, whether its route bounds the
+search, and whether the search instead ends at that point, in Quality mode
+with the catalog example, one sample each. Its base (every switch off) is
+the pairs build.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.** No episode starts, and
+  every variant returns base's routes (5,182 moves in all).
+- **Catalog, at 60M states and 5 s.** Episodes at `e + max(e, 2^16)`, with
+  no bound, shorten 13 routes by 344 moves at 256 MiB and 15 by 976 at
+  1024 MiB, and lengthen none. At 64 MiB they shorten 3 by 9 and lengthened
+  one in that build, gen-v2-350070 (208 → 217): an episode started with no
+  room left beside the full arena, did nothing, and marked the incumbent
+  polished, so the end polish, which reaches 208, was skipped. Here an
+  episode that cannot fit a job does not start, and the end polish always
+  runs.
+- **Grand Hall, at 60M states.** At 64 MiB the arena fills at 415,767
+  expansions, before the first episode is due at 583,846, so the routes are
+  base's: 470, 458 and 436 moves at 5, 15 and 30 s. At 256 MiB the route at
+  5 s goes from 484 to 475; at 15 and 30 s it stays 458 and 436. At 1024 MiB
+  it goes from 812 to 475 at 5 s, 468 to 458 at 15 s and 451 to 436 at 30 s.
+  No episode on Grand Hall ends within 30 s, since its pair phase takes about
+  30 s, so there the search never resumes.
+
+Rejected variants:
+
+- **The episode's route as the search's bound**, starting after `e/2` or `e`
+  more expansions: at 64 MiB they lengthened 7 routes by 347 moves and 2 by
+  11. The tighter bound pruned the search's own later improvements, which
+  polish to shorter routes than the episode's.
+- **Waiting `4e` more**: 3 routes shorter, by 19, at 256 MiB and 4, by 28, at
+  1024 MiB, a small part of the gain after `e` more.
+- **Ending the search there and polishing**: 6 routes longer, by 31, at
+  64 MiB and 5, by 23, at 256 and 1024 MiB: routes the search still improved
+  long after that point.
 
 So the pair phase takes every pair, with `PAIR_POPS` at 2^20: no pair job on
 Grand Hall reaches it, and the catalog's routes and time are the same as at
@@ -343,7 +413,8 @@ These come from the reference's Quality route repair, or were considered here:
 - **Polishing earlier.** Polishing the first route as soon as Fast finds it,
   or polishing when a time limit stops the search. The second needs the
   caller to leave time for it, and transports do not decide search behavior.
-  Polishing during the search needs memory beside a live arena.
+  Episodes polish during the search, but only once it stalls, and only in the
+  memory the arena does not hold.
 - **An h1-only fallback** (push distance only, with no walk layers) for jobs
   whose layers do not fit. It is weaker, and is worth adding only if
   measurement shows jobs being skipped at the budgets that matter.

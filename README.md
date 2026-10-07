@@ -202,7 +202,10 @@ route, each in its own box order, and keeps the shortest. It then frees boxes
 in pairs, those that end nearest each other first, so two boxes can trade
 order, or goals when they share a label. It runs in the arena's share of
 the budget after the arena frees its records, so the reserved bytes do not
-change; `docs/route-polish.md` covers its bounds, memory and what was left out.
+change. A long search that stops improving its route also polishes it in
+episodes, in the part of that share the arena does not hold, and then goes on;
+an episode's route never bounds the search, and the end polish still runs.
+`docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. It reports
@@ -242,9 +245,10 @@ eight runs of about 0.2 s each after the search ends: at the production limits
 it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and 4.7 s at 256 MiB (job
 48685). Given more time, its pair jobs take it to 458 moves at 15 s and to 436
 moves (222 pushes) at 30 s, at 64 MiB (job 48688). A larger budget ends the
-search later, and so the polish: at 5 s, 256 MiB returned 485 in job 48688,
-whose last run did not finish, and 1024 MiB returned the unpolished 812, since
-its search had not ended. `docs/route-polish.md` has the catalog-wide numbers.
+search later, and so the end polish, which episodes make up for: at 5 s, 256 MiB
+returns 475 (484 without episodes) and 1024 MiB 475 (the unpolished 812
+without), and 1024 MiB reaches 458 at 15 s and 436 at 30 s (job 48691).
+`docs/route-polish.md` has the catalog-wide numbers.
 The sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:
