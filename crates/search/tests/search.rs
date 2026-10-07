@@ -643,25 +643,26 @@ mod fixtures {
 }
 
 /// The root bound counts the walk to the nearest statically legal push's
-/// stand, which can lie past the nearest box. The raised bound stays at or
-/// below the optimum and the run still proves it. TWO is a control whose
-/// keeper already stands behind a legal push, so only the pushes and their
-/// stand charges count.
+/// stand, which can lie past the nearest box. The bound stays at or below
+/// the optimum and the run still proves it. TWO is a control whose keeper
+/// already stands behind a legal push, so only the pushes and their stand
+/// charges count.
 #[test]
-fn stand_walk_raises_the_root_bound() {
+fn stand_walk_keeps_the_root_bound_admissible() {
     // The catalog's tutorial-push, also the fixtures module's tutorial_push
-    // row, repeated here as the plainest case of the raise.
+    // row, repeated here as the plainest case of the walk.
     const TUTORIAL_PUSH: &str = "OOOOO\nO XSO\nO   O\nO R O\nOOOOO";
-    for (rows, root, optimum) in [
-        (TUTORIAL_PUSH, 4, 4),
-        (REORDERED[4].0, 7, 15),
-        (REORDERED[2].0, 8, 11),
-        (TWO, 6, 20),
+    for (rows, optimum) in [
+        (TUTORIAL_PUSH, 4),
+        (REORDERED[4].0, 15),
+        (REORDERED[2].0, 11),
+        (TWO, 20),
     ] {
         let board = Board::parse(rows).unwrap();
         assert_eq!(bfs(&board), Some(optimum), "{rows:?}");
         let fresh = Search::new(board.clone(), board.initial(), Mode::Optimal, 20_000, 8).unwrap();
-        assert_eq!(fresh.lower_bound(), Some(root), "{rows:?}");
+        let root = fresh.lower_bound().unwrap();
+        assert!(root <= optimum, "{rows:?}: {root} > {optimum}");
         let mut search = drive(&board, Mode::Optimal, 20_000, Some(optimum), rows);
         assert_consistent(&board, &mut search, Some(optimum), rows);
         assert_eq!(

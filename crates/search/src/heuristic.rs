@@ -488,6 +488,16 @@ impl Heuristic {
         &self.goal_cells[..self.goals]
     }
 
+    /// The fewest pushes a lone box on `cell` needs to reach goal column
+    /// `column`, the keeper standing anywhere, `NONE` when it cannot: an
+    /// entry the matching sums, which drops by at most one per push. Only a
+    /// heuristic that ignores keeper sides keeps distances per cell, and no
+    /// policy that counts them polishes (a const assert in engine.rs).
+    pub(crate) fn distance(&self, cell: Cell, column: usize) -> u16 {
+        debug_assert!(self.keeper.is_none());
+        self.distances[cell as usize * self.goals + column]
+    }
+
     /// Distances from `spot` to each of `group`'s goals, in column order.
     fn goal_distances(&self, group: &Group, spot: Spot) -> &[u16] {
         let at = spot as usize * self.goals + group.start;
