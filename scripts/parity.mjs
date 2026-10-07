@@ -188,15 +188,18 @@ console.log(`parity memory: ultra-tiny growth=${mib(tiny.growth)} limit=${mib(TI
 assert.equal(tiny.metrics.status, 'solved', 'parity memory: ultra-tiny/optimal');
 assert(tiny.growth <= TINY_GROWTH_CAP, `parity memory: ultra-tiny grew a fresh instance ${tiny.growth} bytes, over ${TINY_GROWTH_CAP}`);
 
-// Large at 16 MiB fills its arena, so every buffer reaches the size
+// Open-field at 16 MiB fills its arena, so every buffer reaches the size
 // reserved_bytes charges and the state table grows once, freeing its first
-// table, at most 256 KiB, which linear memory keeps. The instance may grow by at
-// most reserved_bytes plus 2 MiB for that table, the allocator and the bindings.
-// The allocator grows memory by whole requests rounded up to 64 KiB, so up to
-// one of large's record blocks plus 192 KiB can stay unused at the top.
-const fill = await freshRun('memory-fill', 'large', 16);
+// table, at most 256 KiB, which linear memory keeps. It has no single-door room,
+// so the room bound builds nothing and no build's freed buffers come on top
+// (large, which filled before, now proves its optimum with the room bound's
+// tables). The instance may grow by at most reserved_bytes plus 2 MiB for that
+// table, the allocator and the bindings. The allocator grows memory by whole
+// requests rounded up to 64 KiB, so up to one of open-field's record blocks plus
+// 192 KiB can stay unused at the top.
+const fill = await freshRun('memory-fill', 'open-field', 16);
 const fillCap = fill.metrics.reservedBytes + 2 * MIB;
 const fillSizes = `growth=${mib(fill.growth)} reserved=${mib(fill.metrics.reservedBytes)} limit=${mib(fillCap)}`;
-console.log(`parity memory fill: large status=${fill.metrics.status} ${fillSizes}`);
-assert.equal(fill.metrics.status, 'memory_limit', 'parity memory fill: large/optimal');
-assert(fill.growth <= fillCap, `parity memory fill: large grew a fresh instance ${fill.growth} bytes, over ${fillCap}`);
+console.log(`parity memory fill: open-field status=${fill.metrics.status} ${fillSizes}`);
+assert.equal(fill.metrics.status, 'memory_limit', 'parity memory fill: open-field/optimal');
+assert(fill.growth <= fillCap, `parity memory fill: open-field grew a fresh instance ${fill.growth} bytes, over ${fillCap}`);

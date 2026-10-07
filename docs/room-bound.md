@@ -290,12 +290,13 @@ room's few small move lists right after, and refunds each when it is freed.
 - The kept tables may take at most a quarter of the budget less the fixed
   buffers (`KEPT_SHARE`), so they leave most of it to the arena.
 
-When the build ends with tables, the engine clears the arena, which holds only
-the start, and sizes it again with `Arena::recharge`, with the tables and the
-hall part counted among the fixed buffers. The new limit is never larger, so
-the re-size allocates nothing, and a search that lost states to it reports
-`MemoryLimit` rather than `StateLimit` when it fills. If even the first block
-no longer fits, the search drops the tables and goes on with M alone.
+When the build ends with tables, the engine sizes the arena again with
+`Arena::recharge`, with the tables and the hall part counted among the fixed
+buffers. No pop runs while the build does, so the arena still holds only the
+start, which any limit fits. The new limit is never larger, so the re-size
+allocates nothing, and a search that lost states to it reports `MemoryLimit`
+rather than `StateLimit` when it fills. If even the first block no longer fits,
+the search drops the tables and goes on with M alone.
 
 `Search::reserved_bytes` is the whole budget while the build runs. Once it
 ends, it is the fixed buffers, the kept tables and the arena at its new limit,
@@ -324,10 +325,11 @@ ends with the start's bound, 214, below the 240 or 241 that M alone reaches.
 
 ### After the build
 
-The start is seeded again in the re-sized arena, queued with max(M, S). The
-second seed counts the start again in generated and unique states, as a
-restart's does, so the two still differ by the improvements alone. With no
-table, the search goes on with the start it seeded first.
+The start's queue entry, keyed by M's root estimate, is replaced by one keyed
+by max(M, S). Its record keeps M, as every record does. The start is inserted
+once, so generated and unique states count it once, and a capped search's
+generated states stay within the state limit. With no table, or when the
+re-size refuses, the search goes on with the entry it has, keyed by M.
 
 ## Measurements
 

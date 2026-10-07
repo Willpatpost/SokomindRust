@@ -85,7 +85,7 @@ pub(crate) struct Policy {
     /// search proper, in slices paid as pops, and then queues max(M, S),
     /// with S the room tables' sum plus the hall part. The tables are
     /// charged to the budget: the arena is re-sized for them and the start
-    /// re-seeded. Exact only: it raises bounds, and the build costs time a
+    /// queued again. Exact only: it raises bounds, and the build costs time a
     /// weighted search spends finding its route. Job 48775 raised Grand
     /// Hall's root bound from 214 to 255 (docs/room-bound.md).
     room_bound: bool,
@@ -569,8 +569,7 @@ impl Engine {
     /// Inserts and queues the start in an arena that is empty or holds only
     /// a restart's kept path, or ends the search when the start has no goal
     /// assignment. No kept record is in the table, so the start is always a
-    /// new state. With the room bound, the start is queued with max(M, S),
-    /// and its record stores M, as every record does.
+    /// new state.
     fn seed(&mut self) {
         let h = self.heuristic.estimate(&self.start);
         let (slot, _) = self.arena.find(&self.start);
@@ -588,18 +587,7 @@ impl Engine {
         // start and the next insert already.
         debug_assert!(!self.arena.starved());
         if let Some(h) = h {
-            let mut total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
-            if let Some(rooms) = &self.rooms {
-                // Never `None`: a table whose search never reached a goal
-                // from the start is not kept, and the hall part is feasible
-                // wherever M is. A missing projection would still prove the
-                // start unsolvable, since its relaxed problem has no solution.
-                let Some(s) = rooms.root(&self.start) else {
-                    self.status = Status::Exhausted;
-                    return;
-                };
-                total_h = total_h.max(s.min(MAX_QUEUED_H));
-            }
+            let total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
             self.arena
                 .enqueue(push::key(0, total_h, self.policy.weight), total_h, root);
         } else {
@@ -875,13 +863,13 @@ impl Engine {
     }
     /// Runs the room bound's build for `pops` pop slots of
     /// [`BUILD_UNITS_PER_POP`] units each, and returns the slots left: 0
-    /// while it still runs. A build that ends with tables empties the arena,
-    /// which holds only the start, queued with M alone, re-sizes it with the
-    /// room bound's bytes charged to the budget, and seeds the start again,
-    /// queued with max(M, S). The second seed counts the start again in
-    /// generated and unique states, as a restart's does, so the two still
-    /// differ by the improvements alone. With no table, or when the re-size
-    /// refuses, the search goes on with M alone.
+    /// while it still runs. No pop runs while the build does, so the arena
+    /// holds only the start, queued with M. A build that ends with tables
+    /// re-sizes the arena with the room bound's bytes charged to the budget
+    /// and queues the start again with max(M, S) in place of that entry; its
+    /// record keeps M, as every record does. The start is inserted once, so
+    /// generated stays within the state limit. With no table, or when the
+    /// re-size refuses, the search goes on with M alone.
     // Cold and out of line, as advance_staged: advance calls it only while
     // the build runs.
     #[cold]
@@ -899,20 +887,33 @@ impl Engine {
         let Some(rooms) = rooms else {
             return left;
         };
-        let before = self.arena.len() as u32;
-        self.arena.clear();
-        self.discarded += before - self.arena.len() as u32;
+        // Never `None`: a table whose search never reached a goal from the
+        // start is not kept, and the hall part is feasible wherever M is. A
+        // missing projection would still prove the start unsolvable, since
+        // its relaxed problem has no solution.
+        let s = rooms.root(&self.start);
         self.rooms = Some(rooms);
-        if self.arena.recharge(self.charged_bytes(), self.memory_mib) {
-            // Exact never stages, so the fill point is the limit.
-            let node_limit = self.arena.node_limit();
-            self.fill_at = node_limit;
-            self.partial_at = partial_at(&self.policy, node_limit);
-        } else {
+        if !self.arena.recharge(self.charged_bytes(), self.memory_mib) {
             // The arena, unchanged, leaves no room for the tables.
             self.rooms = None;
+            return left;
         }
-        self.seed();
+        // Exact never stages, so the fill point is the limit.
+        let node_limit = self.arena.node_limit();
+        self.fill_at = node_limit;
+        self.partial_at = partial_at(&self.policy, node_limit);
+        let root = self.arena.dequeue();
+        debug_assert!(self.arena.len() == 1 && root.is_some_and(|key| key.id() == 0));
+        if let Some(root) = root {
+            // The entry's h is M's root estimate.
+            if let Some(s) = s {
+                let h = root.h().max(s.min(MAX_QUEUED_H));
+                self.arena
+                    .enqueue(push::key(0, h, self.policy.weight), h, root.id());
+            } else {
+                self.status = Status::Exhausted;
+            }
+        }
         left
     }
     /// Runs the stage ladder one unit per pop until it ends or the pops run
@@ -998,7 +999,7 @@ impl Engine {
         // rejects something skips the rest for it:
         // - build: while the room bound builds, before the search proper, a
         //   pop is BUILD_UNITS_PER_POP of its units instead (room_bound.rs).
-        //   Once it is built, the arena is re-sized and the start re-seeded,
+        //   Once it is built, the arena is re-sized and the start re-queued,
         //   and the pops left go on below.
         // - stage: while the stage ladder runs the search, a pop is one of
         //   its units instead: one rank unit, one movers unit, one stage
@@ -1591,12 +1592,10 @@ mod tests {
     /// An arena that cannot grow ends the search with `MemoryLimit` and the
     /// f of the expansion it cut short, and never restarts, so it discards
     /// nothing, even under a restart policy: a fresh search would need the
-    /// same allocation. The one exception is Exact's start, which the room
-    /// bound's build re-seeds once it keeps tables, before the search
-    /// proper; the re-size allocates nothing. Growth is refused from the
-    /// start, so the search stops once its first chunk is full. The board is
-    /// the one of `corral_check_prunes_a_goal_sealed_too_early`, whose route
-    /// needs 18 moves.
+    /// same allocation. Growth is refused from the start, so the search
+    /// stops once its first chunk is full. The board is the one of
+    /// `corral_check_prunes_a_goal_sealed_too_early`, whose route needs 18
+    /// moves.
     #[test]
     fn a_refused_growth_stops_with_memory_limit() {
         let board = Board::parse("OOOOOOO\nO     O\nO BRA O\nOOOaOOO\nO  b  O\nOOOOOOO").unwrap();
@@ -1609,10 +1608,9 @@ mod tests {
                 Engine::new(board.clone(), board.initial(), policy, STATES, 16).unwrap();
             engine.arena.refuse_growth(true);
             drive(&mut engine);
-            let reseeded = u32::from(engine.rooms.is_some());
             assert_eq!(
                 (engine.status(), engine.discarded),
-                (Status::MemoryLimit, reseeded)
+                (Status::MemoryLimit, 0)
             );
             assert!(engine.interrupted_f.is_some() && engine.best_moves().is_none());
         }

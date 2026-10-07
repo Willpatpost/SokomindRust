@@ -476,14 +476,15 @@ impl Arena {
             bytes: bytes_for(low) as usize,
         })
     }
-    /// Resizes a cleared arena's limit for `fixed_bytes` of fixed buffers,
-    /// as [`Arena::capacity`] sizes it, never above the current limit and
-    /// allocating nothing. Returns false, with nothing changed, when the
-    /// budget no longer fits a state, or when the first chunk or the table
-    /// already exceed what the new limit's buffers hold, so the arena still
-    /// never grows past [`Arena::reserved_bytes`].
+    /// Resizes the limit of an arena that holds at most one record, the
+    /// start, for `fixed_bytes` of fixed buffers, as [`Arena::capacity`]
+    /// sizes it, never above the current limit and allocating nothing. A
+    /// limit always fits one state, so the start stays. Returns false, with
+    /// nothing changed, when the budget no longer fits a state, or when the
+    /// first chunk or the table already exceed what the new limit's buffers
+    /// hold, so the arena still never grows past [`Arena::reserved_bytes`].
     pub(crate) fn recharge(&mut self, fixed_bytes: u64, memory_mib: usize) -> bool {
-        debug_assert!(self.len == 0 && self.resident == 0);
+        debug_assert!(self.len <= 1 && self.resident == self.len);
         let Ok(Capacity { limit, bytes }) =
             Self::capacity(fixed_bytes, self.boxes, self.node_limit, memory_mib)
         else {
