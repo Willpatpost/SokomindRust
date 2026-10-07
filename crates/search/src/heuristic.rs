@@ -193,23 +193,26 @@ fn reverse_push(
 /// walk changes the charge by at most one, and a push ends with the keeper
 /// on its box's old cell, where a box can stand, so at charge 0. That is
 /// consistent in moves, and without keeper sides every charge is 0.
+///
+/// `cost(stand, previous)` prices the push from `stand` that leaves the
+/// keeper on `previous`, at most `max_cost`; 0 is allowed (the room bound's
+/// hall part, see [`Heuristic::hall`]).
 fn push_distances(
     board: &Board,
-    sides: Option<(&Blocks, &[u8])>,
+    blocks: Option<&Blocks>,
     columns: &[(Cell, u8)],
+    max_cost: usize,
+    cost: impl Fn(Cell, Cell) -> usize,
 ) -> Vec<u16> {
     let neighbors = board.neighbors();
     let goals = columns.len();
-    let stride = if sides.is_some() { SIDES } else { 1 };
-    let blocks = sides.map(|(blocks, _)| blocks);
-    let cost = |stand: Cell| 1 + sides.map_or(0, |(_, charge)| usize::from(charge[stand as usize]));
-    let most = sides.map_or(0, |(_, charge)| charge.iter().copied().max().unwrap_or(0));
+    let stride = if blocks.is_some() { SIDES } else { 1 };
     let mut distances = vec![NONE; neighbors.len() * stride * goals];
-    // Dial's buckets, reused for every column: a push costs 1 to
-    // 1 + `most`, so the spots waiting at once span fewer distances than
+    // Dial's buckets, reused for every column: a push costs 0 to
+    // `max_cost`, so the spots waiting at once span fewer distances than
     // there are buckets. Spots in one bucket share a distance, so their
     // order does not matter.
-    let span = usize::from(most) + 2;
+    let span = max_cost + 1;
     let mut buckets: Vec<Vec<Spot>> = vec![Vec::new(); span];
     for (column, &(goal, _)) in columns.iter().enumerate() {
         let at = |spot: Spot| spot as usize * goals + column;
@@ -234,9 +237,11 @@ fn push_distances(
                     else {
                         continue;
                     };
-                    // Never below `distance`: a capped one may join the
-                    // bucket this loop is still draining.
-                    let next = (distance + cost(stand)).min(usize::from(MAX_DISTANCE)) as u16;
+                    // Never below `distance`: a capped or free one may join
+                    // the bucket this loop is still draining.
+                    let previous = neighbors[cell][d];
+                    let next =
+                        (distance + cost(stand, previous)).min(usize::from(MAX_DISTANCE)) as u16;
                     if next < distances[at(before)] {
                         distances[at(before)] = next;
                         buckets[usize::from(next) % span].push(before);
@@ -350,6 +355,19 @@ impl Heuristic {
     /// `keeper`, the start keeper's cell, which every estimated state's
     /// keeper shares a floor component with.
     pub(crate) fn new(board: &Board, keeper: Option<Cell>) -> Self {
+        Self::build(board, keeper, None)
+    }
+
+    /// The room bound's hall part (see `docs/room-bound.md`): the same
+    /// keeper-side matching as `new`, but a push costs 0 when the keeper
+    /// ends on a `counted` cell, where the room tables count that move, and
+    /// 1 otherwise, with no stand charges. Its feasibility equals `new`'s:
+    /// same blocks, same edges.
+    pub(crate) fn hall(board: &Board, keeper: Cell, counted: &[bool]) -> Self {
+        Self::build(board, Some(keeper), Some(counted))
+    }
+
+    fn build(board: &Board, keeper: Option<Cell>, counted: Option<&[bool]>) -> Self {
         let mut groups = Vec::new();
         let mut group_of = [0; MAX_BOXES];
         let mut start = 0;
@@ -379,7 +397,10 @@ impl Heuristic {
         });
         let keeper = blocks.map(|blocks| {
             let dead_spots = dead_masks(board, Some(&blocks), &groups, &columns);
-            let charge = charges(board, &dead_spots);
+            let charge = match counted {
+                Some(_) => vec![0; board.tiles().len()],
+                None => charges(board, &dead_spots),
+            };
             let most = charge.iter().copied().max().map_or(0, u32::from);
             KeeperSides {
                 blocks,
@@ -388,13 +409,21 @@ impl Heuristic {
                 most,
             }
         });
-        let distances = push_distances(
-            board,
-            keeper
-                .as_ref()
-                .map(|keeper| (&keeper.blocks, &keeper.charge[..])),
-            &columns,
-        );
+        let distances = match (&keeper, counted) {
+            (Some(keeper), Some(counted)) => {
+                push_distances(board, Some(&keeper.blocks), &columns, 1, |_, previous| {
+                    usize::from(!counted[previous as usize])
+                })
+            }
+            (Some(keeper), None) => push_distances(
+                board,
+                Some(&keeper.blocks),
+                &columns,
+                1 + keeper.most as usize,
+                |stand, _| 1 + usize::from(keeper.charge[stand as usize]),
+            ),
+            (None, _) => push_distances(board, None, &columns, 1, |_, _| 1),
+        };
         let dead = dead_masks(board, None, &groups, &columns);
         Self {
             distances,

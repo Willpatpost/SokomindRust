@@ -179,8 +179,9 @@ pub struct ResultBody {
     /// Records the search inserted, improved versions of known states
     /// included.
     generated: u32,
-    /// Bytes charged against `memory_mib`: the fixed buffers and the arena
-    /// at its state limit, a ceiling the search may never reach.
+    /// Bytes charged against `memory_mib`: the fixed buffers, Optimal's room
+    /// tables and the arena at its state limit, a ceiling the search may
+    /// never reach (see [`Search::reserved_bytes`]).
     reserved_bytes: usize,
     /// Wall-clock time the search took, in milliseconds.
     elapsed_ms: u64,
