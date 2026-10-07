@@ -425,9 +425,12 @@ fn fast_routes_survive_state_limit_boundaries() {
 }
 
 /// Sweeps every state limit up to the unlimited run's node count. A limit
-/// always cuts an expansion short, so the frontier must count that node's
-/// unpushed children (`interrupted_f`); some limits land exactly as the solved
-/// child needs the arena's spare node (`Arena::insert` past the limit).
+/// that stops the search cuts an expansion short, so the frontier must count
+/// that node's unpushed children (`interrupted_f`); some limits land exactly
+/// as the solved child needs the arena's spare node (`Arena::insert` past the
+/// limit). A limited run expands partially from 90% of its limit and so
+/// stores fewer children than the unlimited one; it may then finish under
+/// the limit, and must prove the optimum when it does.
 #[test]
 fn limited_optimal_bounds_never_pass_the_optimum() {
     let (mut kept, mut spare) = (0, 0);
@@ -439,7 +442,7 @@ fn limited_optimal_bounds_never_pass_the_optimum() {
             let context = format!("{rows:?} at {max_states} states");
             let mut search = drive(&board, Mode::Optimal, max_states, Some(optimum), &context);
             assert_consistent(&board, &mut search, Some(optimum), &context);
-            if max_states == full {
+            if max_states == full || search.status() == Status::Solved {
                 assert_eq!(
                     search.proof(),
                     Some(Proof::Optimal { moves: optimum }),
