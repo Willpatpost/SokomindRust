@@ -318,13 +318,25 @@ struct Attempt {
 
 impl Attempt {
     /// After the whole room's table failed, its halves are next, unless the
-    /// room would replace enclosed rooms or a half is empty, which would
-    /// rebuild the whole room.
-    fn split(&mut self, board: &Board, part: u64) {
-        let halves = self.room.halves(board);
-        if part == self.room.all() && !self.replaces && !halves.contains(&0) {
-            (self.parts, self.next, self.count) = (halves, 0, 2);
+    /// room would replace enclosed rooms. A half is tried only when it holds
+    /// some, but not all, of the room's labels. With none it has no table.
+    /// With all it differs from the whole room only in which moves count, so
+    /// its key, forward search and kept size are the whole room's, and it
+    /// would very likely fail again. An empty half leaves the other with all.
+    fn split(&mut self, board: &Board, start: &State, part: u64) {
+        if part != self.room.all() || self.replaces {
+            return;
         }
+        let labels = self.room.labels(board, start, part);
+        let (mut parts, mut count) = ([0; 2], 0);
+        for half in self.room.halves(board) {
+            let some = self.room.labels(board, start, half);
+            if !some.is_empty() && some != labels {
+                parts[count] = half;
+                count += 1;
+            }
+        }
+        (self.parts, self.next, self.count) = (parts, 0, count);
     }
 }
 
@@ -344,7 +356,8 @@ impl Attempt {
 /// A room that encloses built rooms tries only its whole-room table, and if
 /// that builds, replaces them: their tables are freed. Otherwise they stay.
 /// A room that encloses none tries its whole-room table, then, if that
-/// size-failed or its key was too wide, its two halves, and keeps what
+/// size-failed or its key was too wide, each of its two halves that holds
+/// some but not all of its labels (see `Attempt::split`), and keeps what
 /// builds. A table whose root reaches no goal state is skipped.
 ///
 /// A size failure is a forward search past `cap`, a refused buffer, a table
@@ -483,7 +496,7 @@ impl RoomBuild {
                     }
                     Err(SizeFailure) => {
                         attempt.failed = true;
-                        attempt.split(board, part);
+                        attempt.split(board, start, part);
                     }
                 }
                 attempt.build = None;
@@ -492,7 +505,7 @@ impl RoomBuild {
                 attempt.next += 1;
                 match TableBuild::new(board, heuristic, &attempt.room, start, part, self.cap) {
                     Some(build) => attempt.build = Some((part, build)),
-                    None => attempt.split(board, part),
+                    None => attempt.split(board, start, part),
                 }
             } else {
                 let attempt = self.attempt.take().expect("an attempt");

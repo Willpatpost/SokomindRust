@@ -244,7 +244,13 @@ than a failed room it encloses. On Grand Hall the 25-cell room behind door
 
 A room that encloses no built room tries its whole-room table, then, if that
 failed or its key needs more than 63 bits, the two halves of the room, split at
-the door's line, when neither is empty. It keeps whatever builds. A room that
+the door's line. It tries a half only when the half holds some, but not all, of
+the room's labels. A half with none has no table. A half with all of them
+differs from the whole room only in which moves count, so its key, forward
+search and kept size are the whole room's, and it would very likely fail
+again. In job 48991 all 13 such halves failed again, 12 in the forward search
+and one out of work, and on gen-v2-370002 at 5 s and 64 MiB they took 2.4 of
+the build's 4.8 s. It keeps whatever builds. A room that
 encloses built rooms tries only its whole-room table, and replaces them if it
 builds; otherwise they stay. A failure is a forward search past the cap, a
 buffer the ledger or the allocator refuses, a table past the kept limit, or the
