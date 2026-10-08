@@ -191,6 +191,18 @@ fn explore(board: &Board) -> Option<(Vec<State>, Vec<Vec<Edge>>)> {
 
 /// Exact moves to a solved state, `u32::MAX` without one.
 pub(crate) fn remaining(board: &Board, states: &[State], edges: &[Vec<Edge>]) -> Vec<u32> {
+    remaining_off(board, states, edges, None)
+}
+
+/// Exact moves to a solved state that end with the keeper off `counted`,
+/// every move without it, `u32::MAX` without one: the room bound's hall
+/// part bounds these.
+pub(crate) fn remaining_off(
+    board: &Board,
+    states: &[State],
+    edges: &[Vec<Edge>],
+    counted: Option<&[bool]>,
+) -> Vec<u32> {
     let mut reverse = vec![Vec::new(); states.len()];
     for (from, out) in edges.iter().enumerate() {
         for &(to, _) in out {
@@ -205,11 +217,19 @@ pub(crate) fn remaining(board: &Board, states: &[State], edges: &[Vec<Edge>]) ->
             queue.push_back(id);
         }
     }
+    // A 0-1 BFS backward: every move into `to` costs the same, so a free
+    // one's source joins the front and a charged one's the back.
     while let Some(to) = queue.pop_front() {
+        let free = counted.is_some_and(|counted| counted[states[to].player as usize]);
+        let reached = exact[to] + u32::from(!free);
         for &from in &reverse[to] {
-            if exact[from] == u32::MAX {
-                exact[from] = exact[to] + 1;
-                queue.push_back(from);
+            if reached < exact[from] {
+                exact[from] = reached;
+                if free {
+                    queue.push_front(from);
+                } else {
+                    queue.push_back(from);
+                }
             }
         }
     }

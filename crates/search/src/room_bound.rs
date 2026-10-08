@@ -2,7 +2,7 @@
 //!
 //! Each single-door room Q that holds a start box or a goal gets tables
 //! R(Q, P, LAB) over disjoint parts P of Q (see `table`). The hall heuristic,
-//! which prices the pushes that end outside every part, adds to their sum S,
+//! which prices the moves that end outside every part, adds to their sum S,
 //! and the exact search queues max(M, S).
 //!
 //! The tables are built before the search proper, by `RoomBuild`, in slices
@@ -384,7 +384,7 @@ impl Attempt {
 /// solution of C's relaxed problem, cut down to E's labels and cells, is a
 /// solution of E's, by the table lemma's projection; it counts a move on P
 /// only where C's counts that move. The hall part may drop, since the
-/// pushes that end in C outside the enclosed parts become free, so the
+/// moves that end in C outside the enclosed parts become free, so the
 /// larger room is a choice, the one measured stronger, not a proven gain.
 /// Only the whole-room table holds the enclosed rooms' problems, so only it
 /// may replace them.
@@ -702,9 +702,12 @@ impl RoomBound {
         Some(sum)
     }
 
-    /// S of `state` from scratch, `None` when a projection is missing.
+    /// S of `state` from scratch, `None` when a projection is missing. The
+    /// hall part is less the keeper's charge, which only the start can have:
+    /// a push leaves the keeper where a box stood (see `Heuristic::estimate`).
     pub(crate) fn root(&self, state: &State) -> Option<u32> {
-        Some(self.tables_sum(state)? + self.hall.estimate(state)?)
+        let hall = self.hall.estimate(state)?;
+        Some(self.tables_sum(state)? + hall.saturating_sub(self.hall.charge(state.player)))
     }
 
     /// S of `child`, the state box `i` of `parent` reaches when pushed in
