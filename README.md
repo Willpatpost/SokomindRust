@@ -352,8 +352,9 @@ the cap lifted; each search then ended at its memory or state limit within 34
 to 103 s, so neither more time nor more memory shortened it (job 49425). That
 is where the polish's jobs stop gaining, and the kicks start there: with no
 time limit Quality now returns 429 moves (224 pushes) at 64 MiB, about 404 s
-after the start (job 49484). The shortest route found so far is 426 moves, by
-a probe that polished from every box order (job 49472).
+after the start (job 49484). The shortest route found so far is 422 moves
+(220 pushes), by probes that kicked from the polish's other local optima
+(jobs 49472 and 49487).
 `docs/route-polish.md` has the catalog-wide numbers and the polish's earlier
 measurements.
 The sealed-corral check covers the reference's corral deadlock check, at the same

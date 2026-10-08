@@ -195,10 +195,11 @@ moves, and Grand Hall's from 31 s to 404 s for 436 → 429.
 Hall's 436-move route, 22 found a traded route, of 436 to 482 moves. The
 other 33 found none within the bound: for 19 the heuristic already put the
 start at or above it, and 14 ran out of queue. 9 of the 22 descended below
-436. 64 is the only slack measured. A kick is a pair job, so it stops at
-`PAIR_POPS` too. In that job, with a cap of 2^22, one of the 55 took
-1,656,978 expansions, and its descent ended at 431. Under `PAIR_POPS` it
-gains nothing. No other kick took more than 1,011,928.
+436. Job 49487 ran slack 128 beside 64: in 880 paired kicks, from 16 Grand
+Hall routes below 436, every run found the same route at both slacks. A kick
+is a pair job, so it stops at `PAIR_POPS` too. In job 49472, with a cap of
+2^22, one of the 55 took 1,656,978 expansions, and its descent ended at 431.
+Under `PAIR_POPS` it gains nothing. No other kick took more than 1,011,928.
 
 ## Heuristic
 
@@ -491,10 +492,19 @@ seed comes back unchanged. Two ways out of that optimum:
   traded route, 17 of them descended back to 426, and none went below. 426 is
   a local optimum under single, pair and kick jobs alike.
 - Peak RSS was 63 MiB, and 106 MiB with the kicks' larger allowance.
+- **Kicks from each optimum** (job 49487, the same build): the same 55 kicks
+  from each of the 17 distinct routes below 436 above, at slacks 64 and 128
+  (426 at 64 is "Kicks from 426"). 12 distinct routes ended below 426,
+  the best at 422 moves (220 pushes): kick 23 from 436 had descended to 431,
+  and kick 17 from that 431 descended to 422. The 55 kicks from 422 found
+  none shorter. The 880 runs at slack 64 polished for 11,887 s in all; peak
+  RSS was 107 MiB.
 
 So the polish kicks: they cost about a nineteenth as much per route below
 436, and they keep going from each better route, where a multi-start run
-ends once. Multi-start is under Left out.
+ends once. Each kick starts from the best route, so the polish never kicks
+from a longer optimum such as that 431. Multi-start and kicks from each
+optimum are under Left out.
 
 **Kicks.** Job 49484, on a c4-standard-32 node, compares main e3ab52b with
 6093f6a, which adds the kicks, using the catalog example, one sample each.
@@ -554,3 +564,8 @@ These come from the reference's Quality route repair, or were considered here:
   kicks' 429, but at about 19 times their cost per route below 436, and each
   start is a full polish (see Escapes). Kicks from that 426 found nothing
   shorter.
+- **Kicks from each optimum**: kicking from every local optimum a descent
+  reaches, not only the best. On Grand Hall, kicks from a 431 found 422,
+  where the polish ends at 429, but the sweep that found it polished for
+  hours (see Escapes). The polish would need a rule for which optima to keep
+  and when to stop.
