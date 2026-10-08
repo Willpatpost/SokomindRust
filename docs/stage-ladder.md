@@ -192,11 +192,10 @@ Fast's time now lies in the ladder and in the give-ups, not in plain search.
 At 32,768 and 64 MiB the 50 routed boards took 3.1 s, 2.7 s of it in their
 ladders, and the 35 that plain Fast routes took 29 ms together, none more
 than 14 ms (before, the 40 it routed took 2.7 s, up to 1.0 s each). The 7
-give-ups took 12.9 s, 6.4 s of it
-in their ladders and the rest filling an arena that routes none of them. So a
-plain-search speedup, such as the tunnel and goal-room macros the reference
-tried, has at most 0.4 s to gain on the routed boards, and it does not route a
-board the ladder gives up on.
+give-ups took 12.9 s, 6.4 s of it in their ladders and the rest filling an
+arena that routes none of them. So a plain-search speedup, such as the tunnel
+and goal-room macros the reference tried, has at most 0.4 s to gain on the
+routed boards, and it does not route a board the ladder gives up on.
 
 Below `MIN_STATES` (4,096) states at the stage point the ladder declines, so a
 small limit keeps the plain search's behavior. At 4,096 its work budget is
