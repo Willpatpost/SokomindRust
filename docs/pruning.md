@@ -4,7 +4,8 @@ The sealed-corral check (`crates/search/src/corral.rs`) removes states from
 which no solution exists, in every mode, Optimal included. The module docs
 there give its soundness argument. This file records how its scope was
 chosen, the census that checked it against exact solvability before it was
-built, and what adopting it measured. README's solver section describes the
+built, what adopting it measured, and the deeper checks measured beside it in
+Optimal and rejected. README's solver section describes the
 deadlock rule this check builds on and lists the other prunes that were
 measured and rejected.
 
@@ -168,6 +169,51 @@ assert prints the counts, on the tree and on weakened rules. Flagged / kept:
 
 The tree's counts equal the census's on both inputs. Every weakened variant
 fails at least one floor.
+
+## The ladder's sound checks in Optimal
+
+The stage ladder's accept tests include three sound dead-state checks
+(`docs/stage-ladder.md`, Accept): sink-line order, keeper-aware reach
+matching and sealed pockets. Job 49446 measured each as an Optimal prune, run
+in the expansion's prologue after this check, on a probe branch
+(`exp/optimal-ideas`, `f89f44a`, on `main` `363fa80` with the memory cap
+lifted to 4000 MiB) that was never merged. Optimal ran on the catalog at the
+benchmark's limits (20k states, 64 MiB) and at 1M states and 256 MiB, and on
+Grand Hall at 1 GiB and at 4000 MiB with 60M states, one run each. With the
+checks off every record matched `main`, in all three modes at the benchmark's
+limits.
+
+The runs bore out their soundness: the 24 proofs at 20k states and the 27 at
+1M were the same in every variant, and no bound or route passed a proven
+optimum. None proved a board the others did not.
+
+| Prune | Catalog at 1M: bounds raised, time | Grand Hall at 1 GiB: bound, time | Grand Hall at 4000 MiB |
+| --- | --- | --- | --- |
+| none | 0, 69.3 s | 283, 40.4 s | 286, 145.4 s |
+| sink lines | 0, 69.8 s | 283, 41.2 s | 286, 146.2 s |
+| sealed pockets | 10, 94.8 s | 283, 51.8 s | 286, 178.0 s |
+
+- Sink lines pruned 0 states on Grand Hall and 43,686 on the catalog at 1M
+  states, where they moved no bound. At 20k states they raised one bound by 1
+  (gen-v2-320041-e16f5a47, 74 to 75).
+- Sealed pockets raised 10 catalog bounds at 1M states by 1 to 3
+  (gen-v2-350070-6be05c02 156 to 159, gen-v2-340053-466f0008 71 to 74,
+  gen-v2-340053-6d913910 64 to 67), and 12 at 20k states by 1 or 2. They took
+  37% more time on the catalog and 22 to 28% more on Grand Hall, where they
+  pruned 4.6% of their checks (716,373 of 15.6M at 4000 MiB, about 2.3 µs a
+  check) and left the bound where it was. A prologue prune keeps the dead
+  state's record and the 60M limit counts records, so that run expanded only
+  0.4% more states (14.20M to 14.26M).
+- Sink lines and sealed pockets together measured the same as sealed pockets.
+- Keeper-aware reach matching was false on 0 of 16.0M expanded states, and
+  needs no prune: Optimal's estimate uses the same relaxed push graph, is None
+  exactly when the matching fails, and a child with no estimate is never
+  queued.
+
+This check also costs Optimal time, but proves more at larger limits (above).
+Neither of these proved a board or raised Grand Hall's bound, so neither was
+adopted (2026-10-08). Grand Hall's gap, 286 against a 436-move route, is not
+in dead states.
 
 ## Replicas
 

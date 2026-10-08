@@ -68,6 +68,8 @@ route closing every lane into an unfilled goal and reopening one. Line rejects
 pushes 78 to 80 of a known 503-move route of `huge`, which
 `checks::tests::route_replay` pins. So the ladder serves Fast and Quality only,
 and nothing it finds may feed a proof, a bound or a prune of the exact search.
+The three sound checks were measured as Optimal prunes on their own and
+rejected (job 49446, `docs/pruning.md`).
 
 How the checks were measured on known routes, where a rejected state is a
 false reject:

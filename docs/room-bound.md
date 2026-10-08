@@ -775,8 +775,11 @@ stronger bound.
   placement counts do not tell them from tables that build. Skipping a room
   inside a failed one behind a door no wider would skip gen-v2-320081's room
   behind door (8,5), 2.6M states, which builds at 1 GiB, to save about 1.75 s.
-  A stronger dead-state rule in the forward search would cut them instead, but
-  it needs its own soundness argument.
+  A dead-state rule in the forward search stronger than the freeze refusal
+  (which already refuses a box frozen off its goals, 2x2 squares included)
+  would cut them instead. It needs its own soundness argument, and it would
+  not add a table on Grand Hall, whose two tables already build at 64 MiB from
+  5 s or 200k states.
 - **Tables over one part with disjoint labels.** The reference adds tables
   over the same cells for disjoint label sets, a sound sum of pushes. A table
   here counts every move that ends on its part, the keeper's steps included,
