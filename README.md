@@ -230,7 +230,10 @@ full pass over the boxes gains nothing, and where it ends depends on the order
 it visits them in, so the polish makes up to eight runs from the search's
 route, each in its own box order, and keeps the shortest. It then frees boxes
 in pairs, those that end nearest each other first, so two boxes can trade
-order, or goals when they share a label. It runs in the arena's share of
+order, or goals when they share a label. Once neither gains, the end polish
+kicks: it makes two boxes of one label trade goals even for a route up to 63
+moves longer, descends from there the same way, and ends after a full round
+of kicks finds nothing shorter than its best. It runs in the arena's share of
 the budget after the arena frees its records, so the reserved bytes do not
 change. A long search that stops improving its route also polishes it in
 episodes, in the part of that share the arena does not hold, and then goes on;
@@ -342,11 +345,15 @@ generates the same states first. The reference's own benchmark reports about
 times come from different machines. Quality's search does not shorten it
 before its memory limit, which a larger budget only moves later; the polish
 does. At the production limit of 5 s Quality returns 468 moves at 64 and
-256 MiB, and at 30 s 436 moves (222 pushes) (job 49403). Run for up to an hour,
-Quality reaches the same 436-move route at about 24 s at every budget from
-64 MiB to the 1 GiB cap, and at 2048 and 4000 MiB in a build with the cap
-lifted; each search then ends at its memory or state limit within 34 to 103 s,
-so neither more time nor more memory shortens it (job 49425).
+256 MiB, and at 30 s 436 moves (222 pushes) (job 49403). Run for up to an hour
+before kicks, Quality reached the same 436-move route at about 24 s at every
+budget from 64 MiB to the 1 GiB cap, and at 2048 and 4000 MiB in a build with
+the cap lifted; each search then ended at its memory or state limit within 34
+to 103 s, so neither more time nor more memory shortened it (job 49425). That
+is where the polish's jobs stop gaining, and the kicks start there: with no
+time limit Quality now returns 429 moves (224 pushes) at 64 MiB, about 404 s
+after the start (job 49484). The shortest route found so far is 426 moves, by
+a probe that polished from every box order (job 49472).
 `docs/route-polish.md` has the catalog-wide numbers and the polish's earlier
 measurements.
 The sealed-corral check covers the reference's corral deadlock check, at the same
