@@ -59,6 +59,7 @@ mod rooms;
 pub(crate) use ladder::{Done, Ladder};
 
 use crate::{
+    MAX_STATES,
     corral::{Corral, Pockets},
     deadlock::{Deadlock, GoalReach, SinkLines},
     heuristic::Heuristic,
@@ -84,15 +85,16 @@ const _: () = assert!(MAX_CELLS <= 1 << 12);
 
 /// The fewest states at the stage point for the ladder to run. Below it
 /// the ladder declines, so a small limit keeps the plain search's
-/// behavior; at it the work is [`work`]`(MIN_STATES)`, 131,072 inserts.
+/// behavior; at it the ladder's states earn it 131,072 inserts (see
+/// [`work`]).
 pub(crate) const MIN_STATES: usize = 4096;
 
 /// The stage point, in states: a staging search hands over to the ladder
 /// when its arena holds this many states, or when it fills, whichever
-/// comes first. It is the fewest states that earn the ladder its whole
-/// work, `2^20` inserts (see [`work`]). The ladder starts over from a copy
-/// of the start, so it runs here as it would at any later point under the
-/// same limit, and only the plain search before it shrinks. Job 49403 ran
+/// comes first. It is the fewest states that earn the ladder all the work
+/// states can, `2^20` inserts (see [`work`]). The ladder starts over from a
+/// copy of the start, so it runs here as it would at any later point under
+/// the same limit, and only the plain search before it shrinks. Job 49403 ran
 /// Fast on the catalog at 64 and 256 MiB, staged here and at the arena's
 /// capacity at 64 MiB (about 1M states), the stage point before: the same
 /// 50 routes, the same run in every ladder that ran under both, no board
@@ -104,19 +106,30 @@ pub(crate) const STAGE_AT: usize = 32_768;
 
 /// The ladder's inserts per state at the stage point (see [`work`]).
 const WORK_PER_STATE: usize = 32;
-// The work cap, which README and `SearchStats` quote, is reached exactly at
-// the stage point.
+// The work a staged search earns by its states is capped where it stages at
+// the latest, so the product in `work` cannot overflow.
 const _: () = assert!(STAGE_AT * WORK_PER_STATE == 1 << 20);
+// The limit, the work's other term, fits the u32 the ladder counts it in.
+const _: () = assert!(MAX_STATES <= u32::MAX as usize);
 
 /// The ladder's work budget, the inserts it may make, for a search staged
-/// with `states` states in its arena: [`WORK_PER_STATE`] per state, at most
-/// `2^20`, which a search earns at [`STAGE_AT`], the most it holds when it
-/// stages. 32 per state keeps every route the probe's ladder found at the
-/// benchmark gate with these accept checks, the largest of which needed
-/// 26.4, and the cap bounds a give-up at large limits. The cap makes the
-/// product and the cast exact.
-pub(crate) fn work(states: usize) -> u32 {
-    (states.min(STAGE_AT) * WORK_PER_STATE) as u32
+/// with `states` states in its arena under a limit of `limit` states: the
+/// larger of [`WORK_PER_STATE`] per state, at most `2^20`, which a search
+/// earns at [`STAGE_AT`], the most it holds when it stages, and the limit
+/// itself.
+///
+/// The first term serves small limits: 32 per state keeps every route the
+/// probe's ladder found at the benchmark gate with these accept checks, the
+/// largest of which needed 26.4. The second lets the caller's limits, not a
+/// constant, end a ladder that has not given up. Every transport stops a
+/// search at its deadline, so at the production limit, 60M, the ladder runs
+/// until it routes, gives up or meets the deadline. Job 49403 routed two
+/// more catalog boards with 2^24 inserts, 7.9M and 13.5M of them, which a
+/// cap of 2^20 gave up on. Up to a limit of `2^20` the first term is the
+/// larger, unless the memory budget holds fewer states than the limit, so
+/// the benchmark gate and the observe runs keep their work.
+pub(crate) fn work(states: usize, limit: usize) -> u32 {
+    (states.min(STAGE_AT) * WORK_PER_STATE).max(limit) as u32
 }
 
 /// A candidate move of a frame root: push the box in `slot` along one
@@ -304,13 +317,16 @@ fn settled(board: &Board, deadlock: &Deadlock, c: Cell) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_STATES, work};
+    use super::{MIN_STATES, STAGE_AT, work};
+    use crate::MAX_STATES;
 
     #[test]
-    fn work_scales_then_caps() {
-        assert_eq!(work(MIN_STATES), 131_072);
-        assert_eq!(work(60_000_000), 1 << 20);
-        assert_eq!(work(usize::MAX), 1 << 20);
-        assert_eq!(work(0), 0);
+    fn work_scales_then_takes_the_limit() {
+        assert_eq!(work(MIN_STATES, MIN_STATES), 131_072);
+        assert_eq!(work(20_000, 20_000), 640_000);
+        assert_eq!(work(STAGE_AT, 1_000_000), 1 << 20);
+        assert_eq!(work(STAGE_AT, MAX_STATES), MAX_STATES as u32);
+        assert_eq!(work(usize::MAX, MAX_STATES), MAX_STATES as u32);
+        assert_eq!(work(0, 0), 0);
     }
 }

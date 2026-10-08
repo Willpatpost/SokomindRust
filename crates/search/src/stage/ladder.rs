@@ -40,7 +40,9 @@
 //!   cell when the frame root does not; a signature ban, a rise with that
 //!   signature. A frame holds at most [`MAX_BANS`] bans. On its last ban it
 //!   goes to the last rung without a restart, so the next pass backjumps
-//!   past it. A ladder backjumps at most [`MAX_BACKTRACKS`] times.
+//!   past it. A ladder may backjump once per [`WORK_PER_BACKTRACK`]
+//!   inserts of its work budget, and [`MIN_BACKTRACKS`] times at least;
+//!   past that it gives up.
 //! - Reseed: each stage starts on a pruned arena. `Arena::clear_keeping`
 //!   keeps only the path to the root, whose ids are then its depths, and a
 //!   live copy of the root goes into the table and the queue. The stage's
@@ -97,13 +99,23 @@ const LAST_RUNG: u8 = 2;
 const MAX_RISES: usize = 128;
 /// The most bans a frame holds.
 const MAX_BANS: usize = 4;
-/// The most backjumps a ladder makes.
-const MAX_BACKTRACKS: u32 = 64;
+/// The fewest backjumps a ladder may make, the probe's cap.
+const MIN_BACKTRACKS: u32 = 64;
+/// The inserts of work that earn a ladder one backjump: it may make
+/// `max(work / WORK_PER_BACKTRACK, MIN_BACKTRACKS)`. Job 49403 routed
+/// gen-v2-370193-8887 with 13.5M inserts and 249 backjumps, and gave up
+/// there with 64, so the backjumps grow with the work a caller's limit
+/// allows (see `stage::work`) rather than end a long ladder first.
+const WORK_PER_BACKTRACK: u32 = 16_384;
 /// The checks budget per unit of work, a backstop well above the largest
 /// ratio measured (see the module docs).
 const CHECK_FACTOR: u32 = 4;
 
 const _: () = assert!(FOCUS.len() == CAPS.len());
+// The probe's 64 backjumps came with 2^20 inserts, the most a staged
+// search's states earn (see `stage::work`), so a ladder at that work or less
+// keeps them.
+const _: () = assert!((1 << 20) / WORK_PER_BACKTRACK == MIN_BACKTRACKS);
 // A u8 widens to usize; `usize::from` is not const.
 const _: () = assert!(CAPS.len() == LAST_RUNG as usize + 1);
 // A rise's index fits the u8 in `Phase::Accept`.
@@ -217,7 +229,7 @@ pub(crate) struct Ladder {
     stage_base: usize,
     /// The arena length at which the current stage fails.
     cap_end: usize,
-    /// The backjumps made.
+    /// The backjumps left.
     backtracks: u32,
     /// Records the reseeds dropped since the last [`Ladder::take_dropped`].
     dropped: u32,
@@ -244,8 +256,9 @@ impl Ladder {
 
     /// A ladder for `board` and its `heuristic`, with every buffer reserved
     /// and the facts built from `start`, a state of the search. It may make
-    /// `work` inserts, keys the queue at `weight` and admits cheaper
-    /// duplicates of closed states only with `reopen_closed`, as the
+    /// `work` inserts and one backjump per [`WORK_PER_BACKTRACK`] of them,
+    /// at least [`MIN_BACKTRACKS`], keys the queue at `weight` and admits
+    /// cheaper duplicates of closed states only with `reopen_closed`, as the
     /// search's policy does. Runs nothing until [`Ladder::begin`].
     pub(crate) fn new(
         board: &Board,
@@ -275,7 +288,7 @@ impl Ladder {
             reopen_closed,
             stage_base: 0,
             cap_end: 0,
-            backtracks: 0,
+            backtracks: (work / WORK_PER_BACKTRACK).max(MIN_BACKTRACKS),
             dropped: 0,
         })
     }
@@ -562,7 +575,7 @@ impl Ladder {
     /// in the fail loop, so the next pass backjumps past it.
     fn fail(&mut self, parts: &mut Parts<'_>, why: Why) -> Option<Done> {
         debug_assert!(!matches!(why, Why::Work) || self.work == 0);
-        if self.work == 0 || self.backtracks >= MAX_BACKTRACKS {
+        if self.work == 0 || self.backtracks == 0 {
             return Some(Done::GaveUp);
         }
         let top = self.frames.len() - 1;
@@ -574,7 +587,7 @@ impl Ladder {
         if top == 0 {
             return Some(Done::GaveUp);
         }
-        self.backtracks += 1;
+        self.backtracks -= 1;
         let (target, ban) = self.culprit(parts);
         self.frames.truncate(target + 1);
         let frame = self.top_mut();

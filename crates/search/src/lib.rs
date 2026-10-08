@@ -120,10 +120,13 @@ pub enum Mode {
     /// more, a bounded stage search takes over in the same arena and ends at
     /// its first route. The stage point comes once the arena holds 32,768
     /// states, or when it fills, whichever is first. The stage search is
-    /// heuristic and incomplete. When it gives up below the limit, the plain
-    /// search starts over without it; when it gives up at a full arena, or
-    /// cannot run, the search goes on, or stops at the limit, as it would
-    /// unstaged.
+    /// heuristic and incomplete. It may make as many inserts as the limit
+    /// allows states, or 32 per state at its stage point, at most 2^20, when
+    /// that is more, so under a large limit a time limit is what ends a stage
+    /// search that neither routes nor gives up. When it gives up below the
+    /// limit, the plain search starts over without it; when it gives up at a
+    /// full arena, or cannot run, the search goes on, or stops at the limit,
+    /// as it would unstaged.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening
     /// the route until the queue empties or a limit hits. The first time the
@@ -326,9 +329,10 @@ impl std::error::Error for SolutionError {}
 /// A Quality search that restarts counts both runs, and the route it keeps
 /// once, so its generated records may exceed the state limit by up to one
 /// full arena. A Fast or Quality search that reaches its stage point
-/// without a route also counts the stage search's records, at most 2^20
-/// more plus one per stage start, and, when the stage search gives up below
-/// the limit, the records the plain search made before its stage point.
+/// without a route also counts the stage search's records, up to the state
+/// limit or 2^20, whichever is larger, plus one per stage start, and, when
+/// the stage search gives up below the limit, the records the plain search
+/// made before its stage point.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
     /// Distinct canonical box positions AND exact player positions indexed,

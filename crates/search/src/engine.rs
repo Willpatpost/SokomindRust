@@ -398,6 +398,9 @@ pub(crate) struct Engine {
     /// The memory budget, which the arena is re-sized against once the
     /// room bound is built.
     memory_mib: usize,
+    /// The caller's state limit, which also sets the stage ladder's work
+    /// (see [`stage::work`]).
+    max_states: usize,
 }
 
 /// The stage ladder running a search that reached its stage point, or filled
@@ -549,6 +552,7 @@ impl Engine {
             rooms: None,
             room_build: None,
             memory_mib,
+            max_states,
         };
         search.seed();
         // The build's share is what the budget leaves besides the fixed
@@ -810,12 +814,12 @@ impl Engine {
     /// Hands the search to the stage ladder when the arena reached its stage
     /// point or filled, while expanding `parent`, with no route: builds the
     /// ladder from the start with the work [`stage::work`] gives for `at`,
-    /// the arena's length, and begins it, which empties the arena but for a
-    /// fresh copy of the start. The next [`Self::advance`] call runs it.
-    /// False, with nothing changed, when the arena is starved, when its
-    /// length is below [`stage::MIN_STATES`], or when the ladder's buffers
-    /// cannot be reserved; the search then goes on, restarts or stops as it
-    /// would unstaged.
+    /// the arena's length, under the state limit, and begins it, which
+    /// empties the arena but for a fresh copy of the start. The next
+    /// [`Self::advance`] call runs it. False, with nothing changed, when the
+    /// arena is starved, when its length is below [`stage::MIN_STATES`], or
+    /// when the ladder's buffers cannot be reserved; the search then goes
+    /// on, restarts or stops as it would unstaged.
     // Cold and out of line: it runs at most once per search. Without these
     // attributes, here and on advance_staged, plain searches ran slower with
     // the same work; A/B job 46990 measured them recovering a sixth to a half
@@ -836,7 +840,7 @@ impl Engine {
             &self.board,
             &self.heuristic,
             &self.start,
-            stage::work(at),
+            stage::work(at, self.max_states),
             self.policy.weight,
             self.policy.reopen_closed,
         ) else {
@@ -1780,14 +1784,14 @@ mod tests {
     /// A staged search's records stay within the bound that keeps every
     /// counter in u32 (docs/stage-ladder.md, Counter width): two arenas of
     /// at most L + 1 records, the ladder's work, and one live copy of a root
-    /// per reseed, at most 12,870 of them. The counter identities hold
-    /// across the ladder's reseeds.
+    /// per reseed, at most 12,870 of them at this limit's 64 backjumps. The
+    /// counter identities hold across the ladder's reseeds.
     #[test]
     fn staged_generated_bound() {
         let mut engine = fresh_on_huge(Policy::FAST, STAGED);
         drive_staged(&mut engine);
         let limit = STAGED as u64;
-        let bound = 2 * (limit + 1) + u64::from(stage::work(STAGED)) + 12_870;
+        let bound = 2 * (limit + 1) + u64::from(stage::work(STAGED, STAGED)) + 12_870;
         let generated = engine.generated();
         assert!(u64::from(generated) <= bound, "{generated} > {bound}");
         assert_counters(&engine);
