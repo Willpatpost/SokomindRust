@@ -116,14 +116,15 @@ const _: () = assert!(MAX_STATES <= u32::MAX as usize);
 /// with `states` states in its arena under a limit of `limit` states: the
 /// larger of [`WORK_PER_STATE`] per state, at most `2^20`, which a search
 /// earns at [`STAGE_AT`], the most it holds when it stages, and the limit
-/// itself.
+/// itself. A search whose ladder keeps the cap, Quality mode's, passes a
+/// limit of 0.
 ///
 /// The first term serves small limits: 32 per state keeps every route the
 /// probe's ladder found at the benchmark gate with these accept checks, the
 /// largest of which needed 26.4. The second lets the caller's limits, not a
 /// constant, end a ladder that has not given up. Every transport stops a
-/// search at its deadline, so at the production limit, 60M, the ladder runs
-/// until it routes, gives up or meets the deadline. Job 49403 routed two
+/// search at its deadline, so at the production limit, 60M, Fast's ladder
+/// runs until it routes, gives up or meets the deadline. Job 49403 routed two
 /// more catalog boards with 2^24 inserts, 7.9M and 13.5M of them, which a
 /// cap of 2^20 gave up on. Up to a limit of `2^20` the first term is the
 /// larger, unless the memory budget holds fewer states than the limit, so
@@ -327,6 +328,7 @@ mod tests {
         assert_eq!(work(STAGE_AT, 1_000_000), 1 << 20);
         assert_eq!(work(STAGE_AT, MAX_STATES), MAX_STATES as u32);
         assert_eq!(work(usize::MAX, MAX_STATES), MAX_STATES as u32);
+        assert_eq!(work(usize::MAX, 0), 1 << 20);
         assert_eq!(work(0, 0), 0);
     }
 }

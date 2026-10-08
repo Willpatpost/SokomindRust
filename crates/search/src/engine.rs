@@ -50,6 +50,17 @@ pub(crate) struct Policy {
     /// only: the ladder ends at its first route, so it needs
     /// stop_on_goal_push.
     stage: bool,
+    /// Whether the stage ladder's work may grow to the caller's state limit
+    /// ([`stage::work`]), so that under a large limit only a route, a
+    /// give-up or the caller's deadline ends it, not 2^20 inserts. Fast
+    /// mode's only. Job 49443 ran both modes on the catalog with it: Fast at
+    /// 30 s routed three more boards (gen-v2-350108-b138 at about 6 s,
+    /// 360313-1615 and 370193-8887 at 16 to 17 s), and lost none at 5 s,
+    /// though most give-ups then ran to the deadline. Quality at 5 s lost
+    /// gen-v2-340053-6d91 at 128 and 256 MiB: there its capped ladder gives
+    /// up early, and the restart routes the board within 3.1 s. So Quality
+    /// mode's ladder keeps the cap.
+    long_ladder: bool,
     /// Whether the estimate counts the pushes a box needs with the keeper
     /// on its current side ([`Heuristic`]), at more table bytes per cell.
     /// It raises the exact search's bounds, but misleads the weighted
@@ -101,6 +112,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        long_ladder: false,
         keeper_sides: true,
         partial_fill: Some(90),
         polish: false,
@@ -124,6 +136,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: true,
+        long_ladder: true,
         keeper_sides: false,
         partial_fill: None,
         polish: false,
@@ -141,6 +154,7 @@ impl Policy {
         then: None,
         restart: None,
         stage: false,
+        long_ladder: false,
         keeper_sides: false,
         partial_fill: None,
         polish: true,
@@ -153,25 +167,27 @@ impl Policy {
         restart: Some(&Self::QUALITY),
         ..Self::QUALITY
     };
-    /// Quality mode: exactly [`Self::FAST`] until its first route, then
+    /// Quality mode: [`Self::FAST`] until its first route, except that its
+    /// stage ladder keeps the work cap (see `long_ladder`), then
     /// [`Self::QUALITY_RESTART`] in the same arena. The incumbent only
-    /// improves, so the result is never longer than Fast's, and its bound
-    /// prunes from the first Quality pop. The first time the arena fills or
-    /// the stage ladder ends, in either phase and with a route or without,
+    /// improves, so the result is never longer than the Fast phase's, and its
+    /// bound prunes from the first Quality pop. The first time the arena fills
+    /// or the stage ladder ends, in either phase and with a route or without,
     /// the search starts over once as plain [`Self::QUALITY`] in the emptied
     /// arena, which keeps only its route's path, as the bound to beat. When
     /// Fast reaches its stage point without a route, the stage ladder runs
-    /// first, as under [`Self::FAST`], and the restart carries its route, so
-    /// the result is never longer than the staged route; a ladder that gives
-    /// up leaves the plain Quality result. Below [`stage::MIN_STATES`] states
-    /// at the stage point the ladder declines, and a routeless fill gives the
-    /// plain Quality result. When the route's path alone leaves no room for
-    /// the start, the search stops at the fill with that route. Whichever
-    /// phase ends the search with a route polishes it, and either polishes
-    /// a stalled route in episodes.
+    /// first, with the capped work, and the restart carries its route, so the
+    /// result is never longer than the staged route; a ladder that gives up
+    /// leaves the plain Quality result. Below [`stage::MIN_STATES`] states at
+    /// the stage point the ladder declines, and a routeless fill gives the
+    /// plain Quality result. When the route's path alone leaves no room for the
+    /// start, the search stops at the fill with that route. Whichever phase
+    /// ends the search with a route polishes it, and either polishes a stalled
+    /// route in episodes.
     pub(crate) const FAST_THEN_QUALITY_RESTART: Self = Self {
         then: Some(&Self::QUALITY_RESTART),
         restart: Some(&Self::QUALITY),
+        long_ladder: false,
         polish: true,
         ..Self::FAST
     };
@@ -196,6 +212,8 @@ const _: () = assert!(!Policy::EXACT.stage);
 // do.
 const _: () = assert!(Policy::FAST.stage && Policy::FAST_THEN_QUALITY_RESTART.stage);
 const _: () = assert!(!Policy::QUALITY.stage && !Policy::QUALITY_RESTART.stage);
+// Only Fast mode's ladder grows past the cap (see `long_ladder`).
+const _: () = assert!(Policy::FAST.long_ladder && !Policy::FAST_THEN_QUALITY_RESTART.long_ladder);
 // Polish only shortens routes, never bounds them, so Exact never runs it;
 // Fast's route stands as found. Every policy Quality mode runs polishes,
 // whichever phase ends the search.
@@ -250,6 +268,9 @@ const _: () = {
         if p.stage {
             assert!(p.stop_on_goal_push && p.weight > 1);
         }
+        if p.long_ladder {
+            assert!(p.stage);
+        }
         if let Some(percent) = p.partial_fill {
             assert!(percent <= 100 && p.weight == 1);
             assert!(p.then.is_none() && p.restart.is_none() && !p.stage);
@@ -303,6 +324,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 then,
                 restart,
                 stage,
+                long_ladder,
                 keeper_sides,
                 partial_fill,
                 polish,
@@ -316,6 +338,7 @@ const fn same(a: Option<&Policy>, b: Option<&Policy>) -> bool {
                 && same(then, b.then)
                 && same(restart, b.restart)
                 && stage == b.stage
+                && long_ladder == b.long_ladder
                 && keeper_sides == b.keeper_sides
                 && match (partial_fill, b.partial_fill) {
                     (Some(a), Some(b)) => a == b,
@@ -399,7 +422,7 @@ pub(crate) struct Engine {
     /// room bound is built.
     memory_mib: usize,
     /// The caller's state limit, which also sets the stage ladder's work
-    /// (see [`stage::work`]).
+    /// under a `long_ladder` policy (see [`stage::work`]).
     max_states: usize,
 }
 
@@ -836,11 +859,16 @@ impl Engine {
         if self.arena.starved() || at < stage::MIN_STATES {
             return false;
         }
+        let limit = if self.policy.long_ladder {
+            self.max_states
+        } else {
+            0
+        };
         let Ok(mut ladder) = Ladder::new(
             &self.board,
             &self.heuristic,
             &self.start,
-            stage::work(at, self.max_states),
+            stage::work(at, limit),
             self.policy.weight,
             self.policy.reopen_closed,
         ) else {

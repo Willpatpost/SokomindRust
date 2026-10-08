@@ -185,13 +185,19 @@ route and never re-expands a closed node. When Fast reaches its stage point
 without a route, a bounded stage search (`crates/search/src/stage.rs`) takes
 over in the same arena. The stage point comes once the arena holds 32,768
 states, or when it fills, whichever is first, and the stage search needs a few
-thousand states there. 32,768 states earn it its whole work budget, and it
-starts from a copy of the start, so a later stage point would only lengthen the
-plain search before it. On the catalog (job 49403) staging there kept every
-route and slowed no board, and Fast took 16.0 s in all instead of 27.8 s at
-64 MiB, where it staged at the arena's capacity before (about 1M states); five
-boards that plain Fast routes after 146,000 to 1.2M states take the stage
-search's route instead. From the start, it commits one goal-level gain at a
+thousand states there. It may make 32 inserts per state at its stage point, at
+most 2^20, or in Fast as many as the state limit allows states when that is
+more. 32,768 states earn the first term's 2^20, and the stage search starts
+from a copy of the start, so a later stage point would only lengthen the plain
+search before it. On the catalog (job 49403, the work then capped at 2^20)
+staging there kept every route and slowed no board, and Fast took 16.0 s in all
+instead of 27.8 s at 64 MiB, where it staged at the arena's capacity before
+(about 1M states); five boards that plain Fast routes after 146,000 to 1.2M
+states take the stage search's route instead. Under a large limit Fast's stage
+search runs until it routes, gives up or meets the caller's deadline: at 30 s
+it routed three more catalog boards, at 6 to 17 s, and at 5 s it lost none,
+though most give-ups there ran to the caller's deadline instead of ending on
+memory (job 49443). From the start, it commits one goal-level gain at a
 time: a small search looks for a state above the current level, and the first
 such state that passes accept tests (open lanes into goals, sink-line order,
 keeper mobility around sink-line boxes, keeper-aware reach matching and sealed
@@ -200,7 +206,7 @@ route. It is heuristic and incomplete. When it gives up below the limit, Fast
 starts over without it and runs as the plain search would; when it gives up at a
 full arena, the search stops at the limit as before. `docs/stage-ladder.md`
 records how its accept tests, stage point and budgets were chosen and measured.
-Quality starts as Fast;
+Quality starts as Fast, but its stage search keeps the capped work (below);
 from Fast's first route it continues in the same arena at `g + 3h` with
 reopenings, keeping the shortest verified incumbent until its queue empties or a
 limit hits. The first time the arena fills, in either phase and with a route or
