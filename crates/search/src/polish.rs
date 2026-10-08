@@ -11,7 +11,11 @@
 //! in, so the polish makes several runs from the search's route, each in
 //! its own order, and keeps the shortest route. Pair jobs then take the
 //! best route on, single-box jobs running again after each gain, until a
-//! full pass over the pairs gains nothing. The design, its soundness and
+//! full pass over the pairs gains nothing. The end polish then kicks the
+//! route out of that local optimum: two boxes of one label trade goals,
+//! under a bound a little above the best route, and the single-box and pair
+//! jobs descend from the kicked route; a full round of kicks that leaves
+//! the best route as it was ends the polish. The design, its soundness and
 //! its memory budget are in docs/route-polish.md.
 use crate::{SolutionError, Status, arena::mix, heuristic::Heuristic, reach::Reach, stage::filled};
 use sokomind_core::{Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State, Step};
@@ -45,6 +49,11 @@ const RUNS: usize = 8;
 /// for far longer than every single-box job together. On Grand Hall every
 /// pair job ends within it, found or exhausted (docs/route-polish.md).
 const PAIR_POPS: usize = 1 << 20;
+/// How much longer than the best route a kick's route may be. On Grand
+/// Hall, 22 of the 55 kicks from 436 moves found a route within 436 + 64,
+/// of 436 to 482 moves, and 7 of those led to a route below 436
+/// (docs/route-polish.md).
+const KICK_SLACK: u32 = 64;
 
 /// The strides that visit each of `boxes` slots once per cycle: those
 /// coprime to the box count.
@@ -64,6 +73,12 @@ fn order(boxes: usize, run: usize) -> (usize, usize) {
     let count = strides(boxes).count();
     let stride = strides(boxes).nth(run % count).unwrap_or(1);
     (run / count % boxes, stride)
+}
+
+/// Whether the boxes in slots `pair` share a label, so either may end on
+/// either one's goal.
+fn same_label(heuristic: &Heuristic, [a, b]: [usize; 2]) -> bool {
+    heuristic.group(a).contains(&b)
 }
 
 /// Every box pair, in the order the pair phase frees them: those whose
@@ -129,6 +144,14 @@ pub(crate) struct Polish {
     pairs: Vec<[usize; 2]>,
     pair: usize,
     pair_idle: usize,
+    /// The kick phase, once a full pass over the pairs has gained nothing:
+    /// how many of the pairs share a label (none in an episode), the index
+    /// in `pairs` to look for the next one to kick from, and the kicks
+    /// started since the best route last got shorter. A full round of
+    /// kicks ends the polish.
+    swaps: usize,
+    kick: usize,
+    kick_idle: usize,
     job: Option<Job>,
 }
 
@@ -150,6 +173,9 @@ impl Polish {
             pairs: Vec::new(),
             pair: 0,
             pair_idle: 0,
+            swaps: 0,
+            kick: 0,
+            kick_idle: 0,
             job: None,
         }
     }
@@ -182,12 +208,13 @@ impl Polish {
         self.job = None;
     }
     /// Runs one unit: starts the next run from the seed, starts the pair
-    /// phase on the best route, starts the next job, or advances the
-    /// running one. A job that finds a shorter route ends, and its route
-    /// replaces the one the jobs work on once replay confirms it, cut at
-    /// its first solved state. True once every run has ended and then a
-    /// full pass over the pairs has gained nothing; every later call
-    /// returns true again.
+    /// phase on the best route, starts the next job or kick, or advances
+    /// the running one. A job that finds a shorter route ends, and its
+    /// route replaces the one the jobs work on once replay confirms it, cut
+    /// at its first solved state; a kick's route replaces it even when
+    /// longer. True once every run has ended, a full pass over the pairs
+    /// has gained nothing, and then a full round of kicks has not shortened
+    /// the best route; every later call returns true again.
     pub(crate) fn step(
         &mut self,
         board: &Board,
@@ -226,17 +253,41 @@ impl Polish {
                 self.allowance = self.allowance.saturating_sub(held as u64);
                 (self.next, self.stride) = (0, 1);
                 self.pair_idle = 0;
+                // An episode hands back to the search once the pairs gain
+                // nothing; only the end polish goes on to kick.
+                if self.ending != Status::Running {
+                    let shared = self
+                        .pairs
+                        .iter()
+                        .filter(|&&pair| same_label(heuristic, pair));
+                    self.swaps = shared.count();
+                }
             } else if self.pair_idle < self.pairs.len() {
                 self.pair_idle += 1;
                 let pair = self.pairs[self.pair];
                 self.pair = (self.pair + 1) % self.pairs.len();
                 self.job = Job::new(board, heuristic, start, &self.route, &pair, self.allowance);
+            } else if self.kick_idle < self.swaps {
+                // No single-box or pair job gains on the route: a local
+                // optimum. A kick makes the next same-label pair trade
+                // goals in the best route, and the jobs then descend from
+                // the kicked route as they did from the runs' best.
+                self.kick_idle += 1;
+                let pair = loop {
+                    let pair = self.pairs[self.kick];
+                    self.kick = (self.kick + 1) % self.pairs.len();
+                    if same_label(heuristic, pair) {
+                        break pair;
+                    }
+                };
+                self.route.clone_from(&self.best);
+                self.job = Job::kick(board, heuristic, start, &self.best, pair, self.allowance);
             } else {
                 return true;
             }
             return false;
         };
-        let freed = job.freed;
+        let (freed, kick) = (job.freed, job.kick);
         match job.step(board, heuristic, reach) {
             Progress::Running => {}
             Progress::Failed => self.job = None,
@@ -246,19 +297,25 @@ impl Polish {
                 // A route can solve the board before its end when a box
                 // reaches its goal while another box is briefly off its own.
                 debug_assert!(
-                    solved_at.is_ok_and(|n| n <= route.len() && n < self.route.len()),
+                    solved_at.is_ok_and(|n| n <= route.len() && (kick || n < self.route.len())),
                     "{solved_at:?}"
                 );
                 if let Ok(n) = solved_at
-                    && n < self.route.len()
+                    && (kick || n < self.route.len())
                 {
                     route.truncate(n);
                     self.route = route;
                     // Every job may gain on the new route. After a pair's
-                    // gain every single-box job runs before the next pair.
-                    (self.idle, self.pair_idle) = if freed == 1 { (1, 0) } else { (0, 1) };
+                    // gain every single-box job runs before the next pair,
+                    // and after a kick before every pair.
+                    (self.idle, self.pair_idle) = match (freed, kick) {
+                        (1, _) => (1, 0),
+                        (_, false) => (0, 1),
+                        (_, true) => (0, 0),
+                    };
                     if self.route.len() < self.best.len() {
                         self.best.clone_from(&self.route);
+                        self.kick_idle = 0;
                     }
                 }
             }
@@ -463,7 +520,7 @@ fn probe(slots: &[u32], keys: &[u64], key: u64) -> usize {
 /// a freed one), or one of the freed boxes' own pushes, each after the
 /// shortest walk to its stand with every box in place. The goal is k = m
 /// with the freed boxes on the goals they ended on, or on each other's
-/// when they share a label.
+/// when they share a label (a kick: on each other's only).
 ///
 /// The heuristic is the larger of two lower bounds, both consistent (see
 /// docs/route-polish.md): the m - k kept pushes plus the freed boxes' push
@@ -472,17 +529,21 @@ fn probe(slots: &[u32], keys: &[u64], key: u64) -> usize {
 struct Job {
     /// How many boxes the job frees, 1 or 2.
     freed: usize,
-    /// The freed boxes' goal cells, the ones they ended on, and their
-    /// heuristic columns, in slot order.
+    /// The freed boxes' goal cells, the ones they ended on (for a kick,
+    /// each other's), and their heuristic columns, in slot order.
     goals: [Cell; FREED],
     columns: [usize; FREED],
     /// Whether the two freed boxes share a label, so either may take
     /// either goal.
     swap: bool,
+    /// Whether the job is a kick: two boxes of one label made to take each
+    /// other's goals, under a bound above the route's length.
+    kick: bool,
     /// The freed boxes' cells in the start, and the keeper's.
     root: [Cell; FREED],
     player: Cell,
-    /// The length of the route to beat.
+    /// The length of the route to beat, or for a kick that plus
+    /// [`KICK_SLACK`]: a found route is shorter.
     bound: u32,
     /// Expansions left: unbounded for one box, [`PAIR_POPS`] for two.
     budget: usize,
@@ -599,7 +660,8 @@ impl Job {
             freed: freed.len(),
             goals,
             columns,
-            swap: freed.len() == 2 && heuristic.group(freed[0]).contains(&freed[1]),
+            swap: freed.len() == 2 && same_label(heuristic, [freed[0], freed[1]]),
+            kick: false,
             root,
             player: start.player,
             bound: route.len() as u32,
@@ -621,6 +683,29 @@ impl Job {
             blocked,
             pending: m + 1,
         })
+    }
+
+    /// The kick for the same-label boxes in slots `pair` of `route`: their
+    /// pair job, with each made to end on the other's goal and the bound
+    /// raised by [`KICK_SLACK`]. It finds the shortest route in which they
+    /// trade goals, which may be longer than `route`. `None` as for
+    /// [`Job::new`].
+    fn kick(
+        board: &Board,
+        heuristic: &Heuristic,
+        start: &State,
+        route: &[u8],
+        pair: [usize; 2],
+        allowance: u64,
+    ) -> Option<Self> {
+        let mut job = Self::new(board, heuristic, start, route, &pair, allowance)?;
+        debug_assert!(job.swap);
+        job.goals.swap(0, 1);
+        job.columns.swap(0, 1);
+        job.swap = false;
+        job.kick = true;
+        job.bound = (job.bound + KICK_SLACK).min(MAX_ROUTE as u32);
+        Some(job)
     }
 
     /// Runs one unit: a setup step, or one pop. Each unit floods for
