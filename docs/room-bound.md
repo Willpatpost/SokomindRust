@@ -754,3 +754,11 @@ at most 1.2 MiB, on Grand Hall at 1 GiB. The wasm module shrank 714 bytes.
   behind door (8,5), 2.6M states, which builds at 1 GiB, to save about 1.75 s.
   A stronger dead-state rule in the forward search would cut them instead, but
   it needs its own soundness argument.
+- **Tables over one part with disjoint labels.** The reference adds tables
+  over the same cells for disjoint label sets, a sound sum of pushes. A table
+  here counts every move that ends on its part, the keeper's steps included,
+  so two tables over one part would count those steps twice. The reference
+  measured them at +0 at Grand Hall's start.
+- **More rooms.** Grand Hall has no further single-door room to table. Rooms
+  with two doors, or a split of the hall, would each need a new soundness
+  argument, and were not pursued.
