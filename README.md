@@ -303,7 +303,11 @@ bound to 258 and its bound by 3 wherever a table builds, to 277 at 64 MiB, 279
 at 5 s and 256 MiB or 1 GiB, and 283 at 30 s and 1 GiB. The open cases' sum at
 20,000 states rises from 3403 to 3437, none lower, at no measurable cost. On a
 machine slow enough that the build does not finish, the bound stays at the
-start's 214.
+start's 214. With the memory cap lifted in a build made for the run, Grand
+Hall's bound reaches 284 at 2048 MiB, where memory ends the search at 89 s, and
+286 at 4000 MiB, where 60M states end it at 151 s (job 49425). The arena's ids
+stop at 2^26 - 1, about 67.1M states, so a higher bound needs a stronger bound,
+not more memory.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
@@ -325,21 +329,20 @@ heuristic change), generators, and Quality route repair other than the box
 rescheduling and two-box repair that the polish ports. On Grand Hall (`huge`),
 which plain Fast and Quality do not route in 8M states even at the 1024 MiB cap
 (about 7.5 s; job 47772), the stage search finds an 812-move route (268 pushes)
-in about 0.95 s in both Fast and Quality at 64, 128 and 256 MiB on a
-c4-standard-32 node: every budget from 64
-MiB up stages at the same point and generates the same states first. The
-reference's own benchmark reports about 5.3 s for 893 moves on its development
-machine (Node on Windows), so the two times come from different machines.
-Quality's search does not shorten it before its memory limit, which a larger
-budget only moves later. The polish then takes it to 475 moves (228 pushes), in
-eight runs of about 0.2 s each after the search ends: at the production limits
-it returns at about 3.2 s at 64 MiB, 3.7 s at 128 MiB and 4.7 s at 256 MiB (job
-48685). Given more time, its pair jobs take it to 458 moves at 15 s and to 436
-moves (222 pushes) at 30 s, at 64 MiB (job 48688). A larger budget ends the
-search later, and so the end polish, which episodes make up for: at 5 s, 256 MiB
-returns 475 (484 without episodes) and 1024 MiB 475 (the unpolished 812
-without), and 1024 MiB reaches 458 at 15 s and 436 at 30 s (job 48691).
-`docs/route-polish.md` has the catalog-wide numbers.
+in about 0.37 s at 64 MiB and 0.39 s at 256 MiB, in both Fast and Quality, on a
+c4-standard-32 node (job 49403): every budget stages at the same point and
+generates the same states first. The reference's own benchmark reports about
+5.3 s for 893 moves on its development machine (Node on Windows), so the two
+times come from different machines. Quality's search does not shorten it
+before its memory limit, which a larger budget only moves later; the polish
+does. At the production limit of 5 s Quality returns 468 moves at 64 and
+256 MiB, and at 30 s 436 moves (222 pushes) (job 49403). Run for up to an hour,
+Quality reaches the same 436-move route at about 24 s at every budget from
+64 MiB to the 1 GiB cap, and at 2048 and 4000 MiB in a build with the cap
+lifted; each search then ends at its memory or state limit within 34 to 103 s,
+so neither more time nor more memory shortens it (job 49425).
+`docs/route-polish.md` has the catalog-wide numbers and the polish's earlier
+measurements.
 The sealed-corral check covers the reference's corral deadlock check, at the same
 six-push cap; `docs/pruning.md` records how its scope was chosen and checked,
 and what it measured. These were rejected, for soundness or by measurement:
