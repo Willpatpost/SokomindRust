@@ -393,6 +393,13 @@ and what it measured. These were rejected, for soundness or by measurement:
   no lower. With partial expansion from the start, Grand Hall's bound at 1M
   states and 256 MiB rose from 235 to 241; with the recheck, to 236 (job
   48723).
+- The stage ladder's sound accept checks as Optimal prunes (job 49446). Sink
+  lines pruned nothing on Grand Hall and moved no catalog bound at 1M states.
+  Sealed pockets raised 10 of those bounds by 1 to 3 but cost 37% more time on
+  the catalog and 22 to 28% on Grand Hall, whose bound stayed 283 at 1 GiB and
+  286 at 4000 MiB (cap lifted). Keeper-aware reach matching is already in the
+  estimate, which is None exactly when the matching fails. `docs/pruning.md`
+  has the numbers.
 
 Board text has one line per row: `O` is a wall, a space floor, `R` the robot,
 `X` a box whose goals are `S`, and any other uppercase letter a box whose goals
