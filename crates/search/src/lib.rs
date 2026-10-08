@@ -120,27 +120,32 @@ pub enum Mode {
     /// more, a bounded stage search takes over in the same arena and ends at
     /// its first route. The stage point comes once the arena holds 32,768
     /// states, or when it fills, whichever is first. The stage search is
-    /// heuristic and incomplete. When it gives up below the limit, the plain
-    /// search starts over without it; when it gives up at a full arena, or
-    /// cannot run, the search goes on, or stops at the limit, as it would
-    /// unstaged.
+    /// heuristic and incomplete. It may make as many inserts as the limit
+    /// allows states, or 32 per state at its stage point, at most 2^20, when
+    /// that is more, so under a large limit a time limit is what ends a stage
+    /// search that neither routes nor gives up. When it gives up below the
+    /// limit, the plain search starts over without it; when it gives up at a
+    /// full arena, or cannot run, the search goes on, or stops at the limit,
+    /// as it would unstaged.
     Fast,
-    /// Fast until its first route, then weight 3 in the same arena, shortening
-    /// the route until the queue empties or a limit hits. The first time the
-    /// arena fills, in either phase and with a route or without, or Fast's
-    /// stage search ends, the search empties it but for its route, if any,
-    /// which stays the bound to beat, and starts over at weight 3. Its route
-    /// never ends longer than the one it carries into the restart, and only
-    /// a route that alone fills the arena stops it there instead. A Fast
-    /// phase that reaches its stage point (see [`Mode::Fast`]) with
+    /// Fast until its first route, but for its stage search's work (below),
+    /// then weight 3 in the same arena, shortening the route until the queue
+    /// empties or a limit hits. The first time the arena fills, in either
+    /// phase and with a route or without, or Fast's stage search ends, the
+    /// search empties it but for its route, if any, which stays the bound to
+    /// beat, and starts over at weight 3. Its route never ends longer than
+    /// the one it carries into the restart, and only a route that alone
+    /// fills the arena stops it there instead. A Fast phase that reaches its
+    /// stage point (see [`Mode::Fast`]) with
     /// no route under a limit of 4,096 states or more runs the stage search
-    /// first, and the restart keeps its route, if any, as the bound. Under a
-    /// smaller limit its route never ends longer than it would without the
-    /// restart. A search that ends on its own with a route, at an empty
-    /// queue or a limit, then polishes it before its status is final: one
-    /// box at a time, it searches for a shorter schedule of that box's
-    /// pushes around the other boxes' pushes, keeping a route only when it
-    /// replays shorter, in several box orders, then two boxes at a time,
+    /// first, which here makes at most 32 inserts per state at its stage point,
+    /// at most 2^20, whatever the limit, and the restart keeps its route, if
+    /// any, as the bound. Under a smaller limit its route never ends longer
+    /// than it would without the restart. A search that ends on its own with a
+    /// route, at an empty queue or a limit, then polishes it before its status
+    /// is final: one box at a time, it searches for a shorter schedule of that
+    /// box's pushes around the other boxes' pushes, keeping a route only when
+    /// it replays shorter, in several box orders, then two boxes at a time,
     /// until a full pass over the pairs gains nothing (docs/route-polish.md).
     /// The polish runs within the arena's share of the budget, after the
     /// arena has freed its records. A search whose route last improved at
@@ -327,8 +332,9 @@ impl std::error::Error for SolutionError {}
 /// once, so its generated records may exceed the state limit by up to one
 /// full arena. A Fast or Quality search that reaches its stage point
 /// without a route also counts the stage search's records, at most 2^20
-/// more plus one per stage start, and, when the stage search gives up below
-/// the limit, the records the plain search made before its stage point.
+/// more, or in Fast up to the state limit when that is larger, plus one per
+/// stage start, and, when the stage search gives up below the limit, the
+/// records the plain search made before its stage point.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
     /// Distinct canonical box positions AND exact player positions indexed,

@@ -39,13 +39,14 @@ pocket discovery on Corral's stamps, and the like. These change more:
   only when it binds, and on the measured runs it never does (see
   [Budgets](#budgets)).
 
-Two changes came after the probe. The stage point moved from a full arena
-to the arena's capacity at 64 MiB, the same point at 64 MiB and below, and
-then to 32,768 states (`STAGE_AT`, job 49403; see
-[When the ladder runs](#when-the-ladder-runs)). And a
-reseed on a sparse table now clears only the records bound since the last
-clear, not the whole table (`UNBIND_RATIO` in `arena.rs`): the result is the
-same (job 47932 found no mismatch), only the time changes.
+Three changes came after the probe. The stage point moved from a full arena to
+the arena's capacity at 64 MiB, the same point at 64 MiB and below, and then
+to 32,768 states (`STAGE_AT`, job 49403; see [When the ladder
+runs](#when-the-ladder-runs)). A reseed on a sparse table now clears only the
+records bound since the last clear, not the whole table (`UNBIND_RATIO` in
+`arena.rs`): the result is the same (job 47932 found no mismatch), only the
+time changes. And in Fast the work, and with it the backjump limit, grows with
+the caller's state limit (job 49443; see [Work](#work)).
 
 ## Accept
 
@@ -148,10 +149,11 @@ first the arena's capacity at 64 MiB (`FILL_MIB`): plain Fast at 1 GiB (job
 below that board's 1,317,310-state capacity at 64 MiB, and none of the other
 17 within 8M states, 7.5 to 18.3 s of filling each. But the ladder's first
 step clears the arena to the start, so under a given limit its run depends on
-the stage point only through its work budget, and 32 per state reaches the
-2^20 cap at 32,768 states (see [Work](#work)). From 32,768 states on, a later
-stage point only adds plain search before the ladder on every board that
-stages either way: about 1M states at 64 MiB, half a second on `huge`.
+the stage point only through its work budget, and 32 per state reaches 2^20,
+the most its states earn, at 32,768 states; above that only the limit raises
+it, in Fast (see [Work](#work)). From 32,768 states on, a later stage point
+only adds plain search before the ladder on every board that stages either
+way: about 1M states at 64 MiB, half a second on `huge`.
 
 Job 49403 (exp/fast-stage against main d3f6b52, probe-only knobs) ran Fast on
 all 57 catalog boards at 60M states and 30 s, at 64 and 256 MiB, three times
@@ -189,36 +191,42 @@ before the old stage point, and whose ladder gives up: it pays the ladder
 first, 0.3 to 1.3 s on the 7 give-ups at 64 MiB. No catalog board is one.
 
 Fast's time now lies in the ladder and in the give-ups, not in plain search.
-At 32,768 and 64 MiB the 50 routed boards took 3.1 s, 2.7 s of it in their
-ladders, and the 35 that plain Fast routes took 29 ms together, none more
-than 14 ms (before, the 40 it routed took 2.7 s, up to 1.0 s each). The 7
-give-ups took 12.9 s, 6.4 s of it in their ladders and the rest filling an
-arena that routes none of them. So a plain-search speedup, such as the tunnel
-and goal-room macros the reference tried, has at most 0.4 s to gain on the
-routed boards, and it does not route a board the ladder gives up on.
+At 32,768 and 64 MiB, with the work capped at 2^20, the 50 routed boards took
+3.1 s, 2.7 s of it in their ladders, and the 35 that plain Fast routes took 29
+ms together, none more than 14 ms (before, the 40 it routed took 2.7 s, up to
+1.0 s each). The 7 give-ups took 12.9 s, 6.4 s of it in their ladders and the
+rest filling an arena that routes none of them. So a plain-search speedup,
+such as the tunnel and goal-room macros the reference tried, has at most 0.4 s
+to gain on the routed boards, and it does not route a board the ladder gives
+up on.
 
 Below `MIN_STATES` (4,096) states at the stage point the ladder declines, so a
-small limit keeps the plain search's behavior. At 4,096 its work budget is
+small limit keeps the plain search's behavior. At 4,096 its states earn it
 131,072 inserts.
 
 ## Budgets
 
 ### Work
 
-`work(states) = min(32 * states, 2^20)` inserts for a search staged with
-`states` records. At the gate (20,000 states) the solves of the production
-set need at most 26.4 times the limit (gen-v2-340053-466f0008, 527,793). The
-next are gen-v2-350070 (323,274, 16.2 times), gen-v2-340114 (196,557) and
-`huge` (192,499, 9.6 times), the rest under 84,000 (P4b). So 32 keeps all 16
-gate routes with margin. Under any limit above 32,768 a search stages at
-`STAGE_AT`, 32,768 states, where 32 per state is exactly the cap, and the
-largest solve at 64 MiB used 983,583, under 2^20.
+`work(states, limit) = max(min(32 * states, 2^20), limit)` inserts for a
+search staged with `states` records under a limit of `limit` states in Fast.
+Quality passes a limit of 0, which keeps the first term (see the end of this
+section). At the gate (20,000 states) the solves of the production set need at
+most 26.4 times the limit (gen-v2-340053-466f0008, 527,793). The next are
+gen-v2-350070 (323,274, 16.2 times), gen-v2-340114 (196,557) and `huge`
+(192,499, 9.6 times), the rest under 84,000 (P4b). So 32 keeps all 16 gate
+routes with margin. Under any limit above 32,768 a search stages at
+`STAGE_AT`, 32,768 states, where 32 per state reaches 2^20, and the largest
+solve at 64 MiB used 983,583, under 2^20. Up to a limit of 2^20 the first term
+is the larger, unless the memory budget fills the arena with fewer states than
+the limit, so the gate and the observe runs (1M states) keep the work they had
+when 2^20 was a cap.
 
-The cap bounds a give-up at large limits, and the factor bounds it at small
-ones. The probe ran the gate at 2^20, where six boards spent the whole budget,
-0.83 to 1.43 s each and 7.1 s in all. At 32 times 20,000 the gate budget is
-640,000, about 61% of that. The production gate give-ups take 0.18 to 0.91 s
-each (P3).
+The factor bounds a give-up at small limits. At large ones the cap bounds it
+in Quality, and in Fast the caller's deadline does. The probe ran the gate at
+2^20, where six boards spent the whole budget, 0.83 to 1.43 s each and 7.1 s
+in all. At 32 times 20,000 the gate budget is 640,000, about 61% of that. The
+production gate give-ups take 0.18 to 0.91 s each (P3).
 
 With every probe test, keeping all 16 gate routes needed 29.5 times the limit
 (P4a), so the formula belongs to this accept set.
@@ -226,17 +234,48 @@ With every probe test, keeping all 16 gate routes needed 29.5 times the limit
 More work does route more boards, but slowly. Job 49403 ran Fast on the 7
 boards whose ladder gives up at 64 MiB, `huge` and gen-v2-340114, staged at
 32,768 states at 256 MiB and 1 GiB, with the work budget at 2^20, 2^22 and
-2^24 and the backjump cap (`MAX_BACKTRACKS`, 64) at 64 and 512. 2^22 routed
-nothing more. 2^24 routed gen-v2-350108-b138 (304 moves, its ladder 5.7 to
-5.8 s, using 7.9M inserts) and, with 512 backjumps, gen-v2-370193-8887
-(379 moves, 16.0 to 16.4 s, 13.5M inserts and 249 backjumps). On
-gen-v2-340048-b5d3 the ladder backjumps to the start and fails its last rung
-there after 286,444 inserts, whatever its budget; on 340053-6d91 it does so
-after 3.1M with 512 backjumps. gen-v2-340046-c9f5, 350001-a996 and
-360313-1615 spent all 2^24 inserts, 14 to 25 s, and gave up, where at 2^20
-each gave up within 1.4 s. So the cap stays: two routes are not worth a
-ladder ten to twenty times as long on every board it cannot route. A cap that
-grows with the time a caller allows could take them where Fast has the time.
+2^24 and the backjump cap (then `MAX_BACKTRACKS`, 64) at 64 and 512. 2^22
+routed nothing more. 2^24 routed gen-v2-350108-b138 (304 moves, its ladder 5.7
+to 5.8 s, using 7.9M inserts) and, with 512 backjumps, gen-v2-370193-8887 (379
+moves, 16.0 to 16.4 s, 13.5M inserts and 249 backjumps). On gen-v2-340048-b5d3
+the ladder backjumps to the start and fails its last rung there after 286,444
+inserts, whatever its budget; on 340053-6d91 it does so after 3.1M with 512
+backjumps. gen-v2-340046-c9f5, 350001-a996 and 360313-1615 spent all 2^24
+inserts, 14 to 25 s, and gave up, where at 2^20 each gave up within 1.4 s. So
+no fixed cap above 2^20 was taken: two routes are not worth a ladder ten to
+twenty times as long on every board it cannot route, whatever time the caller
+allows.
+
+Instead the second term lets the work grow with the caller's state limit. The
+search has no clock, so under a large limit a ladder runs until it routes,
+gives up or meets the deadline its transport sets (5 s by default in the
+server and the web). Job 49443 (perf/ladder-limit 3005e26 against main
+26cd2df) ran the catalog at 60M states, with that work in both modes:
+
+- At the gate (114 runs) and in the observe runs (8), every record matched
+  main's.
+- Fast at 5 s routed the same 50 boards with the same moves at 64, 128 and
+  256 MiB. Its give-ups ran to the deadline instead of ending on memory after
+  1.3 to 4.6 s, except 340048-b5d3 at 64 and 128 MiB, which ended on memory
+  as before: 35.0 s in all instead of 18.3 s at 64 MiB. At 256 MiB five of
+  main's seven give-ups already ran to the deadline.
+- Fast at 30 s routed 53 boards instead of 50 at every budget:
+  gen-v2-350108-b138 (304 moves, 5.9 to 6.1 s), 360313-1615 (569 moves, 15.9
+  to 16.3 s) and 370193-8887 (379 moves, 17.1 to 17.3 s). 340046-c9f5 and
+  350001-a996 ran to 30 s, and 340053-6d91 ended on memory, as before but
+  later.
+- Quality at 30 s, on the 7 give-ups and `huge`, routed 4 boards instead of 1
+  at 64 MiB and 5 instead of 2 at 256 MiB: b138 in 232 moves, 1615 in 277 and
+  8887 in 245, at 6.4 to 18.2 s.
+- Quality at 5 s lost gen-v2-340053-6d91 at 128 and 256 MiB. Under the cap its
+  ladder gives up early and the restart routes the board in 95 and 96 moves
+  within 3.1 s; with the larger work the ladder ran to the deadline.
+
+So only Fast's work grows with the limit (`long_ladder` in the engine's
+`Policy`). At the production defaults, 128 MiB and 5 s, Fast gains no route
+(b138 needs about 6 s) and loses none, and a caller who allows more time gets
+the three routes. Quality passes a limit of 0 and keeps the capped ladder and
+its route on 340053-6d91, and gives up its 30 s gains.
 
 ### Checks
 
@@ -252,23 +291,27 @@ and the gate (P3, job 47024), so a factor of 4 never binds there.
 ### Caps and limits
 
 The focus sizes (`FOCUS`), the movers limit (`MAX_MOVE`), the rung caps
-(`CAPS`) and the rise, ban and backjump limits (`MAX_RISES`, `MAX_BANS`,
-`MAX_BACKTRACKS`) are the probe's values. Every measurement here used them,
-and none has been tuned since.
+(`CAPS`) and the rise and ban limits (`MAX_RISES`, `MAX_BANS`) are the
+probe's values. Every measurement here used them, and none has been tuned
+since. So is the backjump limit, 64 (`MIN_BACKTRACKS`), at a work of 2^20 or
+less. Above that, which only Fast's work reaches, a ladder may backjump once
+per 16,384 inserts of its work (`WORK_PER_BACKTRACK`), so the limit grows with
+the work rather than ending a long ladder first (see [Work](#work)).
 
 ### Counter width
 
 The search's counters are `u32`. Reseeds happen only at `begin`, at each
 commit and at each restart. Rung-0 starts are `begin`, each commit and each of
-at most `MAX_BACKTRACKS` (64) backjumps, and each climbs at most two rungs, so
-reseeds are at most `3 * (1 + commits + 64) = 3 * commits + 195`. Commits are
-at most 65 level rises per stretch between backjumps, times 65 stretches,
-4,225, so reseeds are at most 12,870. A staged search's records are then two
-arenas of at most `L + 1` records for a limit of `L` states, the ladder's
-work, and one live copy of a root per reseed: at most
-`2 * (L + 1) + work + 12,870`, about 121.1M at the 60M limit, far below
-`u32::MAX`. The engine test `staged_generated_bound` checks the bound on
-`huge`.
+at most `B` backjumps, and each climbs at most two rungs, so reseeds are at
+most `3 * (1 + commits + B)`. Commits are at most 65 level rises per stretch
+between backjumps, times `B + 1` stretches, so reseeds are at most
+`198 * (B + 1)`: 12,870 at the 64 backjumps of a work of 2^20 or less, and
+725,274 at the 3,662 of Fast's work under the 60M limit. A staged search's
+records are then two arenas of at most `L + 1` records for a limit of `L`
+states, the ladder's work, and one live copy of a root per reseed: at most
+`2 * (L + 1) + work + 198 * (B + 1)`, about 180.7M for Fast at the 60M limit,
+far below `u32::MAX`. The checks budget, 4 per insert of work, is at most 240M
+there. The engine test `staged_generated_bound` checks the bound on `huge`.
 
 ## Cost
 
