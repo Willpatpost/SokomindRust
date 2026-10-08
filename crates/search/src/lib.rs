@@ -136,16 +136,16 @@ pub enum Mode {
     /// beat, and starts over at weight 3. Its route never ends longer than
     /// the one it carries into the restart, and only a route that alone
     /// fills the arena stops it there instead. A Fast phase that reaches its
-    /// stage point (see [`Mode::Fast`]) with no route under a limit of 4,096
-    /// states or more runs the stage search first, which here makes at most
-    /// 32 inserts per state at its stage point, at most 2^20, whatever the
-    /// limit, and the restart keeps its route, if any, as the bound. Under a
-    /// smaller limit its route never ends longer than it would without the
-    /// restart. A search that ends on its own with a route, at an empty
-    /// queue or a limit, then polishes it before its status is final: one
-    /// box at a time, it searches for a shorter schedule of that box's
-    /// pushes around the other boxes' pushes, keeping a route only when it
-    /// replays shorter, in several box orders, then two boxes at a time,
+    /// stage point (see [`Mode::Fast`]) with
+    /// no route under a limit of 4,096 states or more runs the stage search
+    /// first, which here makes at most 32 inserts per state at its stage point,
+    /// at most 2^20, whatever the limit, and the restart keeps its route, if
+    /// any, as the bound. Under a smaller limit its route never ends longer
+    /// than it would without the restart. A search that ends on its own with a
+    /// route, at an empty queue or a limit, then polishes it before its status
+    /// is final: one box at a time, it searches for a shorter schedule of that
+    /// box's pushes around the other boxes' pushes, keeping a route only when
+    /// it replays shorter, in several box orders, then two boxes at a time,
     /// until a full pass over the pairs gains nothing (docs/route-polish.md).
     /// The polish runs within the arena's share of the budget, after the
     /// arena has freed its records. A search whose route last improved at
