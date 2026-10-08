@@ -3,9 +3,12 @@
 Quality mode's search shortens its route by finding a better one in the arena.
 On large boards it stops short: on Grand Hall (`huge`) the staged route of 812
 moves came back from the search unchanged, because the restart's arena fills
-long before weight 3 reaches anything shorter. The polish takes it to 475
+long before weight 3 reaches anything shorter. The polish took it to 475
 inside the production limit of 5 s, and to 436 given about 35 s (see
-Measured). Much of such a route's length is walk:
+Measured). Since the stage point moved to 32,768 states (#32) the route
+comes about half a second sooner, and Quality returns 468 at 5 s and 436 at
+about 24 s, the shortest it reaches at any budget or time (jobs 49403 and
+49425). Much of such a route's length is walk:
 the keeper crosses the board to push one box a step, then crosses back. The
 polish attacks that directly. After the search, it rearranges when each box's
 pushes happen, which no arena-bound search over whole states can afford on a

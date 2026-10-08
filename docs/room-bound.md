@@ -8,7 +8,9 @@ with the SLURM job that produced each number, and the approaches it replaced.
 
 On Grand Hall (`huge`) it raises the start's bound from 214 to 258, and the
 lower bound at 30 s from 238 to 277 at 64 MiB, from 241 to 280 at 256 MiB and
-from 244 to 283 at 1 GiB (see [Measurements](#measurements)).
+from 244 to 283 at 1 GiB (see [Measurements](#measurements)). With the memory
+cap lifted the bound reaches 286 at 4000 MiB, where 60M states end the search
+(see [Big memory](#big-memory-job-49425)).
 
 ## The bound
 
@@ -703,6 +705,27 @@ room bound where both builds expanded the same states, the search took 40.05 s
 against 39.59 s, a ratio of 1.0117. On the 247 runs without one, where the two
 builds run the same code, the ratio was 1.0174. Peak resident memory rose by
 at most 1.2 MiB, on Grand Hall at 1 GiB. The wasm module shrank 714 bytes.
+
+### Big memory (job 49425)
+
+Job 49425 ran Optimal on Grand Hall at 60M states and an hour's time limit,
+with the memory cap lifted to 4000 MiB in a build made for the run
+(`MEMORY_MIB_RANGE` ends at 4000 instead of 1024; only validation reads it, so
+a run at 1024 MiB is `main`'s search). It ran on a Xeon Platinum 8581C with
+16 cpus, eight runs at a time. No run used the hour:
+
+| Memory | Ends at | Generated | Expanded | Time | Bound | Peak RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1024 MiB | memory | 16,777,215 | 3,897,680 | 43.5 s | 283 | 0.98 GiB |
+| 2048 MiB | memory | 33,554,431 | 7,955,646 | 89.0 s | 284 | 1.93 GiB |
+| 4000 MiB | 60M states | 60,000,000 | 14,199,363 | 151.2 s | 286 | 3.49 GiB |
+
+At 4000 MiB the bound was 282 at 30 s, 284 at 60 s and 285 at 120 s, and last
+rose to 286 at 144.8 s. The arena's ids stop at 2^26 - 1, about 67.1M states,
+so no budget takes a run much past the 60M state limit. Each doubling of the
+states a run holds raised the bound by 1 to 2, against a gap of 150 to the
+best route, 436 moves. Memory cannot close that gap; a higher bound needs a
+stronger bound.
 
 ## Rejected approaches
 
