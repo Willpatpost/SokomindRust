@@ -537,19 +537,20 @@ test("the README and reserved_bytes' doc quote engine.rs's ROUTE_ALLOWANCE, and 
   assert.equal(read('crates/search/src/lib.rs', /no route under a limit of ([\d,]+) states or more runs/), states);
 });
 
-test("the README quotes stage.rs's FILL_MIB, within which the benchmark gate and observe runs stay", () => {
-  const fill = read('crates/search/src/stage.rs', /pub\(crate\) const FILL_MIB: usize = (\d+);/);
-  assert.equal(read('README.md', /what (\d+) MiB\s+would hold/), fill);
-  assert.ok(read('benchmarks/catalog-baseline.json', /"memoryMiB": (\d+),/) <= fill);
-  assert.ok(read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: [\d_]+, memoryMiB: (\d+),/) <= fill);
+test("the README and Mode's docs quote stage.rs's STAGE_AT, above the benchmark gate's limit and below observe's", () => {
+  const at = read('crates/search/src/stage.rs', /pub\(crate\) const STAGE_AT: usize = ([\d_]+);/);
+  assert.equal(read('README.md', /once the arena holds ([\d,]+) states/), at);
+  assert.equal(read('crates/search/src/lib.rs', /once the arena holds ([\d,]+)(?:\s+\/\/\/)? states/), at);
+  const gate = read('benchmarks/catalog-baseline.json', /"maxStates": (\d+),/);
+  assert.ok(gate <= at, `the gate's ${gate} states must not exceed STAGE_AT ${at}, or its runs stage before a full arena`);
+  const observe = read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: ([\d_]+),/);
+  assert.ok(observe > at, `observe's ${observe} states must exceed STAGE_AT ${at}, or its runs stage only at a full arena`);
 });
 
-test("parity.mjs's stage cases run at the server's default budget, above FILL_MIB, as the README says", () => {
+test("parity.mjs's stage cases run at the server's default budget, as the README says", () => {
   const stage = read('scripts/parity.mjs', /const STAGE_MIB = (\d+);/);
   assert.equal(stage, read('crates/server/src/solve.rs', /const DEFAULT_MEMORY_MIB: usize = (\d+);/));
   assert.equal(read('README.md', /Two Fast cases at the server's default (\d+) MiB/), stage);
-  const fill = read('crates/search/src/stage.rs', /pub\(crate\) const FILL_MIB: usize = (\d+);/);
-  assert.ok(stage > fill, `STAGE_MIB ${stage} must exceed FILL_MIB ${fill}, or the ladder starts only at a full arena`);
 });
 
 test("the README and parity.mjs's comment quote the memory-fill case's allowance past reserved_bytes", () => {

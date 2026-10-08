@@ -157,12 +157,13 @@ const mib = bytes => (bytes / MIB).toFixed(2);
 console.log(`${native.length} native/WASM cases match including proofs, routes, and diagnostics; ${verified} routes replayed.`);
 console.log(`WASM retained linear memory: ${mib(wasm.memory.buffer.byteLength)} MiB (one reused test instance, not per-worker RSS).`);
 
-// Above stage.rs's FILL_MIB, Fast stages when its arena holds what FILL_MIB
-// would hold, before it fills, which no corpus case reaches. At STAGE_MIB, the
-// server's default budget, and the state cap, the ladder gives up there on
-// gen-v2-340048-b5d312a6 and the plain search starts over to the full arena
-// (resume_unstaged), and on huge it finds Fast's route. A change that routes the
-// first or loses the second needs another board to keep that path covered.
+// Under a limit above stage.rs's STAGE_AT, Fast stages when its arena holds
+// STAGE_AT states, before it fills, which no corpus case at 20,000 states
+// reaches. At STAGE_MIB, the server's default budget, and the state cap, the
+// ladder gives up there on gen-v2-340048-b5d312a6 and the plain search starts
+// over to the full arena (resume_unstaged), and on huge it finds Fast's route.
+// A change that routes the first or loses the second needs another board to
+// keep that path covered.
 const STAGE_MIB = 128;
 for (const [id, status] of [
   ['gen-v2-340048-b5d312a6', 'memory_limit'],

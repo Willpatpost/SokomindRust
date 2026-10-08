@@ -118,12 +118,12 @@ pub enum Mode {
     /// Weighted A* (weight 5) that ends at its first route, however long.
     /// With no route at its stage point, under a limit of 4,096 states or
     /// more, a bounded stage search takes over in the same arena and ends at
-    /// its first route. The stage point comes once the arena holds what
-    /// 64 MiB would hold for the board, or when it fills, whichever is
-    /// first. The stage search is heuristic and incomplete. When it gives up
-    /// below the limit, the plain search starts over without it; when it
-    /// gives up at a full arena, or cannot run, the search goes on, or stops
-    /// at the limit, as it would unstaged.
+    /// its first route. The stage point comes once the arena holds 32,768
+    /// states, or when it fills, whichever is first. The stage search is
+    /// heuristic and incomplete. When it gives up below the limit, the plain
+    /// search starts over without it; when it gives up at a full arena, or
+    /// cannot run, the search goes on, or stops at the limit, as it would
+    /// unstaged.
     Fast,
     /// Fast until its first route, then weight 3 in the same arena, shortening
     /// the route until the queue empties or a limit hits. The first time the

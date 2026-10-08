@@ -4,7 +4,7 @@
 //! frame root, the boxes a stage may move, and the ladder that drives them.
 //! The engine hands the ladder the arena of a search with no route at its
 //! stage point, under a policy that stages (see `Policy::stage` in
-//! engine.rs and [`FILL_MIB`]).
+//! engine.rs and [`STAGE_AT`]).
 //!
 //! Accept is a heuristic filter, not a necessary condition. Sink, Matched
 //! and the pocket check only reject states with no solution, as the module
@@ -20,13 +20,13 @@
 //! The accept set, the stage point and the budgets come from measurements
 //! of the probe on all 57 catalog boards, which docs/stage-ladder.md
 //! records with the jobs behind them. At the production budget (64 MiB,
-//! 60M states) plain Fast routes 40 boards, and the ladder routes 10 of the
-//! other 17, Grand Hall among them. At the benchmark gate's 20,000 states
-//! it routes 16 of the 23 boards plain Fast misses, which
-//! benchmarks/catalog-baseline.json records. Run from the start, the ladder
-//! missed 3 boards plain Fast routes, so it runs only after a plain search
-//! reaches its stage point: its arena holds [`FILL_MIB`]'s capacity, or it
-//! fills.
+//! 60M states) plain Fast routes 40 boards. The ladder routes 10 of the
+//! other 17, Grand Hall among them, and 5 of the 40 before plain Fast
+//! reaches their routes. At the benchmark gate's 20,000 states it routes 16
+//! of the 23 boards plain Fast misses, which benchmarks/catalog-baseline.json
+//! records. Run from the start, the ladder missed 3 boards plain Fast
+//! routes, so it runs only after a plain search reaches its stage point: its
+//! arena holds [`STAGE_AT`] states, or it fills.
 //!
 //! The work comes in units of `O(cells)` each (a push search, a flood or a
 //! cell scan, a constant number of times), so a caller can stop between any
@@ -87,25 +87,36 @@ const _: () = assert!(MAX_CELLS <= 1 << 12);
 /// behavior; at it the work is [`work`]`(MIN_STATES)`, 131,072 inserts.
 pub(crate) const MIN_STATES: usize = 4096;
 
-/// The budget whose capacity sets the stage point: a staging search hands
-/// over to the ladder when its arena holds what FILL_MIB would hold for
-/// this board, or when it fills, whichever comes first. So the ladder
-/// starts at the same point, and runs the same, at every budget from
-/// FILL_MIB up, instead of waiting for a fill that grows with the budget,
-/// and a run at FILL_MIB or less stages where it did before. Plain Fast at
-/// 1 GiB on the catalog (job 47772) routes every board it routes at all
-/// within 1,211,120 states, below that board's 1,317,310 at FILL_MIB, and
-/// routes none of the rest within 8M. README quotes the value.
-pub(crate) const FILL_MIB: usize = 64;
+/// The stage point, in states: a staging search hands over to the ladder
+/// when its arena holds this many states, or when it fills, whichever
+/// comes first. It is the fewest states that earn the ladder its whole
+/// work, `2^20` inserts (see [`work`]). The ladder starts over from a copy
+/// of the start, so it runs here as it would at any later point under the
+/// same limit, and only the plain search before it shrinks. Job 49403 ran
+/// Fast on the catalog at 64 and 256 MiB, staged here and at the arena's
+/// capacity at 64 MiB (about 1M states), the stage point before: the same
+/// 50 routes, the same run in every ladder that ran under both, no board
+/// slower, and 16.0 s summed instead of 27.8 s at 64 MiB, 41.5 s instead
+/// of 60.7 s at 256 MiB. Five boards that plain Fast routes after 146,000
+/// to 1.2M states take the ladder's route instead, from 17 moves shorter
+/// to 57 longer. README quotes the value.
+pub(crate) const STAGE_AT: usize = 32_768;
+
+/// The ladder's inserts per state at the stage point (see [`work`]).
+const WORK_PER_STATE: usize = 32;
+// The work cap, which README and `SearchStats` quote, is reached exactly at
+// the stage point.
+const _: () = assert!(STAGE_AT * WORK_PER_STATE == 1 << 20);
 
 /// The ladder's work budget, the inserts it may make, for a search staged
-/// with `states` states in its arena: 32 per state, at most `2^20`. 32 per
-/// state keeps every route the probe's ladder found at the benchmark gate
-/// with these accept checks, the largest of which needed 26.4, and the cap
-/// bounds a give-up at large limits. The product saturates, so no count
-/// overflows it, and the cap makes the cast exact.
+/// with `states` states in its arena: [`WORK_PER_STATE`] per state, at most
+/// `2^20`, which a search earns at [`STAGE_AT`], the most it holds when it
+/// stages. 32 per state keeps every route the probe's ladder found at the
+/// benchmark gate with these accept checks, the largest of which needed
+/// 26.4, and the cap bounds a give-up at large limits. The cap makes the
+/// product and the cast exact.
 pub(crate) fn work(states: usize) -> u32 {
-    states.saturating_mul(32).min(1 << 20) as u32
+    (states.min(STAGE_AT) * WORK_PER_STATE) as u32
 }
 
 /// A candidate move of a frame root: push the box in `slot` along one

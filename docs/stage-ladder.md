@@ -40,7 +40,9 @@ pocket discovery on Corral's stamps, and the like. These change more:
   [Budgets](#budgets)).
 
 Two changes came after the probe. The stage point moved from a full arena
-to `FILL_MIB`'s capacity, which is the same point at 64 MiB and below. And a
+to the arena's capacity at 64 MiB, the same point at 64 MiB and below, and
+then to 32,768 states (`STAGE_AT`, job 49403; see
+[When the ladder runs](#when-the-ladder-runs)). And a
 reseed on a sparse table now clears only the records bound since the last
 clear, not the whole table (`UNBIND_RATIO` in `arena.rs`): the result is the
 same (job 47932 found no mismatch), only the time changes.
@@ -137,16 +139,54 @@ From the start, with every probe test (P4a, job 46757), the ladder routed 46
 of the 57 catalog boards at 64 MiB, plain Fast 40, both 37. It missed 3 boards
 plain Fast routes: on theme-kitchen and gen-v2-310081 the start dies at the
 last rung, and on large the backjumps run out. So a staging search
-runs plain first and hands over at its stage point: when its arena holds what
-`FILL_MIB` (64 MiB) would hold for the board, or when it fills, whichever
-comes first.
+runs plain first and hands over at its stage point: when its arena holds
+`STAGE_AT` (32,768) states, or when it fills, whichever comes first.
 
-A fill alone would come later as the budget grows. Plain Fast at 1 GiB (job
+A fill alone would come later as the budget grows, so the stage point was
+first the arena's capacity at 64 MiB (`FILL_MIB`): plain Fast at 1 GiB (job
 47772) routes every catalog board it routes at all within 1,211,120 states,
-below that board's 1,317,310-state capacity at 64 MiB. None of the other 17
-boards routes within 8M states, 7.5 to 18.3 s of filling each. So staging at
-the 64 MiB capacity loses no route plain Fast finds by 1 GiB, and the ladder
-starts and runs the same at every budget from 64 MiB up.
+below that board's 1,317,310-state capacity at 64 MiB, and none of the other
+17 within 8M states, 7.5 to 18.3 s of filling each. But the ladder's first
+step clears the arena to the start, so under a given limit its run depends on
+the stage point only through its work budget, and 32 per state reaches the
+2^20 cap at 32,768 states (see [Work](#work)). From 32,768 states on, a later
+stage point only adds plain search before the ladder on every board that
+stages either way: about 1M states at 64 MiB, half a second on `huge`.
+
+Job 49403 (exp/fast-stage against main d3f6b52, probe-only knobs) ran Fast on
+all 57 catalog boards at 60M states and 30 s, at 64 and 256 MiB, three times
+each, with the stage point at the 64 MiB capacity (then production) and at
+32,768, 131,072 and 524,288 states. With no knob set the branch matched main
+in all 171 compared runs. Times are each board's median, summed:
+
+| Fast, 57 boards | 64 MiB capacity | 32,768 | 131,072 | 524,288 |
+|---|---|---|---|---|
+| routed / staged / ladder-routed | 50 / 17 / 10 | 50 / 22 / 15 | 50 / 22 / 15 | 50 / 19 / 12 |
+| moves, routed boards | 6,590 | 6,635 | 6,635 | 6,566 |
+| time at 64 MiB | 27.8 s | 16.0 s | 17.7 s | 24.4 s |
+| time at 256 MiB | 60.7 s | 41.5 s | 43.4 s | 50.4 s |
+
+- At 32,768 no route was lost or gained, and no board was slower by more
+  than 10% and 20 ms; 19 boards were faster by more than 10% at 64 MiB, 29 at
+  256 MiB. Each of the 34 board and budget cases that staged under both stage
+  points ran the identical ladder. `huge` took 365 ms instead of 896 ms at
+  64 MiB, with the same 812-move route.
+- Five boards that plain Fast routes after 146,000 to 1.2M states (gen-v2
+  320041-027a, 320050-4eb8, 320050-7831, 320050-ece6 and 320081-b59c) stage
+  and take the ladder's route instead, in 22 to 39 ms instead of 141 to
+  1,043 ms: 141, 230, 181, 170 and 153 moves instead of 143, 173, 188, 187
+  and 139.
+- Staging at 524,288 was slower than at the capacity on the 7 boards whose
+  ladder gives up, which pay both plain searches, by up to 0.5 s each.
+- Quality at 5 s kept every route and lost no move on any board, at both
+  budgets: 5,050 moves instead of 5,058 at 64 MiB, 5,143 instead of 5,156 at
+  256 MiB (better on `huge` and gen-v2-360372), and its first routes summed
+  to 3.2 s instead of 15.7 s at 64 MiB. `huge` at 30 s ends at 436 moves
+  under every stage point, its first route at 373 ms instead of 900 ms.
+
+The cost falls on a board whose plain route lies past 32,768 states, and
+before the old stage point, and whose ladder gives up: it pays the ladder
+first, 0.3 to 1.3 s on the 7 give-ups at 64 MiB. No catalog board is one.
 
 Below `MIN_STATES` (4,096) states at the stage point the ladder declines, so a
 small limit keeps the plain search's behavior. At 4,096 its work budget is
@@ -161,9 +201,9 @@ small limit keeps the plain search's behavior. At 4,096 its work budget is
 set need at most 26.4 times the limit (gen-v2-340053-466f0008, 527,793). The
 next are gen-v2-350070 (323,274, 16.2 times), gen-v2-340114 (196,557) and
 `huge` (192,499, 9.6 times), the rest under 84,000 (P4b). So 32 keeps all 16
-gate routes with margin. A search at 64 MiB stages with far more than 32,768
-records, so the cap binds there, and the largest solve used 983,583, under
-2^20.
+gate routes with margin. Under any limit above 32,768 a search stages at
+`STAGE_AT`, 32,768 states, where 32 per state is exactly the cap, and the
+largest solve at 64 MiB used 983,583, under 2^20.
 
 The cap bounds a give-up at large limits, and the factor bounds it at small
 ones. The probe ran the gate at 2^20, where six boards spent the whole budget,
@@ -173,6 +213,21 @@ each (P3).
 
 With every probe test, keeping all 16 gate routes needed 29.5 times the limit
 (P4a), so the formula belongs to this accept set.
+
+More work does route more boards, but slowly. Job 49403 ran Fast on the 7
+boards whose ladder gives up at 64 MiB, `huge` and gen-v2-340114, staged at
+32,768 states at 256 MiB and 1 GiB, with the work budget at 2^20, 2^22 and
+2^24 and the backjump cap (`MAX_BACKTRACKS`, 64) at 64 and 512. 2^22 routed
+nothing more. 2^24 routed gen-v2-350108-b138 (304 moves, its ladder 5.7 to
+5.8 s, using 7.9M inserts) and, with 512 backjumps, gen-v2-370193-8887
+(379 moves, 16.0 to 16.4 s, 13.5M inserts and 249 backjumps). On
+gen-v2-340048-b5d3 the ladder backjumps to the start and fails its last rung
+there after 286,444 inserts, whatever its budget; on 340053-6d91 it does so
+after 3.1M with 512 backjumps. gen-v2-340046-c9f5, 350001-a996 and
+360313-1615 spent all 2^24 inserts, 14 to 25 s, and gave up, where at 2^20
+each gave up within 1.4 s. So the cap stays: two routes are not worth a
+ladder ten to twenty times as long on every board it cannot route. A cap that
+grows with the time a caller allows could take them where Fast has the time.
 
 ### Checks
 
