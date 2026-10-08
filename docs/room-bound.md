@@ -203,7 +203,12 @@ consistent, so h = max(M, S) is both. At a goal state, S = 0.
   cost lies in [98, 117] against the tables' 93; the gap is their interaction.
 - M_hall counts walking outside C only as stand charges, the steps from B to
   each push's stand. A walk that stays in B, such as the keeper crossing the
-  hall between boxes, costs it nothing.
+  hall between boxes, costs it nothing. Replaying Grand Hall's 436-move
+  route (job 49466), such walks are 134 of the 178 moves between the route
+  and S at the start: 95 between boxes and 39 turning one. Of the hall's 145
+  walk steps, the charges pay 11. The tables count 93 of the 117 moves that
+  end in their room. A room needs one door, and the hall's areas join
+  through several cells, so no table reaches that walking.
 - Which rooms, parts and labels get tables is a heuristic choice. Any choice is
   sound, as long as the parts are disjoint and every table is built from the
   start's projection.

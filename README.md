@@ -406,6 +406,17 @@ and what it measured. These were rejected, for soundness or by measurement:
   286 at 4000 MiB (cap lifted). Keeper-aware reach matching is already in the
   estimate, which is None exactly when the matching fails. `docs/pruning.md`
   has the numbers.
+- Charging each box's turns, or any walk steps credited to a box, on top of
+  the push count. Pushes of other boxes can carry the robot around a box:
+  just after box i reaches y in direction d, the robot on y - d can push a box
+  off y - d - d' in direction -d', then a box off y - d' in direction d, and
+  stand behind i for direction d' without a walk step. Those moves are
+  pushes that M already counts, so the charge counts them twice. Only
+  splitting moves by the cell they end on, as the room tables do, prices
+  walking soundly. On Grand Hall's 436-move route (job 49466) the gap to S at
+  the start is 178: 134 is robot walking in the hall that the hall part does
+  not charge (95 between boxes, 39 turning one), 20 is push slack and 24 is
+  in the tables, and the route's goal assignment is the matching's.
 
 Board text has one line per row: `O` is a wall, a space floor, `R` the robot,
 `X` a box whose goals are `S`, and any other uppercase letter a box whose goals
