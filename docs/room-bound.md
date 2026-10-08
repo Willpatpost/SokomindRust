@@ -7,7 +7,7 @@ how its build fits the search's memory and time, the measurements behind it,
 with the SLURM job that produced each number, and the approaches it replaced.
 
 On Grand Hall (`huge`) it raises the start's bound from 214 to 255, and the
-lower bound at 30 s from 241 to 277 at 256 MiB and from 244 to 279 at 1 GiB
+lower bound at 30 s from 241 to 277 at 256 MiB and from 244 to 280 at 1 GiB
 (see [Measurements](#measurements)).
 
 ## The bound
@@ -111,7 +111,10 @@ start's projection that reach a goal state. It drops the dead ones on the way:
 a state is dead when Q holds more boxes of a label on its stuck cells than Q
 has goals of that label. A stuck cell is one from which a lone box of that
 label cannot leave Q over live cells. A stuck box can never leave Q, so it
-must end on a goal in Q, and a dead projection means s has no solution.
+must end on a goal in Q, and a dead projection means s has no solution. The
+build also refuses states with a box frozen off a goal of its label (see
+[A table's build](#a-tables-build)). They reach no goal state either, so the
+set the table holds is the same.
 
 The search reaches only states reachable from the start. If such a state has a
 solution, so does every state on its path from the start, so Lemma 1 applies
@@ -211,7 +214,9 @@ between work units:
    and the node above them, kept in fixed chunks of 65,536 that never move,
    with an open-addressing table of `u32` slots at most 3/4 full. A slot
    holds a state's id and 7 bits of its key's hash, so a probe reads a key,
-   a likely cache miss, only when those bits match.
+   a likely cache miss, only when those bits match. The search refuses a push
+   or an entry that leaves a box frozen off a goal of its label, on the
+   box's new cell or next to it (`Rules::freezes`).
 2. A scan of the states seeds the goal states at distance 0.
 3. A backward 0/1 breadth-first search from them walks the moves in reverse,
    with a `u16` distance per state and two level worklists. It generates each
@@ -227,6 +232,38 @@ A unit expands, pops or scans one state, or scans 16 states while seeding or
 inserting values. The forward search costs about 8 bytes a state for its key,
 and 5 to 11 for its slot table, more while the table doubles. The backward
 search adds 2 for the distance and up to 8 for the worklists.
+
+**The freeze refusal.** A box is frozen when, on each axis, one side is a
+wall, or neither side is a live cell for its label, or one side holds a box
+that is frozen in turn with this one taken as a wall. No box of such a set can
+move first, since each stays blocked while the others stay put, so none ever
+moves. Pushes onto a cell that is not live are refused anyway, which is why
+two such sides block an axis. The keeper never matters. The door is never a
+wall and never holds a box, since boxes outside Q are not part of a state.
+These are the blocking conditions of the search's post-push freeze rule
+(`deadlock.rs`), restated for a table state, whose codes on Q indices have no
+board occupancy map. A recursion from the placed box stands in for that rule's
+fixpoint over the pushed box's component.
+
+- *Sound.* A goal state holds every box of Q on a goal of its label, so a
+  state with a box frozen off its goal reaches no goal state, and neither
+  does any state it reaches. So no state that reaches a goal state has one,
+  and the forward search takes every move along every path from the start to
+  a goal state. The states the table keeps, their values and the start's
+  value are the same; only the states reached drop. On the probe, every table
+  that both builds finished matched, with 28% of the states reached (job
+  49024).
+- *Local.* The test checks only the box just placed and its four neighbors,
+  the only boxes that may freeze anew. A box frozen further along a chain is
+  left to the backward search, which never reaches it either.
+- *Backward.* The predecessor test leaves the freeze test out. The backward
+  search visits only states that reach a goal state, and the forward search
+  never refuses a move onto one, so it still walks exactly the forward edges.
+- *Cost.* The recursion keeps no memo, so its worst case grows exponentially
+  with a cluster of touching boxes. In practice the wall and live tests settle
+  most axes at once: the forward search's time per state rose 5 to 13% over
+  the catalog and in Grand Hall's repeated runs, against 72% fewer states
+  reached (job 49024).
 
 ### Order, replacement and skips
 
@@ -319,13 +356,13 @@ calls bounds it like pops, and the build is deterministic, with no clock of its
 own. A search stopped during the build reports the start's bound without the
 tables.
 
-A unit took 160 to 195 ns on the probe machine (job 49016): about 167 over the
-catalog at 20k states, 169 at 5 s and 64 MiB, and 161 to 195 on Grand Hall's
-tables. Grand Hall's build, 24.5M units, took 3.9 to 4.8 s, and 4.0 to 4.3 s in
-its eight runs at 5 s, so at 5 s with 256 MiB or 1 GiB it finished and the
-search reached 272 or 273. The margin is under a second. On a slower machine
-the build may not finish in 5 s, and that search then ends with the start's
-bound, 214, below the 240 or 241 that M alone reaches.
+A unit took 142 to 153 ns on job 49024's probe machine, where the build
+without the freeze refusal took 128 to 157. The refusal saves far more units
+than it costs: Grand Hall's build fell from 24.5M units to 7.5M, and took 1.06
+to 1.15 s in that job's fifteen traced runs, against 3.1 to 3.9 s. So at 5 s
+with 256 MiB or 1 GiB it finishes with about 4 s to spare, and the search
+reaches 276. On a machine too slow to finish it, the search ends with the
+start's bound, 214, below the 240 or 241 that M alone reaches.
 
 ### After the build
 
@@ -463,7 +500,7 @@ Soundness held as in job 49011, and clippy passed.
 | Grand Hall's build, 5 s, 256 MiB or 1 GiB (8 runs) | unfinished | 4.04 to 4.33 s |
 | Grand Hall's bound, 5 s, 256 MiB or 1 GiB | 214 | 272 to 273 |
 
-Each 26-cell table on Grand Hall reaches 10,253,873 states. Its forward search
+Each 26-cell table on Grand Hall then reached 10,253,873 states. Its forward search
 fell from 2.26 to 3.14 s (220 to 307 ns a state) to 1.76 to 2.22 s (172 to
 216 ns), and its backward search from 129 to 193 ms to 108 to 138 ms. Every
 other bound matched `main`, and the catalog's summed search time fell from 5.7
@@ -471,6 +508,55 @@ to 5.0 s at 20k states and from 58.9 to 56.1 s at 5 s and 64 MiB. Peak resident
 memory rose only where the build now finishes and the search goes on, by
 14.9 MiB at 256 MiB and 92 MiB at 1 GiB, within the budget. The wasm module grew
 172 bytes, from 358,211 to 358,383.
+
+### Freeze prune (job 49024)
+
+The forward search first stored every reachable state, though most reach no
+goal state: of the 10,253,873 that each of Grand Hall's 26-cell tables
+reached, 710,100 did. Job 49024 compared `main` (`548f8a1`) with the freeze
+refusal in job 49016's parts, on a Xeon Platinum 8581C with 16 cpus, with
+traced copies of both builds.
+
+Soundness: 27 proven optima, no proof that disagrees, no bound or start's
+bound above a proven optimum, and no unsolvable proof. Each traced copy matched
+its build in all 133 compared runs, and clippy passed. The 224 tables that
+both builds finished were identical in their states that reach a goal, their
+start values and their kept bytes, and reached 90.8M states in all against
+324.8M. All 72 runs where both builds kept the same tables matched.
+
+| Measure | `main` | With the refusal |
+| --- | --- | --- |
+| States reached by each Grand Hall 26-cell table | 10,253,873 | 2,691,825 |
+| Grand Hall's build | 24.5M units | 7.5M units |
+| Grand Hall's build time (15 traced runs) | 3.10 to 3.85 s | 1.06 to 1.15 s |
+| Grand Hall's build peak | 172.3 MiB | 52.3 MiB |
+| Grand Hall, 5 s, 256 MiB / 1 GiB | 274 to 275 / 274 | 276 / 276 |
+| Grand Hall, 30 s, 1 GiB | 279 | 280 |
+| Grand Hall, 5 s or 30 s, 64 MiB | 238, its tables pass the cap | 250 |
+| Grand Hall, 1M states, 256 MiB | 275 in 5.7 s, 180 MiB resident | 275 in 3.1 s, 81 MiB |
+| Open boards' summed bound, 20k states / 5 s, 64 MiB | 3376 / 3430 | 3403 / 3442 |
+
+With fewer states, eight more tables build. Four
+whole-room tables at 20k states replace their halves and raise the start's
+bound: gen-v2-320041-027a9b04 from 52 to 66, 330146 from 73 to 86, 340114
+from 80 to 82 and 350070 from 116 to 122. At 5 s and 64 MiB, two more
+whole-room tables build on 330146 and 350070, and Grand Hall builds its table
+of labels B, C and X. The five tables no longer built are all halves replaced
+by their room's whole-room table. No bound fell. Failed tables still take most
+of the spend at 64 MiB: 15.6M of 23.6M units at 20k states (18.0M of 25.1M
+before), and 53.3M of 107.5M at 5 s (62.6M of 180.9M). Five tables, among
+them Grand Hall's table of labels A, D and X at 64 MiB, finish the forward
+search and fail in the backward one. Rooms on seven catalog boards, and Grand
+Hall's at 20k states, still pass the cap.
+
+The forward search's time per state rose from 120 to 136 ns at 20k states,
+from 141 to 148 at 5 s and 64 MiB, and from 138 to 143 to 154 to 155 in Grand
+Hall's repeated runs. The catalog's summed search time rose from 3.9 to 4.1 s
+at 20k states and from 43.7 to 44.9 s at 5 s and 64 MiB, where the gained
+tables cost build time; the proved boards' time matched. Peak resident memory
+rose only where the search now runs longer, by up to 57 MiB at 256 MiB and
+200 MiB at 1 GiB, within the budget. The wasm module grew 2,046 bytes, from
+358,383 to 360,429.
 
 ## Rejected approaches
 

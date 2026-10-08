@@ -18,7 +18,11 @@
 //! The build runs in slices of work units, so the search pays for it as it
 //! pops (see `TableBuild::step`):
 //! 1. A forward breadth-first search from the root's projection stores
-//!    every reachable state, up to a cap.
+//!    every reachable state, up to a cap. It refuses a move that leaves a
+//!    box frozen off a goal of its code (`Rules::freezes`): no goal state
+//!    follows such a move, so the refused states are ones the table would
+//!    not keep. On huge's largest tables this cuts the states reached from
+//!    10.25M to 2.69M, with the same values.
 //! 2. The goal states seed distance 0.
 //! 3. A backward 0/1 breadth-first search from them walks the moves in
 //!    reverse. It generates each predecessor from the room's inverse move
@@ -47,6 +51,8 @@ const TAG_BITS: u32 = u32::BITS - ID_BITS;
 // Ids stay below the cap, so a bound slot's low bits are never all ones,
 // and it never reads as `FREE`.
 const _: () = assert!(super::MAX_CAP < ID_MASK as u64);
+/// A wall next to a Q cell, in `Rules::near`.
+const WALL_NODE: u8 = u8::MAX;
 /// A distance the backward search has not reached.
 const INFINITE: u16 = u16::MAX;
 /// The largest value a table stores. A larger distance is stored as this
@@ -247,6 +253,9 @@ struct Rules {
     total: Vec<u32>,
     /// Every goal in Q of a label in LAB holding a box of its code.
     goal_layout: u64,
+    /// Per Q index, the node of its neighbor in each direction: a Q index,
+    /// `n` for the door, or `WALL_NODE`.
+    near: Vec<[u8; 4]>,
 }
 
 impl Rules {
@@ -296,6 +305,47 @@ impl Rules {
         (0..self.n).filter(|&q| self.get(layout, q) == c).count() as u32
     }
 
+    /// Whether the box on Q index `q` can never move: on each axis, a side
+    /// is a wall or a box of `fixed`, or neither side is a cell the box may
+    /// be pushed onto, or a side holds a box frozen itself, with this one
+    /// taken for a wall. No box of such a set can move first, since each is
+    /// blocked while the others stay, so none ever moves. Recursion adds a
+    /// box to `fixed` each time, so it ends.
+    fn frozen(&self, layout: u64, q: usize, fixed: u64) -> bool {
+        let (c, fixed, near) = (self.get(layout, q), fixed | (1 << q), self.near[q]);
+        let wall = |x: u8| x == WALL_NODE || (usize::from(x) < self.n && bit(fixed, x.into()));
+        let boxed = |x: u8| usize::from(x) < self.n && self.get(layout, x.into()) != 0;
+        [[near[0], near[1]], [near[2], near[3]]]
+            .into_iter()
+            .all(|sides| {
+                // Past the first test neither side is a wall, so both index
+                // `alive`.
+                sides.into_iter().any(wall)
+                    || sides
+                        .into_iter()
+                        .all(|x| !bit(self.alive[usize::from(x)], c))
+                    || sides
+                        .into_iter()
+                        .any(|x| boxed(x) && self.frozen(layout, x.into(), fixed))
+            })
+    }
+
+    /// Whether the box just put on Q index `t` leaves a box frozen off a
+    /// goal of its code, on `t` or next to it. That box never moves, and a
+    /// goal state holds every box of Q on a goal of its code, so the state
+    /// reaches no goal state, and neither does any state it reaches. Only a
+    /// box next to `t` may freeze anew; one further along a frozen chain
+    /// is left to the backward search, which never reaches it either.
+    fn freezes(&self, layout: u64, t: usize) -> bool {
+        std::iter::once(t as u8).chain(self.near[t]).any(|x| {
+            let x = usize::from(x);
+            x < self.n && {
+                let c = self.get(layout, x);
+                c != 0 && c != self.get(self.goal_layout, x) && self.frozen(layout, x, 0)
+            }
+        })
+    }
+
     /// Calls `emit(key, counts)` for each move from state `key`: the state
     /// it reaches, and whether it counts. A state's keeper never stands on
     /// a box, and every move keeps it so.
@@ -323,7 +373,7 @@ impl Rules {
                 cleared
             } else {
                 let next = self.put(cleared, ti, c);
-                if self.get(layout, ti) != 0 || self.dead(next, c) {
+                if self.get(layout, ti) != 0 || self.dead(next, c) || self.freezes(next, ti) {
                     continue;
                 }
                 next
@@ -340,7 +390,7 @@ impl Rules {
                     continue;
                 }
                 let next = self.put(layout, ti, c);
-                if !self.dead(next, c) {
+                if !self.dead(next, c) && !self.freezes(next, ti) {
                     emit(self.key(next, n), false)?;
                 }
             }
@@ -350,8 +400,11 @@ impl Rules {
 
     /// Calls `visit(key, counts)` for each state with a move onto state
     /// `key`, and whether that move counts: `successors` read backward, each
-    /// forward predicate restated for the predecessor. A predecessor need
-    /// not be reachable from the root; the caller looks it up.
+    /// forward predicate restated for the predecessor but `freezes`. The
+    /// backward search calls this only on states that reach a goal state,
+    /// which freeze no box off its goal, so the forward search took every
+    /// move onto them. A predecessor need not be reachable from the root;
+    /// the caller looks it up.
     ///
     /// The keeper's node `u` before a move is never the box's cell before
     /// or after it, so whether `u` is free reads the same in `key`.
@@ -563,6 +616,16 @@ impl TableBuild {
             .collect();
         // A cell next to Q is in Q or is the door, node `n`.
         let neighbors = board.neighbors();
+        let near: Vec<[u8; 4]> = room
+            .cells()
+            .iter()
+            .map(|&x| {
+                neighbors[usize::from(x)].map(|y| match y {
+                    NONE => WALL_NODE,
+                    y => room.node(y) as u8,
+                })
+            })
+            .collect();
         let stuck: Vec<u64> = (0..=k)
             .map(|c| {
                 let live = |q: usize| bit(alive[q], c);
@@ -614,6 +677,7 @@ impl TableBuild {
             goals_in,
             total,
             goal_layout,
+            near,
         };
         let mut root = 0u64;
         for (&c, &cell) in slots.iter().zip(&start.boxes) {
