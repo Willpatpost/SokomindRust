@@ -6,9 +6,9 @@ module docs say what each part does. This file records why the bound is sound,
 how its build fits the search's memory and time, the measurements behind it,
 with the SLURM job that produced each number, and the approaches it replaced.
 
-On Grand Hall (`huge`) it raises the start's bound from 214 to 255, and the
-lower bound at 30 s from 238 to 274 at 64 MiB, from 241 to 277 at 256 MiB and
-from 244 to 280 at 1 GiB (see [Measurements](#measurements)).
+On Grand Hall (`huge`) it raises the start's bound from 214 to 258, and the
+lower bound at 30 s from 238 to 277 at 64 MiB, from 241 to 280 at 256 MiB and
+from 244 to 283 at 1 GiB (see [Measurements](#measurements)).
 
 ## The bound
 
@@ -657,6 +657,52 @@ most reserved at 20k states fell from 13.7 MiB to 9.6. Peak resident memory
 rose by at most 21.6 MiB, on gen-v2-340187 at 128 MiB where its gained table
 is kept, within the budget. The wasm module shrank 61 bytes, from 360,429 to
 360,368; 7/8 differs from 3/4 only in a constant.
+
+### Hall stand charges (job 49398)
+
+The hall part used to price a push at [end ∉ C] alone, so the keeper's walk
+to each push's stand cost it nothing, even off C. Job 49398 compared `main`
+(`701344b`) with the stand charges of [The hall part
+M_hall](#the-hall-part-m_hall) (`b0ed347`) in job 49161's parts, on a Xeon
+Platinum 8581C with 16 cpus, with traced copies of both builds.
+
+Soundness: 27 proven optima, no proof that disagrees, no bound or start's
+bound above a proven optimum, and no unsolvable proof. Each traced copy matched
+its build in all 534 compared runs. The tables matched in all 324 runs where
+both builds ended. M is unchanged, so the two builds also matched in all 247
+compared runs without a room bound.
+
+| Measure | `main` | Stand charges |
+| --- | --- | --- |
+| Grand Hall's start, hall part / S | 162 / 255 | 165 / 258 |
+| The same at 48 MiB, with the B, C and X table alone | 192 / 228 | 196 / 232 |
+| Grand Hall, 5 s or 30 s, 48 / 64 / 96 MiB | 250 / 274 / 275 | 253 / 277 / 278 |
+| Grand Hall, 5 s, 128 MiB to 1 GiB | 276 | 279 |
+| Grand Hall, 30 s, 256 MiB / 1 GiB | 277 / 280 | 280 / 283 |
+| Grand Hall, 200k / 1M / 11M states | 272 / 275 / 279 | 275 / 278 / 282 |
+| Open cases' summed bound, `ci` / `states` / `held` / `prod` | 3403 / 10435 / 14581 / 5314 | 3437 / 10536 / 14723 / 5364 |
+| Open cases above `main`, the same parts | | 13 / 37 / 51 / 16 |
+| Wasm module | 360,368 | 359,654 |
+
+The start's hall part rose on 231 of the 298 starts with a room bound and fell
+on none. A start's charge can outweigh what its matching gains when the keeper
+starts far off B, but no start did. No bound fell, and no proof was gained or
+lost. The largest rise at a start was 7, on gen-v2-350001, whose S rose from
+148 to 155. Grand Hall rose by 3 at every limit where a table builds. At
+32 MiB and at 20k to 100k states none does, and both builds reach 237 and 231
+to 234.
+
+The charges cost the search nothing measurable. Each hall part runs one more
+0-1 BFS over the board in its build, and the charge of each cell was already
+stored, as zeros, so the reserved bytes matched in every run where both builds
+ended. On the 15 runs that both ended at the time limit, the charged build
+generated 800,272 states a second against 805,443. On Grand Hall at 5 s it
+expanded 1.6 to 5.4% fewer states but generated within 1.3% as many, with more
+children an expanded state, 16.4 against 16.1 at 1 GiB. On the 71 runs with a
+room bound where both builds expanded the same states, the search took 40.05 s
+against 39.59 s, a ratio of 1.0117. On the 247 runs without one, where the two
+builds run the same code, the ratio was 1.0174. Peak resident memory rose by
+at most 1.2 MiB, on Grand Hall at 1 GiB. The wasm module shrank 714 bytes.
 
 ## Rejected approaches
 

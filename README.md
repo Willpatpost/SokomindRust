@@ -263,7 +263,7 @@ Before its search proper, Optimal builds the room bound (`docs/room-bound.md`).
 Each single-door room that holds a box or a goal gets exact tables of the moves
 that end inside it, in a relaxed problem that keeps only some labels' boxes in
 the room and lets them enter through the door for free. Tables over disjoint
-parts add, and so does the estimate with every push that ends in a part made
+parts add, and so does the estimate with every move that ends in a part made
 free. Optimal queues each state by the larger of that sum and the estimate,
 which stays admissible and consistent, and prunes a state a table has no entry
 for, since it has no solution. Fast and Quality skip it: it raises bounds, and
@@ -292,8 +292,14 @@ of the bytes they did, and a table too large to keep fails as soon as its
 backward search shows it (probe 49161). At 64 MiB both of Grand Hall's tables
 now fit: its start bound is 255, and its bound at 5 s is 274 against 250.
 The open cases' sum at 5 s and 64 MiB, Grand Hall's included, rises from 3442
-to 3481, none lower. On a machine slow enough that the build
-does not finish, the bound stays at the start's 214.
+to 3481, none lower. The estimate added to the tables also charges the keeper's
+walk to each push's stand from a cell a box can stand on, for the steps that
+end outside the tables' parts (probe 49398). That raises Grand Hall's start
+bound to 258 and its bound by 3 wherever a table builds, to 277 at 64 MiB, 279
+at 5 s and 256 MiB or 1 GiB, and 283 at 30 s and 1 GiB. The open cases' sum at
+20,000 states rises from 3403 to 3437, none lower, at no measurable cost. On a
+machine slow enough that the build does not finish, the bound stays at the
+start's 214.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
