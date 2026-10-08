@@ -29,9 +29,10 @@
 //!    lists and keeps those the forward search reached. A predecessor test
 //!    restates the forward move's predicate, so the backward search walks
 //!    exactly the forward edges, without storing them: a stored edge list
-//!    took 493 MiB on huge's largest table.
+//!    took 493 MiB on huge's largest table. It stops at the first level
+//!    whose values would no longer fit the kept limit.
 //! 4. The values of the states that reach a goal go into an open-addressing
-//!    table, the only part the search keeps.
+//!    table just under 7/8 full, the only part the search keeps.
 use super::room::{Moves, Room};
 use super::{Ledger, SizeFailure, bit};
 use crate::{arena::mix, heuristic::Heuristic};
@@ -78,18 +79,32 @@ fn tag(h: u64) -> u32 {
     ((h >> (u64::BITS - TAG_BITS)) as u32) << ID_BITS
 }
 
-/// A table's values: open addressing over the keys, with linear probing.
+/// A table's values: open addressing over the keys, with linear probing
+/// that wraps at the end. The slot count is just what 7/8 fullness needs,
+/// not a power of two, so a key's first slot scales its hash to the count
+/// (see `home`). This is the table the search keeps: a power-of-two count,
+/// as the forward search's slot table uses, would hold up to twice the
+/// slots, and the kept limit would refuse tables that fit.
+///
+/// At 7/8 a probe passes about 4.5 slots on a hit and 32 on a miss, against
+/// 2.5 and 8.5 at 3/4. A miss proves the state dead, which is rare (about
+/// one priced state in 70 in job 49161), and that job measured no lookup
+/// cost either way, while the smaller table lets more tables fit the kept
+/// limit.
 #[derive(Default)]
 struct Values {
     keys: Vec<u64>,
     values: Vec<u16>,
-    mask: usize,
 }
 
+// A slot count fits u32, so `Values::home` may scale a 32-bit hash.
+const _: () = assert!(Values::slots(super::MAX_CAP as usize) as u64 <= u32::MAX as u64);
+
 impl Values {
-    /// The slots for `count` values, at most 3/4 full.
-    fn slots(count: usize) -> usize {
-        (count * 4 / 3 + 1).next_power_of_two().max(2)
+    /// The slots for `count` values: fewer than 7/8 full, so a probe always
+    /// meets an `EMPTY` slot.
+    const fn slots(count: usize) -> usize {
+        count * 8 / 7 + 1
     }
 
     /// The bytes `count` values take.
@@ -101,26 +116,37 @@ impl Values {
         let slots = Self::slots(count);
         self.keys = ledger.filled(slots, EMPTY)?;
         self.values = ledger.filled(slots, 0)?;
-        self.mask = slots - 1;
         Ok(())
     }
 
+    /// The first slot probed for `key`: the top 32 bits of its hash, the
+    /// best mixed, scaled to the slot count by a multiply and a shift.
+    /// wasm32 does a 64-bit product natively, but not a 128-bit one.
+    fn home(&self, key: u64) -> usize {
+        (((mix(key) >> 32) * self.keys.len() as u64) >> 32) as usize
+    }
+
+    /// The slot after `at`, wrapping at the end.
+    fn after(&self, at: usize) -> usize {
+        if at + 1 == self.keys.len() { 0 } else { at + 1 }
+    }
+
     fn insert(&mut self, key: u64, value: u16) {
-        let mut at = mix(key) as usize & self.mask;
+        let mut at = self.home(key);
         while self.keys[at] != EMPTY {
-            at = (at + 1) & self.mask;
+            at = self.after(at);
         }
         self.keys[at] = key;
         self.values[at] = value;
     }
 
     fn get(&self, key: u64) -> Option<u16> {
-        let mut at = mix(key) as usize & self.mask;
+        let mut at = self.home(key);
         loop {
             match self.keys[at] {
                 k if k == key => return Some(self.values[at]),
                 EMPTY => return None,
-                _ => at = (at + 1) & self.mask,
+                _ => at = self.after(at),
             }
         }
     }
@@ -822,6 +848,14 @@ impl TableBuild {
             let Some(id) = cur.pop() else {
                 if next.is_empty() {
                     break;
+                }
+                // `finite` only grows and the kept bytes stay put while a
+                // table builds, so a table too large for the kept limit
+                // fails here rather than after its last level. It waits for
+                // the root's distance: an unreached root ends the build
+                // without a table, not as a failure.
+                if dist[0] != INFINITE && !ledger.fits_kept(Values::bytes_for(*finite)) {
+                    return Err(SizeFailure);
                 }
                 // Distances stop at MAX_VALUE, so `next` is empty there.
                 std::mem::swap(cur, next);

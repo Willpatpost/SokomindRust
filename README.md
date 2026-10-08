@@ -285,9 +285,15 @@ Grand Hall that cuts each large table's states from 10.3M to 2.7M with the
 same values, and the build from 24.5M units to 7.5M, about 1.1 s. So at 5 s
 with 256 MiB or 1 GiB the bound reaches 276 against 241 and 240 with the
 estimate alone, and 280 at 30 s and 1 GiB. At 64 MiB one of its two tables
-now fits, and the bound reaches 250 against 238. Eight more catalog tables
-build, and the open cases' sum at 20,000 states rises to 3403. On a machine
-slow enough that the build does not finish, the bound stays at the start's 214.
+then fit, and the bound reached 250 against 238. Eight more catalog tables
+build, and the open cases' sum at 20,000 states rises to 3403. The kept tables
+are just under 7/8 full, with no power-of-two padding, so they take two thirds
+of the bytes they did, and a table too large to keep fails as soon as its
+backward search shows it (probe 49161). At 64 MiB both of Grand Hall's tables
+now fit: its start bound is 255, and its bound at 5 s is 274 against 250.
+The open cases' sum at 5 s and 64 MiB, Grand Hall's included, rises from 3442
+to 3481, none lower. On a machine slow enough that the build
+does not finish, the bound stays at the start's 214.
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
