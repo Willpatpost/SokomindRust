@@ -7,8 +7,8 @@ how its build fits the search's memory and time, the measurements behind it,
 with the SLURM job that produced each number, and the approaches it replaced.
 
 On Grand Hall (`huge`) it raises the start's bound from 214 to 255, and the
-lower bound at 30 s from 241 to 277 at 256 MiB and from 244 to 280 at 1 GiB
-(see [Measurements](#measurements)).
+lower bound at 30 s from 238 to 274 at 64 MiB, from 241 to 277 at 256 MiB and
+from 244 to 280 at 1 GiB (see [Measurements](#measurements)).
 
 ## The bound
 
@@ -223,10 +223,18 @@ between work units:
    predecessor from the room's inverse move lists (`pulls` and `unentries` in
    `room_bound/room.rs`) and keeps those the forward search reached. A
    predecessor test restates the forward move's predicate, so the backward
-   search walks exactly the forward edges without storing them.
+   search walks exactly the forward edges without storing them. Between
+   levels, once the start has a distance, it fails the table as soon as the
+   values found so far no longer fit the kept limit. Their count only grows
+   and the kept tables stay put while a table builds, so such a table would
+   fail at the end anyway. Before the start has a distance it goes on, since a
+   start that reaches no goal ends the build with no table, not a failure.
 4. The values of the states that reach a goal go into an open-addressing table
-   of keys and `u16` values, at most 3/4 full, 10 bytes a slot. This is the
-   only part the search keeps.
+   of keys and `u16` values, 10 bytes a slot, with linear probing that wraps
+   at the end. It has count · 8/7 + 1 slots, just under 7/8 full, rather than
+   a power of two, so a key's first slot scales the top 32 bits of its hash to
+   the slot count. That is about 11.4 bytes a value, against 13.3 to 26.7 at
+   3/4 with a power of two. This is the only part the search keeps.
 
 A unit expands, pops or scans one state, or scans 16 states while seeding or
 inserting values. The forward search costs about 8 bytes a state for its key,
@@ -558,6 +566,81 @@ rose only where the search now runs longer, by up to 57 MiB at 256 MiB and
 200 MiB at 1 GiB, within the budget. The wasm module grew 2,046 bytes, from
 358,383 to 360,429.
 
+### Compact values (job 49161)
+
+The kept values had a power-of-two slot count at most 3/4 full, 13.3 to 26.7
+bytes a value. At 5 s and 64 MiB five tables finished their forward search and
+then failed the kept limit, 16.7 MB, after their backward one (job 49024): four
+catalog tables, and Grand Hall's table of labels A, D and X in its 26-cell
+room, beside the kept table of B, C and X. A size oracle, job 49127, built every
+candidate's tables with no limit, and its sizes matched all 269 tables traced
+in job 49024. At 3/4 with no padding, the four catalog tables would take 8.4 to
+15.6 MB, and Grand Hall's two tables 18.9 MB together, or 16.2 MB at 7/8. Job 49161 compared `main`
+(`4bebe0b`) with compact values at 3/4 and at 7/8, both with the backward
+search's early failure, in job 49024's parts. It added 5 s at 32, 48, 96 and
+128 MiB, 30 s at 48 and 96 MiB for Grand Hall, `large` and `open-field`, and
+50k, 100k and 200k states at 64 MiB. It ran on a Xeon Platinum 8581C with 16
+cpus, with traced copies of all three builds.
+
+Soundness: 27 proven optima, no proof that disagrees, no bound or start's
+bound above a proven optimum, and no unsolvable proof. Each traced copy matched
+its build in all 534 compared runs. The tables that both `main` and a compact
+build finished, 910 at 3/4 and 908 at 7/8, had the same states that reach a
+goal and the same start values; only their kept bytes changed. The layout
+changes neither which states a table keeps nor their values.
+
+| Measure | `main` | 3/4 | 7/8 |
+| --- | --- | --- | --- |
+| Bytes a value | 13.3 to 26.7 | 13.3 | 11.4 |
+| Kept bytes of the tables both built, against `main` | 1 | 0.778 | 0.667 |
+| Tables gained / lost against `main` | | 10 / 3 | 16 / 5 |
+| Backward failures at 64 MiB, 5 s or 30 s / 50k to 200k states | 6 / 3 | 3 / 1 | 0 / 0 |
+| Backward failures, 32 to 128 MiB | 11 | 8 | 4 |
+| Grand Hall's start bound, 64 MiB | 228 | 228 | 255 |
+| Grand Hall, 5 s or 30 s, 64 MiB | 250 | 250 | 274 |
+| Grand Hall, 200k states, 64 MiB | 248 | 248 | 272 |
+| Grand Hall's kept tables, 96 MiB and up | 20.0 MiB | 18.1 MiB | 15.5 MiB |
+| Open boards' summed bound, 5 s, 64 MiB | 3442 | 3457 | 3481 |
+| The same, 5 s, 32 / 48 / 96 / 128 MiB | 3360 / 3413 / 3519 / 3537 | 3361 / 3422 / 3521 / 3540 | 3376 / 3434 / 3521 / 3547 |
+| The same, 200k states, 64 MiB | 3531 | 3546 | 3570 |
+
+At 7/8, every table that failed after its backward search at 64 MiB builds:
+the four catalog tables, and Grand Hall's A, D and X table beside its B, C and
+X one, which raises its start's bound from 228 to 255 and its bound at 5 s and
+30 s from 250 to 274. At 128 MiB a 2.5M-value half
+of gen-v2-340187 builds and raises that board from 98 to 105, and at 48 MiB
+gen-v2-320081 rises from 78 to 90. Of the five tables lost, four are halves
+replaced by their room's whole-room table. The fifth, a small table on
+gen-v2-320041-027a9b04 at 32 MiB, no longer fits once the whole-room table
+beside it builds, and that board's start's bound still rises from 52 to 67. One
+start's bound fell, on the same board at 48 MiB, from 67 to 66: a gained table
+worth 2 lowered the hall part by 3. Its bound at 5 s held. At 3/4, ten tables
+are gained but neither of Grand Hall's, and one more start's bound fell, on
+gen-v2-350070 at 32 MiB, from 115 to 114.
+
+One bound fell below `main`'s in both compact builds: gen-v2-370002 at 5 s and
+128 MiB, 173 against 174. No build keeps a table there, the builds' units
+matched, and `main`'s traced copy also reached 173, so the clock decides it.
+
+The fuller table costs the search nothing measurable. A probe passes about 4.5
+slots on a hit and 32 on a miss at 7/8, against 2.5 and 8.5 at 3/4, but a miss
+means a dead state, about one priced state in 70. On the 231 runs where 7/8
+and `main` expanded the same states, the search less the build took 112.6 s
+against 113.4 s, 4.5 ns less per priced state, within noise.
+
+The early failure saves little, since the start, whose distance it waits for,
+is usually among the last states the backward search reaches. Over the nine
+backward failures that `main` and the 3/4 build shared, it saved 1.4% of their
+units, 33.4M to 32.9M, and 12% on the one where it saved most. It costs one
+comparison a level.
+
+Grand Hall's build at 96 MiB and up took 1.01 to 1.04 s against 1.05 to 1.07
+s (medians of the traced runs), with its peak at 50.1 MiB against 52.3. The
+most reserved at 20k states fell from 13.7 MiB to 9.6. Peak resident memory
+rose by at most 21.6 MiB, on gen-v2-340187 at 128 MiB where its gained table
+is kept, within the budget. The wasm module shrank 61 bytes, from 360,429 to
+360,368; 7/8 differs from 3/4 only in a constant.
+
 ## Rejected approaches
 
 - **A side split with box identities.** Splitting the room into two halves and
@@ -598,3 +681,13 @@ rose only where the search now runs longer, by up to 57 MiB at 256 MiB and
   tables and the build's buffers count against it. A search with too little
   memory for a room's tables builds only those that fit, and goes on with M
   where none does.
+- **Skipping doomed forward builds.** Tables that pass the cap spend most of
+  the failed units, so a cheap size estimate could skip them up front. The size
+  oracle (job 49127) found no safe rule. No run in job 49024 ran out of work,
+  so a doomed build costs only time, never another table. Sixteen tables on six
+  catalog boards pass `MAX_CAP` at any limit, but a room's key bits and
+  placement counts do not tell them from tables that build. Skipping a room
+  inside a failed one behind a door no wider would skip gen-v2-320081's room
+  behind door (8,5), 2.6M states, which builds at 1 GiB, to save about 1.75 s.
+  A stronger dead-state rule in the forward search would cut them instead, but
+  it needs its own soundness argument.

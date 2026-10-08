@@ -32,7 +32,7 @@
 //!    took 493 MiB on huge's largest table. It stops at the first level
 //!    whose values would no longer fit the kept limit.
 //! 4. The values of the states that reach a goal go into an open-addressing
-//!    table just under 3/4 full, the only part the search keeps.
+//!    table just under 7/8 full, the only part the search keeps.
 use super::room::{Moves, Room};
 use super::{Ledger, SizeFailure, bit};
 use crate::{arena::mix, heuristic::Heuristic};
@@ -80,11 +80,17 @@ fn tag(h: u64) -> u32 {
 }
 
 /// A table's values: open addressing over the keys, with linear probing
-/// that wraps at the end. The slot count is just what 3/4 fullness needs,
+/// that wraps at the end. The slot count is just what 7/8 fullness needs,
 /// not a power of two, so a key's first slot scales its hash to the count
 /// (see `home`). This is the table the search keeps: a power-of-two count,
 /// as the forward search's slot table uses, would hold up to twice the
 /// slots, and the kept limit would refuse tables that fit.
+///
+/// At 7/8 a probe passes about 4.5 slots on a hit and 32 on a miss, against
+/// 2.5 and 8.5 at 3/4. A miss proves the state dead, which is rare (about
+/// one priced state in 70 in job 49161), and that job measured no lookup
+/// cost either way, while the smaller table lets more tables fit the kept
+/// limit.
 #[derive(Default)]
 struct Values {
     keys: Vec<u64>,
@@ -95,10 +101,10 @@ struct Values {
 const _: () = assert!(Values::slots(super::MAX_CAP as usize) as u64 <= u32::MAX as u64);
 
 impl Values {
-    /// The slots for `count` values: fewer than 3/4 full, so a probe always
+    /// The slots for `count` values: fewer than 7/8 full, so a probe always
     /// meets an `EMPTY` slot.
     const fn slots(count: usize) -> usize {
-        count * 4 / 3 + 1
+        count * 8 / 7 + 1
     }
 
     /// The bytes `count` values take.
