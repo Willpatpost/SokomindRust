@@ -9,7 +9,7 @@
 //! augment instead of solving from scratch.
 use crate::reach::Blocks;
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, OPPOSITE, State};
-use std::{mem::size_of, ops::Range};
+use std::{collections::VecDeque, mem::size_of, ops::Range};
 
 /// A cell has at most one side per neighbor, and [`Blocks`] labels each
 /// side by a neighbor's direction.
@@ -195,8 +195,10 @@ fn reverse_push(
 /// consistent in moves, and without keeper sides every charge is 0.
 ///
 /// `cost(stand, previous)` prices the push from `stand` that leaves the
-/// keeper on `previous`, at most `max_cost`; 0 is allowed (the room bound's
-/// hall part, see [`Heuristic::hall`]).
+/// keeper on `previous`, at most `max_cost`. The room bound's hall part
+/// (see [`Heuristic::hall`]) frees every move that ends on a counted cell,
+/// in its push costs and its charges alike, so 0 is allowed, and there a
+/// move lowers the estimate by at most its own cost: 1 off counted, 0 on.
 fn push_distances(
     board: &Board,
     blocks: Option<&Blocks>,
@@ -295,33 +297,45 @@ fn dead_masks(
     dead
 }
 
-/// Per cell, the fewest steps from it to a cell a box can stand on: one
-/// with a spot in `dead_spots` that is live for some group. No state on a
-/// route has a box anywhere else, since its estimate would be `None`, and a
-/// push leaves the keeper on the cell its box left. So the keeper enters
-/// any other cell only by walking, and before it pushes from stand `s` it
-/// walks at least `charge(s)` steps since it last stood where a box can.
-/// Those walks are disjoint for distinct pushes, as every push ends where a
-/// box can stand. Capped at `u8::MAX`, and 0 where no such cell is
-/// reachable: still a lower bound, and changed by at most one per step.
-fn charges(board: &Board, dead_spots: &[u32]) -> Vec<u8> {
+/// Per cell, the fewest charged steps of a walk to it from a cell a box can
+/// stand on: one with a spot in `dead_spots` that is live for some group.
+/// Every step is charged but one that ends on a `counted` cell, where the
+/// room tables count it (the hall part, see [`Heuristic::hall`]). No state
+/// on a route has a box anywhere else, since its estimate would be `None`,
+/// and a push leaves the keeper on the cell its box left. So the keeper
+/// enters any other cell only by walking, and before it pushes from stand
+/// `s` it makes at least `charge(s)` charged steps since it last stood
+/// where a box can. Those walks are disjoint for distinct pushes, as every
+/// push ends where a box can stand. A step raises the charge by at most 1,
+/// and not at all when it is free. Capped at `u8::MAX`, and 0 where no such
+/// cell is reachable: still a lower bound, raised by no more per step.
+fn charges(board: &Board, dead_spots: &[u32], counted: Option<&[bool]>) -> Vec<u8> {
     let neighbors = board.neighbors();
     let mut steps = vec![u32::MAX; neighbors.len()];
-    let mut queue: Vec<Cell> = Vec::with_capacity(neighbors.len());
+    // A 0-1 BFS: a free step's cell joins the front, a charged one's the
+    // back. Without `counted` every step is charged and it is a plain BFS.
+    let mut queue: VecDeque<Cell> = VecDeque::with_capacity(neighbors.len());
     for (cell, masks) in dead_spots.as_chunks::<SIDES>().0.iter().enumerate() {
         if masks.iter().any(|&mask| mask != u32::MAX) {
             steps[cell] = 0;
-            queue.push(cell as Cell);
+            queue.push_back(cell as Cell);
         }
     }
-    let mut head = 0;
-    while head < queue.len() {
-        let cell = queue[head] as usize;
-        head += 1;
+    while let Some(cell) = queue.pop_front() {
+        let cell = cell as usize;
         for &next in &neighbors[cell] {
-            if next != NONE && steps[next as usize] == u32::MAX {
-                steps[next as usize] = steps[cell] + 1;
-                queue.push(next);
+            if next == NONE {
+                continue;
+            }
+            let free = counted.is_some_and(|counted| counted[next as usize]);
+            let reached = steps[cell] + u32::from(!free);
+            if reached < steps[next as usize] {
+                steps[next as usize] = reached;
+                if free {
+                    queue.push_front(next);
+                } else {
+                    queue.push_back(next);
+                }
             }
         }
     }
@@ -359,10 +373,13 @@ impl Heuristic {
     }
 
     /// The room bound's hall part (see `docs/room-bound.md`): the same
-    /// keeper-side matching as `new`, but a push costs 0 when the keeper
-    /// ends on a `counted` cell, where the room tables count that move, and
-    /// 1 otherwise, with no stand charges. Its feasibility equals `new`'s:
-    /// same blocks, same edges.
+    /// keeper-side matching as `new`, but a move that ends on a `counted`
+    /// cell is free, as the room tables count it. A push costs 1 when it
+    /// leaves the keeper off `counted`, 0 otherwise, plus its stand's charge
+    /// over the steps that end off `counted` (see `charges`). So, less the
+    /// keeper's charge, the estimate drops by at most 1 per move that ends
+    /// off `counted` and not at all per move that ends on it. Its
+    /// feasibility equals `new`'s: same blocks, same edges.
     pub(crate) fn hall(board: &Board, keeper: Cell, counted: &[bool]) -> Self {
         Self::build(board, Some(keeper), Some(counted))
     }
@@ -397,10 +414,7 @@ impl Heuristic {
         });
         let keeper = blocks.map(|blocks| {
             let dead_spots = dead_masks(board, Some(&blocks), &groups, &columns);
-            let charge = match counted {
-                Some(_) => vec![0; board.tiles().len()],
-                None => charges(board, &dead_spots),
-            };
+            let charge = charges(board, &dead_spots, counted);
             let most = charge.iter().copied().max().map_or(0, u32::from);
             KeeperSides {
                 blocks,
@@ -409,20 +423,18 @@ impl Heuristic {
                 most,
             }
         });
-        let distances = match (&keeper, counted) {
-            (Some(keeper), Some(counted)) => {
-                push_distances(board, Some(&keeper.blocks), &columns, 1, |_, previous| {
-                    usize::from(!counted[previous as usize])
-                })
-            }
-            (Some(keeper), None) => push_distances(
+        let distances = match &keeper {
+            Some(keeper) => push_distances(
                 board,
                 Some(&keeper.blocks),
                 &columns,
                 1 + keeper.most as usize,
-                |stand, _| 1 + usize::from(keeper.charge[stand as usize]),
+                |stand, previous| {
+                    let counts = counted.is_none_or(|counted| !counted[previous as usize]);
+                    usize::from(counts) + usize::from(keeper.charge[stand as usize])
+                },
             ),
-            (None, _) => push_distances(board, None, &columns, 1, |_, _| 1),
+            None => push_distances(board, None, &columns, 1, |_, _| 1),
         };
         let dead = dead_masks(board, None, &groups, &columns);
         Self {
@@ -739,7 +751,7 @@ mod tests {
     use super::{Heuristic, ParentGroup, REPAIR_CROSSOVER};
     use crate::push::canonicalize;
     use crate::reach::Reach;
-    use crate::testkit::{Lcg, catalog, explored_catalog, remaining};
+    use crate::testkit::{Lcg, catalog, explored_catalog, remaining, remaining_off};
     use sokomind_core::{Board, Cell, NONE, OPPOSITE, WALL};
     use std::{collections::VecDeque, mem::size_of};
 
@@ -1032,6 +1044,56 @@ mod tests {
                         };
                         assert!(
                             h.is_some_and(|h| h <= next + 1),
+                            "{id}: {h:?} then {next} at {state:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The room bound's hall part against exact remaining moves that end
+    /// off `counted`, from every primitive state of each catalog board small
+    /// enough to enumerate, for counted sets of a quarter, half and three
+    /// quarters of the cells: less the keeper's charge it is admissible,
+    /// `None` only where no solution exists, and consistent: a move lowers
+    /// it by at most one when it ends off `counted` and not at all when it
+    /// ends on it. Its argument holds for any counted set, not only room
+    /// parts.
+    #[test]
+    fn hall_is_admissible_and_consistent_off_counted() {
+        let mut rng = Lcg(5);
+        for (id, board, states, edges) in explored_catalog() {
+            for quarters in 1..4 {
+                let counted: Vec<bool> = (0..board.tiles().len())
+                    .map(|_| rng.below(4) < quarters)
+                    .collect();
+                let exact = remaining_off(board, states, edges, Some(&counted));
+                let hall = Heuristic::hall(board, board.initial().player, &counted);
+                let estimates: Vec<_> = states
+                    .iter()
+                    .map(|state| {
+                        let h = hall.estimate(state)?;
+                        Some(h.saturating_sub(hall.charge(state.player)))
+                    })
+                    .collect();
+                for (from, state) in states.iter().enumerate() {
+                    let h = estimates[from];
+                    match h {
+                        Some(h) => {
+                            assert!(h <= exact[from], "{id}: {h} > {} at {state:?}", exact[from])
+                        }
+                        None => {
+                            assert_eq!(exact[from], u32::MAX, "{id}: no assignment at {state:?}")
+                        }
+                    }
+                    for &(to, _) in &edges[from] {
+                        let Some(next) = estimates[to] else {
+                            continue;
+                        };
+                        let cost = u32::from(!counted[states[to].player as usize]);
+                        assert!(
+                            h.is_some_and(|h| h <= next + cost),
                             "{id}: {h:?} then {next} at {state:?}"
                         );
                     }

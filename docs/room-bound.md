@@ -6,9 +6,9 @@ module docs say what each part does. This file records why the bound is sound,
 how its build fits the search's memory and time, the measurements behind it,
 with the SLURM job that produced each number, and the approaches it replaced.
 
-On Grand Hall (`huge`) it raises the start's bound from 214 to 255, and the
-lower bound at 30 s from 238 to 274 at 64 MiB, from 241 to 277 at 256 MiB and
-from 244 to 280 at 1 GiB (see [Measurements](#measurements)).
+On Grand Hall (`huge`) it raises the start's bound from 214 to 258, and the
+lower bound at 30 s from 238 to 277 at 64 MiB, from 241 to 280 at 256 MiB and
+from 244 to 283 at 1 GiB (see [Measurements](#measurements)).
 
 ## The bound
 
@@ -17,7 +17,7 @@ A room Q is one side of a door. Each room that holds a start box or a goal gets
 one or two tables R(Q, P, LAB). A table is the exact cost of a relaxed problem
 over Q that keeps only the boxes of the labels LAB, counting only the moves
 that end on its part P ⊆ Q. Let C be the union of the parts. The hall part
-M_hall is the assignment heuristic with every push that ends on C made free.
+M_hall is the assignment heuristic with every move that ends on C made free.
 The room bound is
 
 S = ΣR + M_hall,
@@ -132,18 +132,33 @@ halves as parts, so every part is disjoint from every other.
 
 ### The hall part M_hall
 
-M_hall is the assignment heuristic M with different reverse-push costs: a push
-costs 1 when the keeper ends outside C, that is, when the box's old cell is
-outside C, and 0 otherwise. It has no stand charges. A charge stands for a
-walk whose cells may lie in C, where the tables already count them. It keeps
-M's keeper sides, since every real box path is a path in their graph, so its
-feasibility equals M's.
+M_hall is the assignment heuristic M with every move that ends on C made free.
+Call B the cells a box can stand on, those with a spot live for some label.
+charge_C(t) is the fewest steps that end outside C on a walk from B to t, a
+0-1 BFS where a step onto a C cell costs 0. A push from stand t costs
+[end ∉ C] + charge_C(t), where the push ends on the box's old cell. M_hall(s)
+is the matching over these costs, less charge_C of the keeper's cell. It keeps
+M's keeper sides, since every real box path is a path in their graph, and
+charge_C ≤ M's charge, so its feasibility equals M's.
 
-- *Admissible.* Each box's pushes that end outside C cost at least its M_hall
-  distance to its final goal. Different boxes' pushes are different moves, and
-  the final placement is one assignment. So M_hall(s) ≤ cost_{outside C}(π).
-- *Consistent.* A step moves no box. A push moves one box along one edge of
-  cost c = [end ∉ C], and under the same assignment M_hall drops by at most c.
+- *The walks.* No state on a route has a box off B, since M_hall would be
+  `None` there. A push leaves the keeper on its box's old cell, in B. So the
+  keeper leaves B only by stepping, and a step onto b raises charge_C by at
+  most [b ∉ C]. Before a push from t, the walk since the keeper last stood in
+  B therefore holds at least charge_C(t) steps that end outside C, and before
+  the route's first push at least charge_C(t) − charge_C(start keeper). These
+  walks are disjoint for distinct pushes, as every push ends in B.
+- *Admissible.* Each box's pushes cost at least its M_hall distance to its
+  final goal, and each push's cost is matched by its own move and its walk,
+  all outside C. Different boxes' pushes are different moves, the walks are
+  disjoint, and the final placement is one assignment. So
+  M_hall(s) ≤ cost_{outside C}(π).
+- *Consistent.* A step onto b moves no box and leaves the keeper's region
+  alone, so the matching holds, and M_hall drops by at most [b ∉ C]. A push
+  from the keeper's cell t moves one box along one edge of cost
+  [end ∉ C] + charge_C(t), and leaves the keeper in B at charge 0, so under
+  the same assignment M_hall drops by at most [end ∉ C]. Only the start can
+  have a keeper charge, so the engine subtracts it there alone, in `root`.
 
 ### The combined bound
 
@@ -184,7 +199,9 @@ consistent, so h = max(M, S) is both. At a goal state, S = 0.
 - A table bounds only its part's moves under its relaxation. Boxes outside Q
   and labels outside LAB are invisible to it. On Grand Hall the room's true
   cost lies in [98, 117] against the tables' 93; the gap is their interaction.
-- M_hall bounds pushes only; it does not count walking outside C.
+- M_hall counts walking outside C only as stand charges, the steps from B to
+  each push's stand. A walk that stays in B, such as the keeper crossing the
+  hall between boxes, costs it nothing.
 - Which rooms, parts and labels get tables is a heuristic choice. Any choice is
   sound, as long as the parts are disjoint and every table is built from the
   start's projection.
@@ -322,7 +339,7 @@ the enclosed rooms' tables R(E, P, LAB) in every state: each LAB lies in
 LAB_C, each P in C, and the parts are disjoint. An optimal solution of C's
 relaxed problem, cut down to E's labels and cells, is a solution of E's by
 Lemma 1's projection, and it counts a move on P only where C's counts that
-move. The hall part may drop, since the pushes that end in C outside the
+move. The hall part may drop, since the moves that end in C outside the
 enclosed parts become free, so the larger room is the choice measured
 stronger, not a proven gain. Only the whole-room table holds the enclosed
 rooms' problems, so only it may replace them.
@@ -641,6 +658,52 @@ rose by at most 21.6 MiB, on gen-v2-340187 at 128 MiB where its gained table
 is kept, within the budget. The wasm module shrank 61 bytes, from 360,429 to
 360,368; 7/8 differs from 3/4 only in a constant.
 
+### Hall stand charges (job 49398)
+
+The hall part used to price a push at [end ∉ C] alone, so the keeper's walk
+to each push's stand cost it nothing, even off C. Job 49398 compared `main`
+(`701344b`) with the stand charges of [The hall part
+M_hall](#the-hall-part-m_hall) (`b0ed347`) in job 49161's parts, on a Xeon
+Platinum 8581C with 16 cpus, with traced copies of both builds.
+
+Soundness: 27 proven optima, no proof that disagrees, no bound or start's
+bound above a proven optimum, and no unsolvable proof. Each traced copy matched
+its build in all 534 compared runs. The tables matched in all 324 runs where
+both builds ended. M is unchanged, so the two builds also matched in all 247
+compared runs without a room bound.
+
+| Measure | `main` | Stand charges |
+| --- | --- | --- |
+| Grand Hall's start, hall part / S | 162 / 255 | 165 / 258 |
+| The same at 48 MiB, with the B, C and X table alone | 192 / 228 | 196 / 232 |
+| Grand Hall, 5 s or 30 s, 48 / 64 / 96 MiB | 250 / 274 / 275 | 253 / 277 / 278 |
+| Grand Hall, 5 s, 128 MiB to 1 GiB | 276 | 279 |
+| Grand Hall, 30 s, 256 MiB / 1 GiB | 277 / 280 | 280 / 283 |
+| Grand Hall, 200k / 1M / 11M states | 272 / 275 / 279 | 275 / 278 / 282 |
+| Open cases' summed bound, `ci` / `states` / `held` / `prod` | 3403 / 10435 / 14581 / 5314 | 3437 / 10536 / 14723 / 5364 |
+| Open cases above `main`, the same parts | | 13 / 37 / 51 / 16 |
+| Wasm module | 360,368 | 359,654 |
+
+The start's hall part rose on 231 of the 298 starts with a room bound and fell
+on none. A start's charge can outweigh what its matching gains when the keeper
+starts far off B, but no start did. No bound fell, and no proof was gained or
+lost. The largest rise at a start was 7, on gen-v2-350001, whose S rose from
+148 to 155. Grand Hall rose by 3 at every limit where a table builds. At
+32 MiB and at 20k to 100k states none does, and both builds reach 237 and 231
+to 234.
+
+The charges cost the search nothing measurable. Each hall part runs one more
+0-1 BFS over the board in its build, and the charge of each cell was already
+stored, as zeros, so the reserved bytes matched in every run where both builds
+ended. On the 15 runs that both ended at the time limit, the charged build
+generated 800,272 states a second against 805,443. On Grand Hall at 5 s it
+expanded 1.6 to 5.4% fewer states but generated within 1.3% as many, with more
+children an expanded state, 16.4 against 16.1 at 1 GiB. On the 71 runs with a
+room bound where both builds expanded the same states, the search took 40.05 s
+against 39.59 s, a ratio of 1.0117. On the 247 runs without one, where the two
+builds run the same code, the ratio was 1.0174. Peak resident memory rose by
+at most 1.2 MiB, on Grand Hall at 1 GiB. The wasm module shrank 714 bytes.
+
 ## Rejected approaches
 
 - **A side split with box identities.** Splitting the room into two halves and
@@ -691,3 +754,11 @@ is kept, within the budget. The wasm module shrank 61 bytes, from 360,429 to
   behind door (8,5), 2.6M states, which builds at 1 GiB, to save about 1.75 s.
   A stronger dead-state rule in the forward search would cut them instead, but
   it needs its own soundness argument.
+- **Tables over one part with disjoint labels.** The reference adds tables
+  over the same cells for disjoint label sets, a sound sum of pushes. A table
+  here counts every move that ends on its part, the keeper's steps included,
+  so two tables over one part would count those steps twice. The reference
+  measured them at +0 at Grand Hall's start.
+- **More rooms.** Grand Hall has no further single-door room to table. Rooms
+  with two doors, or a split of the hall, would each need a new soundness
+  argument, and were not pursued.
