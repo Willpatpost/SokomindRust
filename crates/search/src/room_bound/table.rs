@@ -92,12 +92,12 @@ struct Values {
 }
 
 // A slot count fits u32, so `Values::home` may scale a 32-bit hash.
-const _: () = assert!(super::MAX_CAP * 4 / 3 + 1 <= u32::MAX as u64);
+const _: () = assert!(Values::slots(super::MAX_CAP as usize) as u64 <= u32::MAX as u64);
 
 impl Values {
     /// The slots for `count` values: fewer than 3/4 full, so a probe always
     /// meets an `EMPTY` slot.
-    fn slots(count: usize) -> usize {
+    const fn slots(count: usize) -> usize {
         count * 4 / 3 + 1
     }
 
