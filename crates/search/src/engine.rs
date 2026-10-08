@@ -45,7 +45,7 @@ pub(crate) struct Policy {
     restart: Option<&'static Policy>,
     /// Whether a search with no incumbent hands its arena to the stage
     /// ladder (stage.rs) at its stage point: when the arena holds
-    /// [`stage::FILL_MIB`]'s capacity or fills, whichever comes first. A
+    /// [`stage::STAGE_AT`] states or fills, whichever comes first. A
     /// full arena then stages instead of restarting or stopping. Fast-phase
     /// only: the ladder ends at its first route, so it needs
     /// stop_on_goal_push.
@@ -357,8 +357,8 @@ pub(crate) struct Engine {
     /// Some while the stage ladder runs the search; never with an incumbent.
     staging: Option<Staging>,
     /// The arena length at which a staging search hands over to the ladder:
-    /// the [`stage::FILL_MIB`] capacity, or the node limit once the stage is
-    /// spent or when the policy never stages.
+    /// [`stage::STAGE_AT`] or the node limit, whichever is smaller, or the
+    /// node limit once the stage is spent or when the policy never stages.
     fill_at: usize,
     /// The arena length from which expansions are partial (see
     /// `Policy::partial_fill`), or `usize::MAX` for a policy that never
@@ -516,8 +516,7 @@ impl Engine {
         let arena = Arena::new(fixed, boxes, max_states, memory_mib)?;
         let node_limit = arena.node_limit();
         let fill_at = if policy.stage {
-            Arena::capacity(fixed, boxes, max_states, stage::FILL_MIB)
-                .map_or(node_limit, |c| c.limit.min(node_limit))
+            stage::STAGE_AT.min(node_limit)
         } else {
             node_limit
         };

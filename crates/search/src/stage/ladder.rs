@@ -26,9 +26,10 @@
 //! - Caps: a stage fails when its queue empties, when the arena holds
 //!   `CAPS[rung]` records past the stage's start or is full, or when the
 //!   work budget, the inserts the whole ladder may make, runs out. The
-//!   arena fills first only on a small limit: a ladder that starts below
-//!   the limit, at [`super::FILL_MIB`]'s capacity, has at least 691,938
-//!   records of room, far more than a path and `CAPS[2]`.
+//!   arena fills first only on a small limit, below about a path and
+//!   `CAPS[2]` records: a reseed keeps only the path to the root, so a
+//!   stage has the whole limit less that path, whether the ladder started
+//!   below the limit or at it.
 //! - Bans and the culprit: when the last rung fails, the ladder backjumps.
 //!   The culprit is the latest frame `q >= 1` whose root has a box, on a
 //!   cell the failing stage's plan needs, that frame `q - 1`'s root does

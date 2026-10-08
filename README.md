@@ -183,11 +183,15 @@ All three modes run one engine; a `Policy` sets the queue weight and the goal
 and reopen behavior. Fast is weighted A* (`g + 5h`) that stops at its first
 route and never re-expands a closed node. When Fast reaches its stage point
 without a route, a bounded stage search (`crates/search/src/stage.rs`) takes
-over in the same arena. The stage point comes once the arena holds what 64 MiB
-would hold for the board, or when it fills, whichever is first, and the stage
-search needs a few thousand states there. Measured at 1 GiB, plain Fast routes
-every catalog board it routes at all before that point, so a larger budget does
-not delay the stage search. From the start, it commits one goal-level gain at a
+over in the same arena. The stage point comes once the arena holds 32,768
+states, or when it fills, whichever is first, and the stage search needs a few
+thousand states there. 32,768 states earn it its whole work budget, and it
+starts from a copy of the start, so a later stage point would only lengthen the
+plain search before it. On the catalog (job 49403) staging there kept every
+route and slowed no board, and Fast took 16.0 s in all instead of 27.8 s at
+64 MiB, where it staged at the arena's capacity before (about 1M states); five
+boards that plain Fast routes after 146,000 to 1.2M states take the stage
+search's route instead. From the start, it commits one goal-level gain at a
 time: a small search looks for a state above the current level, and the first
 such state that passes accept tests (open lanes into goals, sink-line order,
 keeper mobility around sink-line boxes, keeper-aware reach matching and sealed
@@ -610,9 +614,10 @@ memory ceiling plus 2 MiB.
 states and 64 MiB, three times each: an observation size, recorded in
 `benchmarks/observe-reference.json` and far below the state cap so a run stays
 short (`--states` and `--memory` override it). It fails only on a false proof
-or bound, a nondeterministic run, or a crash. Both it and `bench:check` run
-within the budget that sets Fast's stage point, so a run there that stages does
-so at its full arena; larger budgets stage before the arena fills. `test:browser` runs the Playwright specs
+or bound, a nondeterministic run, or a crash. `bench:check`'s 20,000 states lie
+below Fast's stage point, so a gate run that stages does so at its full arena;
+`bench:observe`'s runs stage before the arena fills, as production's do.
+`test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
 `npx playwright install chromium`. CI and `validate` run it with `CI=true`, so
