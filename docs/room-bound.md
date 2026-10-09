@@ -728,9 +728,9 @@ a run at 1024 MiB is `main`'s search). It ran on a Xeon Platinum 8581C with
 At 4000 MiB the bound was 282 at 30 s, 284 at 60 s and 285 at 120 s, and last
 rose to 286 at 144.8 s. The arena's ids stop at 2^26 - 1, about 67.1M states,
 so no budget takes a run much past the 60M state limit. Each doubling of the
-states a run holds raised the bound by 1 to 2, against a gap of 150 to the
-best route, 436 moves. Memory cannot close that gap; a higher bound needs a
-stronger bound.
+states a run holds raised the bound by 1 to 2, against a gap of 136 to the
+shortest route found, 422 moves (see `route-polish.md`). Memory cannot close
+that gap; a higher bound needs a stronger bound.
 
 ## Rejected approaches
 

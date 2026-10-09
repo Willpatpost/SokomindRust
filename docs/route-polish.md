@@ -7,8 +7,9 @@ long before weight 3 reaches anything shorter. The polish took it to 475
 inside the production limit of 5 s, and to 436 given about 35 s (see
 Measured). Since the stage point moved to 32,768 states (#32) the route
 comes about half a second sooner, and Quality returns 468 at 5 s and 436 at
-about 24 s, the shortest it reaches at any budget or time (jobs 49403 and
-49425). Much of such a route's length is walk:
+about 24 s (jobs 49403 and 49425). 436 is where the jobs stop gaining. With
+no time limit, kicks then take the route to 429, about 404 s after the start
+(see Kicks, jobs 49484 and 49509). Much of such a route's length is walk:
 the keeper crosses the board to push one box a step, then crosses back. The
 polish attacks that directly. After the search, it rearranges when each box's
 pushes happen, which no arena-bound search over whole states can afford on a
@@ -76,7 +77,8 @@ The runs free one box at a time, cycling through the slots in the run's order
    one label may also end on each other's goals: either box on either goal
    solves the board just as well. The bound is the current route's length,
    and any node with `g + h` at or above it is dropped. A goal pop is
-   therefore a strictly shorter route.
+   therefore a strictly shorter route. A kick changes the goal and the
+   bound (see Kicks).
 
 Within this model, which keeps the other boxes' pushes and their order, a job
 finds the shortest route. That route is rebuilt by re-flooding each step's
@@ -137,8 +139,80 @@ the longest pair job there took about a second.
 
 When a pair job shortens the route, every box may now be rescheduled better
 around the new one. So a full cycle of single-box jobs runs before the next
-pair, restarting on each gain, as in a run. The polish ends when a full pass
-over the pairs, with any single-box cycles a gain sets off, has gained nothing.
+pair, restarting on each gain, as in a run. The pair phase ends when a full
+pass over the pairs, with any single-box cycles a gain sets off, has gained
+nothing. An episode's polish ends there. The end polish goes on to kick.
+
+## Kicks
+
+The pair phase ends at a local optimum: no job that frees one box or two
+gains on the route. On Grand Hall that is 436 moves, about 34 s after the
+search, and without a time limit the search has nothing left to do. The end
+polish then kicks the route out of that optimum and descends again.
+
+A kick is a pair job on two boxes of one label, with two changes
+(`Job::kick`). A pair job already lets such boxes trade goals, but only for a
+shorter route. A kick makes them trade: each box must end on the goal the
+other ended on in the best route. And its bound is the best route's length
+plus `KICK_SLACK` (64), capped at `MAX_ROUTE`, so it finds the model's
+shortest route with the goals traded even when that route is longer than the
+best, by up to 63 moves. That route replaces the one the jobs work on, longer
+or not, and they descend from it as after a pair gain: a full cycle of
+single-box jobs, then passes over the pairs, until a full pass gains nothing.
+The step uphill moves which box the route brings to which goal, and every
+other box is rescheduled around that, so the descent can reach a different
+local optimum. A route shorter than the best becomes the best.
+
+Every kick starts from the best route. The kicks take the same-label pairs in
+the pair phase's order, nearest first, and cycle, so a kick after a descent
+takes the next pair, not the first again. The polish ends when a full round
+of kicks, one per same-label pair, with the descents they set off, has not
+shortened the best route, or when the kicks' work runs out (below). A kick
+that cannot start, or that finds no traded route within its bound or
+`PAIR_POPS` expansions, leaves the route at the best and counts toward the
+round. A board with no two boxes of one label has no kicks, and its polish
+ends with the pair phase.
+
+The polish ends even uncapped: each round that does not end it shortens the
+best route, and each descent ends, since every gain in it shortens the
+route.
+
+Only the end polish kicks. An episode's time is time the search does not get,
+and a round of kicks can take far longer than the pair phase. The end polish
+is the last thing a Quality search does, so its kicks use time and memory
+that would otherwise go unused. Under a time limit they run only once the
+pair phase ends before it. A caller's stop ends a kick as it ends any job,
+and the best route stands.
+
+The cost is time. Both transports always set a time limit (the server's is
+30 s at most), so in the product kicks use only what is left of it once the
+pair phase ends, and the answer is never late. Without a time limit, uncapped
+kicks would run until a round gains nothing, which can take far longer than
+the search: at the gate's 20,000 states the catalog's Quality searches took
+2.2 times as long in all, and at 60M states gen-v2-370002's went from 133 s
+to 2,582 s for 358 → 342 moves (job 49484, see Measured). So the kicks also
+stop when their work runs out: `KICK_WORK` (16) polish units for each state
+of the caller's state limit, counted from the first kick's start, each unit
+of a kick or of a descent it sets off taking one (see Slicing). The search's
+work already follows that limit, and the kicks' now does too. A capped
+polish runs as an uncapped one until its work runs out, then ends with the
+best route so far, so the cap keeps the polish deterministic, and an
+uncapped run's trace gives the capped route at every budget (job 49509, see
+Measured). Grand Hall's kicks at 60M states end after 502M units, inside
+the 960M the cap gives, so it still reaches 429 in about 404 s. At the
+gate's 20,000 states the cap keeps 6 of the 10 shorter routes, and at
+bench:observe's 1M states Grand Hall's 16M units end before its first gain,
+at 18.2M, so observe's routes are main's.
+
+`KICK_SLACK` comes from job 49472 (see Measured). Of 55 kicks from Grand
+Hall's 436-move route, 22 found a traded route, of 436 to 482 moves. The
+other 33 found none within the bound: for 19 the heuristic already put the
+start at or above it, and 14 ran out of queue. 9 of the 22 descended below
+436. Job 49487 ran slack 128 beside 64: in 880 paired kicks, from 16 Grand
+Hall routes below 436, every run found the same route at both slacks. A kick
+is a pair job, so it stops at `PAIR_POPS` too. In job 49472, with a cap of
+2^22, one of the 55 took 1,656,978 expansions, and its descent ended at 431.
+Under `PAIR_POPS` it gains nothing. No other kick took more than 1,011,928.
 
 ## Heuristic
 
@@ -204,8 +278,9 @@ A job that cannot hold its buffers, a store of `Nodes::MIN` (1,024) nodes and
 cannot grow within its allowance ends with no gain. Every allocation
 is fallible (`try_reserve`), so an allocator refusal ends the job too, never
 the process. The route, a job's found route and a solution's letters fit in
-the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). Besides the
-seed and the best route, the polisher never holds more than two of them at
+the fixed `ROUTE_ALLOWANCE` (two routes of `MAX_ROUTE` bytes). A kick's route
+may be longer than the seed, but its bound keeps it under `MAX_ROUTE`. Besides
+the seed and the best route, the polisher never holds more than two of them at
 once. So `reserved_bytes` does not change.
 
 An episode runs beside the live arena. Its allowance is the arena's share
@@ -231,6 +306,7 @@ A unit is one of:
 
 - starting a run: one copy of the seed;
 - starting a job: two replays of the route, plus its allocations;
+- starting a kick: one copy of the best route, plus a job's start;
 - one walk layer, which is one flood (layers are built from the last event
   down, so each tail adds the next);
 - queueing the root;
@@ -240,11 +316,13 @@ A unit is one of:
 
 Every unit floods for itself, so no flood outlives a unit. Queue keys pack the
 bit-flipped f, then the bit-flipped h, then the node id. Two entries never
-share a key, so the pop order is fixed. A polish ends the same in slices of one
-pop as in slices of 2^20, and natively as under WASM. An episode is due at an
-expansion count and checked after each expansion, and `Search::advance`
-returns as one starts, so episodes start and end at the same points in any
-slicing too.
+share a key, so the pop order is fixed. The kicks' work counts these units,
+from the first kick's start on, never time. A polish ends the same in slices
+of one pop as in slices of 2^20, and natively as under WASM: the most kick
+work, `MAX_STATES` × `KICK_WORK`, fits wasm32's `usize` (a const assert). An
+episode is due at an expansion count and checked after each expansion, and
+`Search::advance` returns as one starts, so episodes start and end at the
+same points in any slicing too.
 
 ## Measured
 
@@ -409,6 +487,138 @@ So the pair phase takes every pair, with `PAIR_POPS` at 2^20: no pair job on
 Grand Hall reaches it, and the catalog's routes and time are the same as at
 2^18.
 
+**Escapes.** Job 49472, on a c4-standard-32 node, ran a throwaway build
+(851a29c: main e3ab52b plus switches in the end polish) on Grand Hall
+(Quality, 60M states, 64 MiB, no time limit). With no switch set, the polish
+ends at 436 moves (222 pushes) 32.3 s after the search, and 436 given as the
+seed comes back unchanged. Two ways out of that optimum:
+
+- **Multi-start**: 272 runs, one per box order, each one run of single-box
+  jobs from the 812-move seed and then the full pair phase. 8 ended below
+  436, the best at 426 moves (222 pushes, first slot 5, stride 9), 50.6 s
+  after the search. The runs took 19.8 to 97.7 s, 12,602 s in all: about
+  1,575 s per route below 436.
+- **Kicks**: 55 runs from 436, one per same-label pair, each one kick (bound
+  436 + 64, 2^22 expansions, a 1024 MiB allowance) and its descent. 22 found
+  a traded route, and 9 ended below 436, the best at 428. They took 758 s in
+  all, since a kick that found nothing still polished 436 again, about 10 s:
+  about 84 s per route below 436.
+- **Kicks from 426**: the same 55 from the best multi-start route. 22 found a
+  traded route, 17 of them descended back to 426, and none went below. 426 is
+  a local optimum under single, pair and kick jobs alike.
+- Peak RSS was 63 MiB, and 106 MiB with the kicks' larger allowance.
+- **Kicks from each optimum** (job 49487, the same build): the same 55 kicks
+  from each of the 17 distinct routes below 436 above, at slacks 64 and 128
+  (426 at 64 is "Kicks from 426"). 12 distinct routes ended below 426,
+  the best at 422 moves (220 pushes): kick 23 from 436 had descended to 431,
+  and kick 17 from that 431 descended to 422. The 55 kicks from 422 found
+  none shorter. The 880 runs at slack 64 polished for 11,887 s in all; peak
+  RSS was 107 MiB.
+
+So the polish kicks: they cost about a nineteenth as much per route below
+436, and they keep going from each better route, where a multi-start run
+ends once. Each kick starts from the best route, so the polish never kicks
+from a longer optimum such as that 431. Multi-start and kicks from each
+optimum are under Left out.
+
+**Kicks.** Job 49484, on a c4-standard-32 node, compares main e3ab52b with
+6093f6a, which adds the kicks, using the catalog example, one sample each.
+Fast and Optimal never polish, and every one of their 114 runs at the gate
+matches main's: status, route, proof, lower bound, expanded and generated
+counts.
+
+- **Catalog, at the gate's 20,000 states and 64 MiB.** 10 of the 50 Quality
+  routes are shorter, by 75 moves in all (5,182 → 5,107), and none is
+  longer. No status or expanded or generated count moves, so the benchmark
+  gate only lists gains. The largest are gen-v2-320050-4eb88a2d (161 → 141),
+  gen-v2-320041-027a9b04 (119 → 101) and gen-v2-320081-b59cab95 (126 → 110).
+  Total Quality time rose from 21.2 s to 47.3 s. The largest increases are
+  gen-v2-370002 (+7.0 s, no gain) and gen-v2-360372 (+6.0 s, 303 → 299).
+- **Catalog, at 60M states and 64 MiB**, at 5, 15 and 30 s: 3, 3 and 5 routes
+  are shorter (5,050 → 5,018, 5,033 → 5,001 and 5,011 → 4,955), and none is
+  longer. At 256 MiB and 30 s, 5 are shorter (5,085 → 5,039). The largest
+  gain is gen-v2-340053-466f, 139 → 115 at every limit. A search that ended
+  early now kicks until the time limit, so time grows only up to the limit,
+  and 11 Quality runs that ended at the memory limit end at the time limit
+  instead. Grand Hall is unchanged at 468, 456 and 436, since its pair phase
+  outlasts 30 s.
+- **Catalog, at 60M states and 64 MiB, no time limit.** 7 of 49 routes are
+  shorter, by 74 moves (4,573 → 4,499). Total time rose from 275 s to
+  2,985 s, of which gen-v2-370002 went from 133 s to 2,582 s (358 → 342).
+  Without it, 142 s to 402 s.
+- **Grand Hall, at 60M states and 64 MiB, no time limit** (capped at an hour):
+  436 → 429 moves (224 pushes). The search took 404.1 s in all, against
+  31.1 s, and its first route still comes at 0.4 s.
+- Peak RSS is the same within 224 KiB in every run: a kick holds no more than
+  a pair job.
+
+**Kick work cap.** Job 49509, on a c4-standard-32 node, compares main e3ab52b
+with 061501b, which caps the kicks at one unit per state of the state limit,
+and with a traced build of 061501b whose kick work is unlimited, as 6093f6a's
+was, and which logs the units run at each gain of the kick phase and at its
+end. The catalog example, one sample each, at 64 MiB unless stated. A capped
+polish runs as the uncapped one until its work runs out, so the traced run
+gives the capped route at any number of units per state. The prediction held
+in all 118 capped Quality runs with a traced run beside them, and the traced
+build's routes are 6093f6a's (job 49484) in all 99 gate and no-limit runs that
+ended. A search answers the shorter of the end polish's route and its best
+episode route, so on two boards with no time limit (gen-v2-320041-e16f5a47, 93
+against 91, and gen-v2-350250-5b361f8b, 277 against 274) the kicks start from
+a route longer than the answer without them.
+
+- **Fast and Optimal** never polish, and all 122 of their runs (114 at the
+  gate, 8 at bench:observe's 1M states) match main's: status, route, proof,
+  lower bound, expanded and generated counts.
+- **Quality's moves in all, by units per state**, with the routes shorter
+  than main's in brackets. The gate is 20,000 states with no time limit;
+  observe is bench:observe's four boards at 1M states; 60M is the catalog,
+  Grand Hall included, at 60M states with no time limit (Grand Hall capped
+  at an hour). The rows other than none and 1 come from the traced runs,
+  but for gen-v2-370002 at 60M, below: at 16 per state, by its rate, and
+  unlimited, from job 49484.
+
+  | Units per state | Gate | Observe | 60M | Grand Hall at 60M |
+  |---|---|---|---|---|
+  | none (main) | 5,182 | 710 | 5,009 | 436 |
+  | 1 | 5,171 (2) | 710 | 4,949 (7) | 432 |
+  | 2 | 5,167 (4) | 710 | 4,947 (7) | 432 |
+  | 4 | 5,167 (4) | 710 | 4,946 (7) | 431 |
+  | 8 | 5,165 (5) | 710 | 4,944 (7) | 429 |
+  | 16 | 5,163 (6) | 710 | 4,940 (8) | 429 |
+  | unlimited | 5,107 (10) | 703 (1) | 4,928 (8) | 429 |
+
+- **Grand Hall at 60M states.** Uncapped, its kicks start from 436 about 30 s
+  into the search and gain at 18,171,459 units (434), 23,835,339 (432),
+  130,856,475 (431) and 308,328,464 (429), and the round after ends them at
+  502,476,946, about 1.3M units a second. At 16 per state, 960M units, they
+  end on their own, at 429 in about 401 s. At 1M states their 16M units end
+  before the first gain, so observe's Grand Hall stays at 436, and each sample
+  takes about 12 s longer (30.3 s to about 42 s).
+- **gen-v2-370002 at 60M states** is the one board whose kicks the cap stops
+  short at 16 per state. Its traced run, stopped at 900 s, gained 358 → 354 at
+  679M units and ran about 1.31M units a second, so it passed 960M at about
+  867 s with no further gain. At 16 per state it ends at 354 in about 870 s,
+  where uncapped kicks reach 342 at 2,582 s.
+- **Time.** At the gate the catalog's Quality searches take 20.9 s without
+  kicks, 20.8 s at 1 unit per state, about 24 s at 16, and 47.3 s uncapped
+  (job 49484). At 60M with no time limit they take 306 s, 589 s, about
+  1,670 s at 16 (gen-v2-370002 about 870 s, Grand Hall about 401 s), and
+  3,389 s uncapped.
+- **The production limits**, 60M states at 64 MiB and 5, 15 and 30 s, and at
+  256 MiB and 30 s: at 1 unit per state the routes are 6093f6a's but for
+  gen-v2-350250 at 64 MiB and 30 s, 266 against 264, whose 60M units ran out at
+  26 s. At 16 per state the cap cannot end the kicks within 30 s: the fastest
+  kick phase measured ran 5.1M units a second (gen-v2-310183-c9e1ef62), so 960M
+  units take over 180 s, and the product's routes are 6093f6a's.
+- Peak RSS is never more than 276 KiB above main's: the cap holds no
+  memory.
+
+16 per state is the smallest multiple here that leaves Grand Hall's kicks
+uncapped at 60M states (8 reaches 429 too, but stops them at 480M), and it
+keeps 6 of the gate's 10 gains, for about 3 s of kicks there against
+uncapped kicks' 27 s. 1 per state would keep 2, stop Grand Hall at 432, and
+cost gen-v2-350250 two moves in production.
+
 ## Left out, for now
 
 These come from the reference's Quality route repair, or were considered here:
@@ -431,3 +641,15 @@ These come from the reference's Quality route repair, or were considered here:
 - **Diverse seeds**: polishing several first routes and keeping the best. In
   the reference, the choice of seed alone moved Grand Hall between 476 and 509
   moves. Runs vary the box order instead, on the one route the search has.
+- **Multi-start**: the whole polish, pair phase included, once per box order,
+  keeping the best. On Grand Hall it found 426 moves, shorter than the
+  kicks' 429, but at about 19 times their cost per route below 436, and each
+  start is a full polish (see Escapes). Kicks from that 426 found nothing
+  shorter.
+- **Kicks from each optimum**: kicking from every local optimum a descent
+  reaches, not only the best. On Grand Hall, kicks from a 431 found 422,
+  where the polish ends at 429, but the sweep that found it polished for
+  hours (see Escapes). The polish would need a rule for which optima to keep
+  and when to stop, inside the kicks' work. The end polish also never kicks
+  from the best episode route when that is shorter than the incumbent it
+  polishes (see Kick work cap): a pool of optima could start from both.
