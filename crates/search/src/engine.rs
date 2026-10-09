@@ -830,11 +830,15 @@ impl Engine {
                 .saturating_sub(self.polished_bytes());
             self.incumbent = None;
             self.arena.release();
-            // The kicks may run a polish unit for each state the search
-            // could have expanded, so with no time limit their cost follows
-            // the caller's state limit (docs/route-polish.md).
-            let kick_work = self.max_states;
-            self.polish = Some(Polish::new(route, status, allowance, boxes, kick_work));
+            // The kicks' work follows the caller's state limit, which bounds
+            // their cost when there is no time limit (docs/route-polish.md).
+            self.polish = Some(Polish::new(
+                route,
+                status,
+                allowance,
+                boxes,
+                self.max_states,
+            ));
         } else {
             self.status = status;
         }

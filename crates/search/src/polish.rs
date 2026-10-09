@@ -16,9 +16,13 @@
 //! under a bound a little above the best route, and the single-box and pair
 //! jobs descend from the kicked route; a full round of kicks that leaves
 //! the best route as it was ends the polish, and so does the kicks' work
-//! running out, as many units as the search's state limit. The design, its
-//! soundness and its memory budget are in docs/route-polish.md.
-use crate::{SolutionError, Status, arena::mix, heuristic::Heuristic, reach::Reach, stage::filled};
+//! running out, [`KICK_WORK`] units for each state of the search's state
+//! limit. The design, its soundness and its memory budget are in
+//! docs/route-polish.md.
+use crate::{
+    MAX_STATES, SolutionError, Status, arena::mix, heuristic::Heuristic, reach::Reach,
+    stage::filled,
+};
 use sokomind_core::{Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State, Step};
 use std::{collections::BinaryHeap, mem::size_of};
 
@@ -55,6 +59,20 @@ const PAIR_POPS: usize = 1 << 20;
 /// of 436 to 482 moves, and 9 of those led to a route below 436
 /// (docs/route-polish.md).
 const KICK_SLACK: u32 = 64;
+/// The kick phase's polish units for each state of the search's state
+/// limit, so that with no time limit the kicks cost a set multiple of the
+/// search they follow. Uncapped, Grand Hall's kicks at 60M states (64 MiB)
+/// shorten the route from 436 to 434 moves after 18.2M units, to 429 after
+/// 308M, and end after 502M: 16 per state, 960M, leaves them uncapped
+/// there, while 1 per state stops them at 432. At the gate's 20,000 states
+/// the catalog keeps 6 of the 10 shorter Quality routes uncapped kicks find
+/// (5,163 moves in all, against 5,182 without kicks and 5,107 uncapped),
+/// and at bench:observe's 1M states Grand Hall's 16M units end before its
+/// first gain, so it stays at 436 (job 49509, docs/route-polish.md).
+const KICK_WORK: usize = 16;
+// The most kick work fits wasm32's usize, so WASM caps the kicks where
+// native does.
+const _: () = assert!(MAX_STATES * KICK_WORK <= u32::MAX as usize);
 
 /// The strides that visit each of `boxes` slots once per cycle: those
 /// coprime to the box count.
@@ -164,13 +182,15 @@ pub(crate) struct Polish {
 impl Polish {
     /// The polisher for `route`, which the search ended with `ending`, or
     /// [`Status::Running`] for an episode. Its jobs may hold `allowance`
-    /// bytes less the routes it keeps, and its kicks `kick_work` units.
+    /// bytes less the routes it keeps, and its kicks run [`KICK_WORK`]
+    /// units for each of the search's `max_states`, which an episode, never
+    /// kicking, gives as 0.
     pub(crate) fn new(
         route: Vec<u8>,
         ending: Status,
         allowance: u64,
         boxes: usize,
-        kick_work: usize,
+        max_states: usize,
     ) -> Self {
         // The seed and the best route are each at most the route's length.
         let held = 2 * route.len() as u64;
@@ -191,7 +211,7 @@ impl Polish {
             swaps: 0,
             kick: 0,
             kick_idle: 0,
-            kick_work,
+            kick_work: max_states.saturating_mul(KICK_WORK),
             kicking: false,
             job: None,
         }

@@ -233,7 +233,8 @@ in pairs, those that end nearest each other first, so two boxes can trade
 order, or goals when they share a label. Once neither gains, the end polish
 kicks: it makes two boxes of one label trade goals even for a route up to 63
 moves longer, descends from there the same way, and ends after a full round
-of kicks finds nothing shorter than its best. It runs in the arena's share of
+of kicks finds nothing shorter than its best, or once the kicks have run 16
+polish units for each state of the state limit. It runs in the arena's share of
 the budget after the arena frees its records, so the reserved bytes do not
 change. A long search that stops improving its route also polishes it in
 episodes, in the part of that share the arena does not hold, and then goes on;
@@ -352,7 +353,8 @@ the cap lifted; each search then ended at its memory or state limit within 34
 to 103 s, so neither more time nor more memory shortened it (job 49425). That
 is where the polish's jobs stop gaining, and the kicks start there: with no
 time limit Quality now returns 429 moves (224 pushes) at 64 MiB, about 404 s
-after the start (job 49484). The shortest route found so far is 422 moves
+after the start (job 49484), and the kicks' work cap leaves that run alone
+at the 60M-state limit (job 49509). The shortest route found so far is 422 moves
 (220 pushes), by probes that kicked from the polish's other local optima
 (jobs 49472 and 49487).
 `docs/route-polish.md` has the catalog-wide numbers and the polish's earlier
