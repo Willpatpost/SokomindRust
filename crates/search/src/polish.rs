@@ -15,8 +15,9 @@
 //! route out of that local optimum: two boxes of one label trade goals,
 //! under a bound a little above the best route, and the single-box and pair
 //! jobs descend from the kicked route; a full round of kicks that leaves
-//! the best route as it was ends the polish. The design, its soundness and
-//! its memory budget are in docs/route-polish.md.
+//! the best route as it was ends the polish, and so does the kicks' work
+//! running out, as many units as the search's state limit. The design, its
+//! soundness and its memory budget are in docs/route-polish.md.
 use crate::{SolutionError, Status, arena::mix, heuristic::Heuristic, reach::Reach, stage::filled};
 use sokomind_core::{Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State, Step};
 use std::{collections::BinaryHeap, mem::size_of};
@@ -51,7 +52,7 @@ const RUNS: usize = 8;
 const PAIR_POPS: usize = 1 << 20;
 /// How much longer than the best route a kick's route may be. On Grand
 /// Hall, 22 of the 55 kicks from 436 moves found a route within 436 + 64,
-/// of 436 to 482 moves, and 7 of those led to a route below 436
+/// of 436 to 482 moves, and 9 of those led to a route below 436
 /// (docs/route-polish.md).
 const KICK_SLACK: u32 = 64;
 
@@ -152,11 +153,25 @@ pub(crate) struct Polish {
     swaps: usize,
     kick: usize,
     kick_idle: usize,
+    /// Units the kick phase may still run, the kicks and the jobs that
+    /// descend from them, and whether it has begun. Every unit after the
+    /// first kick starts takes one, and the polish ends when none is left.
+    kick_work: usize,
+    kicking: bool,
     job: Option<Job>,
 }
 
 impl Polish {
-    pub(crate) fn new(route: Vec<u8>, ending: Status, allowance: u64, boxes: usize) -> Self {
+    /// The polisher for `route`, which the search ended with `ending`, or
+    /// [`Status::Running`] for an episode. Its jobs may hold `allowance`
+    /// bytes less the routes it keeps, and its kicks `kick_work` units.
+    pub(crate) fn new(
+        route: Vec<u8>,
+        ending: Status,
+        allowance: u64,
+        boxes: usize,
+        kick_work: usize,
+    ) -> Self {
         // The seed and the best route are each at most the route's length.
         let held = 2 * route.len() as u64;
         Self {
@@ -176,6 +191,8 @@ impl Polish {
             swaps: 0,
             kick: 0,
             kick_idle: 0,
+            kick_work,
+            kicking: false,
             job: None,
         }
     }
@@ -214,7 +231,8 @@ impl Polish {
     /// at its first solved state; a kick's route replaces it even when
     /// longer. True once every run has ended, a full pass over the pairs
     /// has gained nothing, and then a full round of kicks has not shortened
-    /// the best route; every later call returns true again.
+    /// the best route or the kick work has run out; every later call
+    /// returns true again.
     pub(crate) fn step(
         &mut self,
         board: &Board,
@@ -222,6 +240,13 @@ impl Polish {
         start: &State,
         reach: &mut Reach,
     ) -> bool {
+        if self.kicking {
+            let Some(left) = self.kick_work.checked_sub(1) else {
+                self.job = None;
+                return true;
+            };
+            self.kick_work = left;
+        }
         let boxes = board.labels().len();
         let Some(job) = &mut self.job else {
             // A job that cannot start, because its boxes never move or it
@@ -273,6 +298,7 @@ impl Polish {
                 // goals in the best route, and the jobs then descend from
                 // the kicked route as they did from the runs' best.
                 self.kick_idle += 1;
+                self.kicking = true;
                 let pair = loop {
                     let pair = self.pairs[self.kick];
                     self.kick = (self.kick + 1) % self.pairs.len();

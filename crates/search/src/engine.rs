@@ -422,7 +422,8 @@ pub(crate) struct Engine {
     /// room bound is built.
     memory_mib: usize,
     /// The caller's state limit, which also sets the stage ladder's work
-    /// under a `long_ladder` policy (see [`stage::work`]).
+    /// under a `long_ladder` policy (see [`stage::work`]) and the end
+    /// polish's kick work.
     max_states: usize,
 }
 
@@ -829,7 +830,11 @@ impl Engine {
                 .saturating_sub(self.polished_bytes());
             self.incumbent = None;
             self.arena.release();
-            self.polish = Some(Polish::new(route, status, allowance, boxes));
+            // The kicks may run a polish unit for each state the search
+            // could have expanded, so with no time limit their cost follows
+            // the caller's state limit (docs/route-polish.md).
+            let kick_work = self.max_states;
+            self.polish = Some(Polish::new(route, status, allowance, boxes, kick_work));
         } else {
             self.status = status;
         }
@@ -1406,7 +1411,8 @@ impl Engine {
         let Ok(route) = self.route_to(id) else {
             return false;
         };
-        self.polish = Some(Polish::new(route, Status::Running, allowance, boxes));
+        // An episode never kicks.
+        self.polish = Some(Polish::new(route, Status::Running, allowance, boxes, 0));
         true
     }
     /// The bytes the best episode route holds, which a polisher's allowance
