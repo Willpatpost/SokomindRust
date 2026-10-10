@@ -669,7 +669,9 @@ impl Attempt {
 /// A room that encloses none tries its whole-room table, then, if that
 /// size-failed or its key was too wide, each of its two halves that holds
 /// some but not all of its labels (see `Attempt::split`), and keeps what
-/// builds. A table whose root reaches no goal state is skipped.
+/// builds. A table whose root reaches no goal state is skipped. A
+/// multi-door room's tables are kept only when they raise S at the start
+/// over the rooms already kept (see `conclude`).
 ///
 /// A size failure is a forward search past `cap`, a refused buffer, a table
 /// past the kept limit, or the work budget running out. It marks the room,
@@ -820,7 +822,7 @@ impl RoomBuild {
                 }
             } else {
                 let attempt = self.attempt.take().expect("an attempt");
-                self.conclude(attempt);
+                self.conclude(board, start, attempt);
             }
         }
     }
@@ -889,7 +891,14 @@ impl RoomBuild {
     }
 
     /// Keeps or drops the tables of a finished attempt (see `RoomBuild`).
-    fn conclude(&mut self, attempt: Attempt) {
+    /// A multi-door room's tables are kept only when they raise S at the
+    /// start over the rooms already kept, with the rooms it would replace
+    /// freed: the parts a room's tables count leave the hall part, whose
+    /// charges they displace, and a table that charges less than it frees
+    /// would lower the bound. The one-door rooms keep the build's old
+    /// choice, and the comparison, like the replacement's, is measured at
+    /// the start, not proven for every state.
+    fn conclude(&mut self, board: &Board, start: &State, attempt: Attempt) {
         let Attempt {
             room,
             moves,
@@ -906,8 +915,13 @@ impl RoomBuild {
             self.failed
                 .push((room.cells()[0], width, room.cells().len()));
         }
+        let keep = !tables.is_empty()
+            && (room.doors().len() == 1 || {
+                let with = self.start_sum(board, start, Some((&room, &tables)));
+                let without = self.start_sum(board, start, None);
+                matches!((with, without), (Some(with), Some(without)) if with > without)
+            });
         let Self { built, ledger, .. } = self;
-        let keep = !tables.is_empty();
         if replaces && keep {
             built.retain_mut(|old| {
                 let enclosed = encloses(room.cells(), &old.room);
@@ -928,6 +942,48 @@ impl RoomBuild {
         }
     }
 
+    /// S at the start over the rooms kept, with `room`'s tables standing
+    /// in for the rooms they enclose: the tables' values plus the hall
+    /// part over the parts all of them count, less the start's keeper
+    /// charge (see `RoomBound::root`). `None` when a buffer the sum needs
+    /// does not fit or a projection is missing; a queued start's hall
+    /// part is feasible wherever M is.
+    fn start_sum(
+        &mut self,
+        board: &Board,
+        start: &State,
+        room: Option<(&Room, &[Table])>,
+    ) -> Option<u32> {
+        let mut counted = self.ledger.filled(board.neighbors().len(), false).ok()?;
+        let mut sum = 0u32;
+        let mut add = |room: &Room, tables: &[Table], counted: &mut [bool]| {
+            for table in tables {
+                sum = sum.saturating_add(table.value(room, start)?);
+                for (q, &cell) in room.cells().iter().enumerate() {
+                    if bit(table.part(), q) {
+                        counted[usize::from(cell)] = true;
+                    }
+                }
+            }
+            Some(())
+        };
+        for built in &self.built {
+            if room.is_some_and(|(room, _)| encloses(room.cells(), &built.room)) {
+                continue;
+            }
+            add(&built.room, &built.tables, &mut counted)?;
+        }
+        if let Some((room, tables)) = room {
+            add(room, tables, &mut counted)?;
+        }
+        let hall = Heuristic::hall(board, start.player, &counted);
+        self.ledger.release(counted);
+        Some(
+            sum.saturating_add(hall.estimate(start)?)
+                .saturating_sub(hall.charge(start.player)),
+        )
+    }
+
     /// Ends the build, the work budget spent or every candidate tried: the
     /// room bound of the rooms built, if any.
     fn finish(&mut self, board: &Board, start: &State) -> Option<RoomBound> {
@@ -936,7 +992,7 @@ impl RoomBuild {
                 build.free(&mut self.ledger);
                 attempt.failed = true;
             }
-            self.conclude(attempt);
+            self.conclude(board, start, attempt);
         }
         if self.built.is_empty() {
             return None;

@@ -287,6 +287,12 @@ the rest, and has the cut for its whole boundary — which is to check that
 every cell of the cut stands next to it, since a component's boundary can
 only hold cut cells. These candidates can cross, so the build skips one that
 crosses a room it has built, and the rooms it keeps stay pairwise disjoint.
+A multi-door room's tables are kept only when they raise S at the start over
+the rooms already kept, with the rooms they would replace freed: the parts a
+room's tables count leave the hall part, whose charges they displace, and a
+table that charges less than it frees would lower the bound. The one-door
+rooms keep the build's old choice, and the comparison, like the
+replacement's, is measured at the start, not proven for every state.
 Parts are `u64` bit sets over a room's cells, and a node fits a `u8`.
 
 A table's label set is the labels with a start box or a goal on its part.
