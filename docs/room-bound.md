@@ -1,10 +1,11 @@
 # Room bound design notes
 
 The room bound (`crates/search/src/room_bound.rs` and `room_bound/`) raises
-Optimal's lower bound with exact tables for the board's single-door rooms. The
-module docs say what each part does. This file records why the bound is sound,
-how its build fits the search's memory and time, the measurements behind it,
-with the SLURM job that produced each number, and the approaches it replaced.
+Optimal's lower bound with exact tables for the board's rooms of at most
+three doors. The module docs say what each part does. This file records why
+the bound is sound, how its build fits the search's memory and time, the
+measurements behind it, with the SLURM job that produced each number, and
+the approaches it replaced.
 
 On Grand Hall (`huge`) it raises the start's bound from 214 to 258, and the
 lower bound at 30 s from 238 to 277 at 64 MiB, from 241 to 280 at 256 MiB and
@@ -132,6 +133,47 @@ too, since a move ends on at most one part. The rooms the build keeps are
 pairwise disjoint, and the two tables of a split room have the room's two
 halves as parts, so every part is disjoint from every other.
 
+### Rooms with several doors
+
+A region Q need not have one door. Call every floor cell outside Q next to Q
+a door of Q; the rooms above are the case of exactly one door, which a door
+whose removal splits the floor makes automatic. The same lemmas hold for any
+Q:
+
+- **Lemma 1 never counts doors.** A real step inside Q is a table step. A
+  real step that leaves or enters Q ends on a door, outside Q, so its
+  projection is a step between Q and the one outside node, and a real step
+  that stays outside is no table move at all. A push of a box the projection
+  drops keeps the keeper's node. A LAB box pushed out of Q lands on a door,
+  an exit, and one pushed in leaves a door, an entry. Each move's table cost
+  is its end cell in P or not, whichever door it crosses.
+- **The outside need not be connected.** One node stands for all of it, so
+  the table's keeper moves between doors without walking, and pushes boxes
+  in through any door whose label the count allows. That is a relaxation:
+  it removes cost the real route pays and never adds any, so the table stays
+  admissible, and every real move still maps to an edge of its own cost, so
+  it stays consistent. With one door the floor outside Q is connected
+  because the door splits it in two; with more, the collapse merges
+  components, which frees the keeper further.
+- **An entry needs a live door for its label.** The box an entry brings stood
+  on some door before it entered, and a state with a solution holds every
+  box on a live cell, so an entry whose label is dead at every door never
+  happens and refusing it loses nothing. The doors' alive mask in `table.rs`
+  holds the union.
+
+What more doors cost is strength, never soundness: every door widens the
+relaxation, and a region whose boundary is the whole floor is the board
+itself, whose table is the exact search. Two properties of the one-door
+candidates do not carry over, and the build pays for both:
+
+- **Laminarity.** Two one-door rooms nest or are disjoint, which keeps the
+  built rooms pairwise disjoint. Two regions of several doors can cross,
+  sharing cells without nesting, so a candidate that crosses a built room is
+  skipped (see `candidates`).
+- **The door's identity.** A one-door room's cells fix its door, the one cell
+  outside next to them; a region of several doors fixes only its boundary,
+  which its candidate carries with its cells.
+
 ### The hall part M_hall
 
 M_hall is the assignment heuristic M with every move that ends on C made free.
@@ -207,8 +249,10 @@ consistent, so h = max(M, S) is both. At a goal state, S = 0.
   route (job 49466), such walks are 134 of the 178 moves between the route
   and S at the start: 95 between boxes and 39 turning one. Of the hall's 145
   walk steps, the charges pay 11. The tables count 93 of the 117 moves that
-  end in their room. A room needs one door, and the hall's areas join
-  through several cells, so no table reaches that walking.
+  end in their room. The hall itself is one side of a single door, but its 99
+  cells and 11 boxes are past what a table can hold, and the regions its
+  areas cut into are past its whole-room caps, so their halves reach only
+  part of that walking.
 - Which rooms, parts and labels get tables is a heuristic choice. Any choice is
   sound, as long as the parts are disjoint and every table is built from the
   start's projection.
@@ -217,14 +261,33 @@ consistent, so h = max(M, S) is both. At a goal state, S = 0.
 
 ### Rooms
 
-The candidates are, for each cell of the keeper's floor taken as a door, each
-of its sides but the largest that holds a start box or a goal and has at most
-62 cells. Parts are `u64` bit sets over a room's cells, and a node fits a `u8`.
-A side's flood stops past 62 cells, so a door costs O(62) rather than O(floor).
+The candidates come in two passes (`candidates` in `room_bound.rs`).
 
-The candidates are laminar: any two nest or are disjoint (`candidates` in
-`room_bound.rs` proves it). So one cell of a room built earlier tells whether
+The one-door rooms: for each cell of the keeper's floor taken as a door, each
+of its sides but the largest that holds a start box or a goal and has at most
+62 cells. A side's flood stops past 62 cells, so a door costs O(62) rather
+than O(floor). These candidates are laminar: any two nest or are disjoint,
+which `candidates` proves, so one cell of a room built earlier tells whether
 it holds a candidate, lies inside it, or lies apart from it.
+
+The rooms of at most three doors: a region whose boundary — the floor cells
+outside it next to it — is the cut that isolates it. Their doors come from a
+pool of the floor cells within 62 steps of a box or a goal with two floor
+neighbors at least: a kept region holds a box or a goal, so each of its doors
+stands that close to one, and a cell with one floor neighbor cannot close a
+region that keeps it. Two doors are tried as every pair of pool cells within
+a 62-cell box of each other; three, as the boundary of a two-door candidate
+with one pool cell more, which finds the regions a wider cut of a found
+region isolates. Both run in sorted order under a budget of 8,192 cuts, and a
+pool past 512 cells yields no multi-door candidates at all. Not every
+three-door region is sought: one whose boundary holds no two-door
+candidate's boundary is not grown from. A component of the floor less a cut
+is kept when it is at most 62 cells, holds a marked cell, is no larger than
+the rest, and has the cut for its whole boundary — which is to check that
+every cell of the cut stands next to it, since a component's boundary can
+only hold cut cells. These candidates can cross, so the build skips one that
+crosses a room it has built, and the rooms it keeps stay pairwise disjoint.
+Parts are `u64` bit sets over a room's cells, and a node fits a `u8`.
 
 A table's label set is the labels with a start box or a goal on its part.
 

@@ -573,7 +573,9 @@ fn limited_optimal_bounds_never_pass_the_optimum() {
 
 /// A one-state limit cuts the root expansion short at its first child and
 /// leaves the queue empty. The bound keeps the root's f rather than falling
-/// to g + 1.
+/// to g + 1. The room bound may raise it over a fresh search's key: the
+/// capped advance builds TWO's two-door pocket, whose table a fresh search
+/// has not built, so its key holds M alone.
 #[test]
 fn capped_optimal_bound_keeps_the_interrupted_f() {
     let board = Board::parse(TWO).unwrap();
@@ -589,7 +591,13 @@ fn capped_optimal_bound_keeps_the_interrupted_f() {
     assert_eq!(capped.status(), Status::StateLimit);
     assert_eq!((capped.expanded(), capped.generated()), (1, 1));
     assert_eq!(capped.proof(), None);
-    assert_eq!(capped.lower_bound(), root);
+    assert!(
+        capped
+            .lower_bound()
+            .is_some_and(|bound| (2..=20).contains(&bound) && bound >= root.unwrap()),
+        "{:?} against {root:?}",
+        capped.lower_bound()
+    );
 }
 
 /// All three modes against the BFS oracle on 200 boards from `generate`,

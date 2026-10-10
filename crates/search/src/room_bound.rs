@@ -1,9 +1,9 @@
 //! The room bound of the exact search (docs/room-bound.md).
 //!
-//! Each single-door room Q that holds a start box or a goal gets tables
-//! R(Q, P, LAB) over disjoint parts P of Q (see `table`). The hall heuristic,
-//! which prices the moves that end outside every part, adds to their sum S,
-//! and the exact search queues max(M, S).
+//! Each room of at most `MAX_DOORS` doors that holds a start box or a goal
+//! gets tables R(Q, P, LAB) over disjoint parts P of Q (see `table`). The
+//! hall heuristic, which prices the moves that end outside every part,
+//! adds to their sum S, and the exact search queues max(M, S).
 //!
 //! The tables are built before the search proper, by `RoomBuild`, in slices
 //! the search pays for as pops. The build charges every buffer to the share
@@ -40,6 +40,24 @@ const WORK_PER_CAP: usize = 4;
 const ENCLOSED_SHARE: usize = 16;
 /// The kept tables may take the budget left after the fixed bytes over this.
 const KEPT_SHARE: u64 = 4;
+/// The most doors a room may have. Every door widens the relaxed problem
+/// the tables over the room solve — the keeper leaves and returns at any
+/// of them — so a bound behind many doors says little; three is where the
+/// catalog's regions of the kind still pay (docs/room-bound.md, Rooms
+/// with several doors).
+const MAX_DOORS: usize = 3;
+/// The most cells the door pool may hold before the multi-door candidates
+/// are skipped: the cuts the pool makes are tried in sorted order under a
+/// budget, and a giant pool would only ever reach its start.
+const MAX_POOL: usize = 512;
+/// The most cuts the pool's pairs and the grown three-door cuts may try,
+/// in sorted order. Trying a cut costs one flood of the floor, so a board
+/// with a giant pool cannot try them all.
+const MAX_CUTS: usize = 8_192;
+/// The most cells the multi-door cuts' floods and scans may visit in all,
+/// so the enumeration cannot spend the caller's time on a giant board:
+/// each cut scans the floor once and floods the components it finds.
+const MAX_STEPS: usize = 1 << 21;
 
 // Rooms are disjoint, so there are at most `MAX_CELLS`, each with at most
 // two tables, and the tables' sum fits u32 with room for the hall part.
@@ -48,6 +66,9 @@ const _: () = assert!(2 * MAX_CELLS as u64 * MAX_VALUE as u64 <= u32::MAX as u64
 // stay apart from `NONE`.
 const _: () = assert!(MAX_CELLS << 2 <= NONE as usize);
 
+/// One candidate room: its doors and its cells, both sorted.
+type Candidate = (Vec<Cell>, Vec<Cell>);
+
 /// Whether bit `i` of `mask` is set.
 fn bit(mask: u64, i: usize) -> bool {
     (mask >> i) & 1 != 0
@@ -55,6 +76,7 @@ fn bit(mask: u64, i: usize) -> bool {
 
 /// A room or table that does not fit: the ledger or the allocator refused
 /// a buffer, or the build passed a cap.
+#[derive(Debug)]
 struct SizeFailure;
 
 /// Grown buffers start at this many bytes.
@@ -147,24 +169,53 @@ impl Ledger {
     }
 }
 
-/// The candidate rooms: for each cell of `inside` taken as a door, each
+/// The candidate rooms: the one-door rooms, then the rooms of more doors.
+///
+/// The one-door rooms: for each cell of `inside` taken as a door, each
 /// side of it but the largest that holds a start box or a goal and has at
 /// most `MAX_ROOM` cells. A side is a component of `inside` less the door.
-/// Each comes with its cells sorted, and the list runs narrowest door first
-/// (see `RoomBuild`), by door width, size, door, then first cell.
 ///
-/// The candidates are laminar: any two nest or are disjoint. Let T be
-/// |inside|. A candidate Q is not its door's largest side, and the sides
-/// partition `inside` less the door, so 2|Q| <= T - 1. Suppose Q1 and Q2,
-/// with doors d1 and d2, meet but neither holds the other. Q2 is connected
-/// and has cells in and out of Q1, and d1 is the only cell outside Q1 next
-/// to it, so d1 is in Q2; likewise d2 is in Q1. `inside` less Q1 is d1 and
-/// its other sides, which all touch d1, so it is connected. It misses d2, so
-/// it lies in one side of d2, the one holding d1: Q2. Then |Q1| + |Q2| >= T,
-/// against 2|Q1| <= T - 1 and 2|Q2| <= T - 1. Nor are two candidates equal:
-/// a room's cells fix its door, the one cell outside them next to them. So
-/// a room built before Q holds Q, lies inside Q, or lies apart from it, and
-/// one cell of the smaller of the two tells which.
+/// The one-door candidates are laminar: any two nest or are disjoint. Let
+/// T be |inside|. A candidate Q is not its door's largest side, and the
+/// sides partition `inside` less the door, so 2|Q| <= T - 1. Suppose Q1
+/// and Q2, with doors d1 and d2, meet but neither holds the other. Q2 is
+/// connected and has cells in and out of Q1, and d1 is the only cell
+/// outside Q1 next to it, so d1 is in Q2; likewise d2 is in Q1. `inside`
+/// less Q1 is d1 and its other sides, which all touch d1, so it is
+/// connected. It misses d2, so it lies in one side of d2, the one holding
+/// d1: Q2. Then |Q1| + |Q2| >= T, against 2|Q1| <= T - 1 and
+/// 2|Q2| <= T - 1. Nor are two candidates equal: a room's cells fix its
+/// door, the one cell outside them next to them. So a one-door room built
+/// before Q holds Q, lies inside Q, or lies apart from it, and one cell of
+/// the smaller of the two tells which.
+///
+/// The rooms of more doors, at most `MAX_DOORS`: a region whose boundary —
+/// the floor cells outside it next to it — is the cut that isolates it,
+/// found by `try_cut`. Their doors come from a pool of the floor cells
+/// within `MAX_ROOM` steps of a box or a goal with two floor neighbors at
+/// least: a kept region holds a box or a goal, so each of its doors
+/// stands within `MAX_ROOM` steps of one, and a cell with one floor
+/// neighbor cannot close a region that keeps it, since dropping the cell
+/// leaves its neighbor's region whole. Two doors are tried as every pair
+/// of pool cells within `MAX_ROOM` of each other; three, as the boundary
+/// of a two-door candidate with one pool cell more, which finds the
+/// regions a wider cut of a found region isolates. Both run in sorted
+/// order and stop at `MAX_CUTS` cuts, and a pool past `MAX_POOL` cells
+/// yields no multi-door candidates at all, so a giant board cannot pay
+/// for them. Not every three-door region is sought: one whose boundary
+/// holds no two-door candidate's boundary is not grown from.
+///
+/// A candidate of several doors can cross another — the one-door
+/// candidates nest or are disjoint, but a wider cut can share cells with a
+/// room without holding it — so the build skips a candidate that crosses a
+/// room it has built (see `RoomBuild`), and the rooms it keeps stay
+/// pairwise disjoint, their tables' sum sound.
+///
+/// Each candidate comes with its sorted cells and its sorted doors, and
+/// the list runs the one-door rooms first — in the order the build always
+/// gave them, by boundary width, size, first door, then first cell — and
+/// the wider rooms behind them, so the build tries what it always tried
+/// before anything new, and the new candidates spend only the work left.
 ///
 /// A side's flood stops at more than `MAX_ROOM` cells, so a door costs
 /// O(`MAX_ROOM`) rather than O(|inside|). A side cut off is too large to
@@ -176,20 +227,22 @@ fn candidates(
     start: &State,
     inside: &[bool],
     ledger: &mut Ledger,
-) -> Result<Vec<(Cell, Vec<Cell>)>, SizeFailure> {
+) -> Result<Vec<Candidate>, SizeFailure> {
     let neighbors = board.neighbors();
     let cells = neighbors.len();
     let mut marked = ledger.filled(cells, false)?;
     let goals = board.goals().iter().map(|(cell, _)| cell);
+    let mut seeds = Vec::new();
     for &cell in start.boxes[..board.labels().len()].iter().chain(goals) {
         marked[usize::from(cell)] = true;
+        ledger.push(&mut seeds, cell)?;
     }
     // Per cell, `door << 2 | j` when it is on side j of the last door whose
     // sides reached it (see the const assert on `MAX_CELLS`).
     let mut stamp = ledger.filled(cells, NONE)?;
     // A door's sides, one after another, each its own flood's queue.
     let mut sides = ledger.vec(4 * MAX_ROOM)?;
-    let mut out = Vec::new();
+    let mut out: Vec<Candidate> = Vec::new();
     for door in (0..cells as Cell).filter(|&door| inside[usize::from(door)]) {
         sides.clear();
         // Per side, where it ends in `sides`, and whether it was cut off.
@@ -234,22 +287,235 @@ fn candidates(
                 let mut room = ledger.vec(side.len())?;
                 room.extend_from_slice(side);
                 room.sort_unstable();
-                ledger.push(&mut out, (door, room))?;
+                let mut doors = ledger.vec(1)?;
+                doors.push(door);
+                ledger.push(&mut out, (doors, room))?;
             }
         }
     }
-    ledger.release(marked);
     ledger.release(stamp);
     ledger.release(sides);
-    out.sort_unstable_by_key(|(door, cells)| {
+    // The door pool and the cuts it makes (see the function docs).
+    let total = inside.iter().filter(|&&inside| inside).count();
+    let mut epoch = ledger.filled(cells, 0u32)?;
+    let mut queue = ledger.vec(cells)?;
+    for &seed in &seeds {
+        epoch[usize::from(seed)] = 1;
+        queue.push(seed);
+    }
+    let mut at = 0;
+    while let Some(&cell) = queue.get(at) {
+        at += 1;
+        let depth = epoch[usize::from(cell)];
+        for &next in &neighbors[usize::from(cell)] {
+            if next != NONE && epoch[usize::from(next)] == 0 && depth < MAX_ROOM as u32 {
+                epoch[usize::from(next)] = depth + 1;
+                queue.push(next);
+            }
+        }
+    }
+    let mut pool = Vec::new();
+    for cell in 0..cells {
+        let degree = neighbors[cell].iter().filter(|&&next| next != NONE).count();
+        if inside[cell] && epoch[cell] != 0 && degree >= 2 {
+            ledger.push(&mut pool, cell as Cell)?;
+        }
+    }
+    let mut cuts = Cuts {
+        board,
+        inside,
+        marked: &marked,
+        total,
+        queue,
+        epoch,
+        age: 1 << 20,
+        steps: 0,
+    };
+    let mut cut = ledger.vec(MAX_DOORS)?;
+    let mut tried = 0;
+    if !pool.is_empty() && pool.len() <= MAX_POOL {
+        let width = board.width();
+        let span = |a: Cell, b: Cell| {
+            let (a, b) = (usize::from(a), usize::from(b));
+            (a / width)
+                .abs_diff(b / width)
+                .max((a % width).abs_diff(b % width))
+        };
+        'pairs: for a in 0..pool.len() {
+            for b in (a + 1)..pool.len() {
+                if span(pool[a], pool[b]) > MAX_ROOM {
+                    continue;
+                }
+                tried += 1;
+                if tried > MAX_CUTS {
+                    break 'pairs;
+                }
+                cut.clear();
+                cut.push(pool[a]);
+                cut.push(pool[b]);
+                cuts.try_cut(&cut, &mut out, ledger)?;
+            }
+        }
+        // The three-door cuts: each two-door candidate's doors with one
+        // pool cell more.
+        let mut grown = Vec::new();
+        for (doors, _) in out.iter().filter(|(doors, _)| doors.len() == 2) {
+            ledger.push(&mut grown, (doors[0], doors[1]))?;
+        }
+        'grown: for &(a, b) in &grown {
+            for &extra in &pool {
+                if extra == a || extra == b {
+                    continue;
+                }
+                tried += 1;
+                if tried > MAX_CUTS {
+                    break 'grown;
+                }
+                cut.clear();
+                cut.push(a);
+                cut.push(b);
+                cut.push(extra);
+                cut.sort_unstable();
+                cuts.try_cut(&cut, &mut out, ledger)?;
+            }
+        }
+        ledger.release(grown);
+    }
+    ledger.release(cut);
+    ledger.release(pool);
+    ledger.release(cuts.queue);
+    ledger.release(cuts.epoch);
+    ledger.release(seeds);
+    ledger.release(marked);
+    // The passes find one region through several cuts; the first copy in
+    // cell order stays.
+    out.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    let mut at = 0;
+    while at + 1 < out.len() {
+        if out[at].1 == out[at + 1].1 {
+            let (doors, cells) = out.remove(at + 1);
+            ledger.release(doors);
+            ledger.release(cells);
+        } else {
+            at += 1;
+        }
+    }
+    out.sort_unstable_by_key(|(doors, cells)| {
         (
-            door_width(board, *door, cells),
+            doors.len(),
+            boundary_width(board, doors, cells),
             cells.len(),
-            *door,
+            doors[0],
             cells[0],
         )
     });
     Ok(out)
+}
+
+/// The scratch the multi-door cuts share: the board they cut, the floor
+/// and the marked cells a kept region holds, the flood's stamps and
+/// queue, and the floor's cell count. `candidates` tries one cut at a
+/// time through [`Self::try_cut`], until [`MAX_CUTS`] cuts or
+/// [`MAX_STEPS`] visited cells.
+struct Cuts<'a> {
+    board: &'a Board,
+    inside: &'a [bool],
+    marked: &'a [bool],
+    total: usize,
+    /// Per cell, the pool flood's depth, at most `MAX_ROOM`, then every
+    /// cut's component stamps, which start past every depth and only
+    /// grow.
+    epoch: Vec<u32>,
+    /// The next component's stamp.
+    age: u32,
+    /// The flood's queue.
+    queue: Vec<Cell>,
+    /// The cells the cuts' scans and floods have visited.
+    steps: usize,
+}
+
+impl Cuts<'_> {
+    /// Adds to `out` every component of the floor less `cut` that is a
+    /// candidate: sorted, at most `MAX_ROOM` cells, holding a marked cell,
+    /// no larger than the rest, and with `cut` for its whole boundary. A
+    /// component's boundary can only hold cut cells — any other floor cell
+    /// next to it would be part of it — so the last check is that every
+    /// cell of the cut stands next to the component. The largest
+    /// component floods in full however big, so one cut costs
+    /// O(|inside|); the whole pass stops at [`MAX_STEPS`] cells.
+    fn try_cut(
+        &mut self,
+        cut: &[Cell],
+        out: &mut Vec<Candidate>,
+        ledger: &mut Ledger,
+    ) -> Result<(), SizeFailure> {
+        let neighbors = self.board.neighbors();
+        // The stamps of this cut's components run from `begin` up; an
+        // earlier cut's are older, and the pool's depths younger, so a
+        // cell stamped past `begin` belongs to a component this cut
+        // already flooded.
+        let begin = self.age + 1;
+        for cell in (0..self.inside.len() as Cell).filter(|&cell| self.inside[usize::from(cell)]) {
+            if self.steps >= MAX_STEPS {
+                return Ok(());
+            }
+            self.steps += 1;
+            let first = usize::from(cell);
+            if self.epoch[first] >= begin || cut.contains(&cell) {
+                continue;
+            }
+            self.age += 1;
+            self.queue.clear();
+            self.queue.push(cell);
+            self.epoch[first] = self.age;
+            let mut at = 0;
+            let mut big = false;
+            while let Some(&c) = self.queue.get(at) {
+                at += 1;
+                for &next in &neighbors[usize::from(c)] {
+                    let n = usize::from(next);
+                    if next == NONE || self.epoch[n] >= begin || cut.contains(&next) {
+                        continue;
+                    }
+                    self.epoch[n] = self.age;
+                    self.queue.push(next);
+                    self.steps += 1;
+                    if self.queue.len() > MAX_ROOM {
+                        big = true;
+                        break;
+                    }
+                }
+                if big {
+                    break;
+                }
+            }
+            if big {
+                continue;
+            }
+            let boundary = cut
+                .iter()
+                .filter(|&&door| {
+                    neighbors[usize::from(door)]
+                        .iter()
+                        .any(|&c| c != NONE && self.epoch[usize::from(c)] == self.age)
+                })
+                .count();
+            if boundary != cut.len()
+                || !self.queue.iter().any(|&c| self.marked[usize::from(c)])
+                || 2 * self.queue.len() > self.total - cut.len()
+            {
+                continue;
+            }
+            let mut cells = ledger.vec(self.queue.len())?;
+            cells.extend_from_slice(&self.queue);
+            cells.sort_unstable();
+            let mut doors = ledger.vec(cut.len())?;
+            doors.extend_from_slice(cut);
+            doors.sort_unstable();
+            ledger.push(out, (doors, cells))?;
+        }
+        Ok(())
+    }
 }
 
 /// The heap bytes of the hall part, which has keeper sides like the exact
@@ -273,6 +539,35 @@ fn door_width(board: &Board, door: Cell, cells: &[Cell]) -> u8 {
         .iter()
         .filter(|&&cell| cell != NONE && cells.binary_search(&cell).is_ok())
         .count() as u8
+}
+
+/// The width of a boundary, for the build's order and its poison: the
+/// doors' neighbors in the room summed, the ways a box may enter it. With
+/// one door it is that door's width alone.
+fn boundary_width(board: &Board, doors: &[Cell], cells: &[Cell]) -> u8 {
+    doors
+        .iter()
+        .map(|&door| door_width(board, door, cells))
+        .sum()
+}
+
+/// Whether `a` and `b` share a cell without one holding the other. Both
+/// are sorted; a shared run as long as the shorter list means the shorter
+/// lies in the longer.
+fn crosses(a: &[Cell], b: &[Cell]) -> bool {
+    let (mut i, mut j, mut shared) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            shared += 1;
+            i += 1;
+            j += 1;
+        } else if a[i] < b[j] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    shared > 0 && shared != a.len().min(b.len())
 }
 
 /// A built room and its tables, one or two.
@@ -350,22 +645,24 @@ impl Attempt {
 
 /// The resumable build of the room bound, run before the search proper.
 ///
-/// The candidates go narrowest door first, then smallest. Each is tried
-/// unless:
+/// The candidates go narrowest boundary first, then smallest. Each is
+/// tried unless:
 /// - it lies inside a built room, whose parts already hold its cells;
-/// - it encloses a room whose build size-failed behind a door no wider than
-///   its own, so its own would very likely fail too;
+/// - it crosses a built room, sharing cells without holding it, which only
+///   a multi-door candidate can (see `candidates`);
+/// - it encloses a room whose build size-failed behind a boundary no wider
+///   than its own, so its own would very likely fail too;
 /// - or the rooms it encloses reached more than `cap / ENCLOSED_SHARE`
 ///   states in all.
 ///
-/// A door's width is its number of neighbors in the room. Boxes enter a
-/// room behind a narrower door in fewer ways, so it may hold far fewer
-/// states than a room it encloses behind a wider door. On huge, the 26-cell
-/// room behind a width-1 door builds in 10.3M states per table, while the
-/// 25-cell room inside it, behind a width-3 door, passes the cap or the
-/// memory with both halves. Smallest first, the build paid for those
-/// failures before the outer room; narrowest first builds the outer room,
-/// then skips the inner one, which lies inside it.
+/// A boundary's width is its doors' neighbors in the room summed. Boxes
+/// enter a room behind a narrower boundary in fewer ways, so it may hold
+/// far fewer states than a room it encloses behind a wider one. On huge,
+/// the 26-cell room behind a width-1 door builds in 10.3M states per
+/// table, while the 25-cell room inside it, behind a width-3 door, passes
+/// the cap or the memory with both halves. Smallest first, the build paid
+/// for those failures before the outer room; narrowest first builds the
+/// outer room, then skips the inner one, which lies inside it.
 ///
 /// A room that encloses built rooms tries only its whole-room table, and if
 /// that builds, replaces them: their tables are freed. Otherwise they stay.
@@ -393,7 +690,7 @@ pub(crate) struct RoomBuild {
     /// The keeper's floor, boxes ignored.
     inside: Vec<bool>,
     /// The doors and sorted cells of the candidates, `next..` still to try.
-    candidates: Vec<(Cell, Vec<Cell>)>,
+    candidates: Vec<Candidate>,
     next: usize,
     /// The first cell, door width and size of each room that size-failed.
     failed: Vec<(Cell, u8, usize)>,
@@ -530,34 +827,42 @@ impl RoomBuild {
 
     /// Starts on the next candidate, or skips it (see `RoomBuild`).
     fn begin(&mut self, board: &Board) {
-        let (door, cells) = {
+        let (doors, cells) = {
             let next = &mut self.candidates[self.next];
-            (next.0, take(&mut next.1))
+            (take(&mut next.0), take(&mut next.1))
         };
         self.next += 1;
-        let width = door_width(board, door, &cells);
-        // Rooms nest or are disjoint, so a room meeting this one holds it if
-        // larger and lies inside it if smaller.
+        let width = boundary_width(board, &doors, &cells);
+        // One-door rooms nest or are disjoint, so a room meeting this one
+        // holds it if larger and lies inside it if smaller. A multi-door
+        // candidate can also cross a built room, sharing cells without
+        // holding it or lying inside it; it is skipped, so the built rooms
+        // stay pairwise disjoint and their tables add.
         let poisoned = self.failed.iter().any(|&(cell, failed, size)| {
             width >= failed && size < cells.len() && cells.binary_search(&cell).is_ok()
         });
         let inside_built = self.built.iter().any(|b| {
             b.room.cells().len() > cells.len() && b.room.cells().binary_search(&cells[0]).is_ok()
         });
+        let crossing = self.built.iter().any(|b| crosses(&cells, b.room.cells()));
         let (mut replaces, mut reached, mut kept) = (false, 0, 0);
         for built in self.built.iter().filter(|b| encloses(&cells, &b.room)) {
             replaces = true;
             reached += built.reached();
             kept += built.kept();
         }
-        if inside_built || poisoned || reached > self.cap / ENCLOSED_SHARE {
+        if inside_built || crossing || poisoned || reached > self.cap / ENCLOSED_SHARE {
+            self.ledger.release(doors);
             self.ledger.release(cells);
             return;
         }
-        // The room takes over the candidate's charged cells. Its index and
-        // moves are small, so they are charged once built.
-        let (first, charged) = (cells[0], cells.capacity() * size_of::<Cell>());
-        let room = Room::new(board, door, cells);
+        // The room takes over the candidate's charged cells and doors. Its
+        // index and moves are small, so they are charged once built.
+        let (first, charged) = (
+            cells[0],
+            (cells.capacity() + doors.capacity()) * size_of::<Cell>(),
+        );
+        let room = Room::new(board, doors, cells);
         let moves = Moves::new(board, &room, &self.inside);
         let tables = Vec::with_capacity(2);
         let bytes = room.bytes() - charged + moves.bytes() + tables.capacity() * size_of::<Table>();
@@ -734,5 +1039,85 @@ impl RoomBound {
             .hall
             .child_estimate(parent_hall, &mut cache.group, parent, i, to, d)?;
         Some(tables + hall)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Status, engine::Engine, engine::Policy};
+
+    /// The keeper's floor with boxes ignored, as `RoomBuild::new` floods.
+    fn inside(board: &Board, start: &State) -> Vec<bool> {
+        let neighbors = board.neighbors();
+        let mut inside = vec![false; neighbors.len()];
+        let mut queue = vec![start.player];
+        inside[usize::from(start.player)] = true;
+        while let Some(cell) = queue.pop() {
+            for &next in &neighbors[usize::from(cell)] {
+                if next != NONE && !inside[usize::from(next)] {
+                    inside[usize::from(next)] = true;
+                    queue.push(next);
+                }
+            }
+        }
+        inside
+    }
+
+    /// A ledger whose limits no test buffer reaches.
+    fn ledger() -> Ledger {
+        Ledger {
+            live: 0,
+            limit: 1 << 22,
+            kept: 0,
+            kept_limit: 1 << 22,
+        }
+    }
+
+    #[test]
+    fn only_overlaps_without_nesting_cross() {
+        let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
+        let a = list(&[1, 2, 3]);
+        assert!(crosses(&a, &list(&[2, 3, 4])));
+        assert!(!crosses(&a, &list(&[1, 2, 3])));
+        assert!(!crosses(&a, &list(&[4, 5, 6])));
+        assert!(!crosses(&a, &list(&[1, 2])));
+        assert!(!crosses(&a, &list(&[2, 3])));
+    }
+
+    /// A pocket behind a two-cell neck: no single cell of the neck splits
+    /// the floor, so only the pair pass of `candidates` finds it. The
+    /// pocket holds box A and its goal, the main area box B, its goal and
+    /// the keeper.
+    #[test]
+    fn a_pocket_behind_two_doors_is_a_candidate() {
+        let board = Board::parse("OOOOOOOO\nO   b  O\nOaA B  O\nOOO ROOO\nOOOOOOOO").unwrap();
+        let start = board.initial();
+        let mut ledger = ledger();
+        let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
+        let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
+        let (pocket, neck) = (list(&[9, 10, 17, 18]), list(&[11, 19]));
+        assert!(
+            found
+                .iter()
+                .any(|(doors, cells)| *doors == neck && *cells == pocket),
+            "among {} candidates",
+            found.len()
+        );
+    }
+
+    /// The pocket's table prices the push that ends in it and the step to
+    /// its stand does not, and Exact proves the board's optimum, so the
+    /// bound never passes it.
+    #[test]
+    fn the_pocket_bound_stays_below_the_optimum() {
+        let board = Board::parse("OOOOOOOO\nO   b  O\nOaA B  O\nOOO ROOO\nOOOOOOOO").unwrap();
+        let mut engine =
+            Engine::new(board.clone(), board.initial(), Policy::EXACT, 1_000, 16).unwrap();
+        while engine.status() == Status::Running {
+            engine.advance(1 << 20);
+        }
+        assert_eq!(engine.status(), Status::Solved);
+        assert_eq!(engine.best_moves(), Some(3));
     }
 }

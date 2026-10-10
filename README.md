@@ -274,9 +274,12 @@ from the start, as plain PEA* does, raised the 64 MiB sum to 3435, but took
 starting at half the limit lowered one at 1 GiB.
 
 Before its search proper, Optimal builds the room bound (`docs/room-bound.md`).
-Each single-door room that holds a box or a goal gets exact tables of the moves
-that end inside it, in a relaxed problem that keeps only some labels' boxes in
-the room and lets them enter through the door for free. Tables over disjoint
+Each room of at most three doors that holds a box or a goal gets exact
+tables of the moves that end inside it, in a relaxed problem that keeps only
+some labels' boxes in the room and lets them enter through a door for free;
+the one-door rooms come from each floor cell taken as a door, the wider from
+pairs of cells near a box or a goal and from the boundaries of the rooms
+already found. Tables over disjoint
 parts add, and so does the estimate with every move that ends in a part made
 free. Optimal queues each state by the larger of that sum and the estimate,
 which stays admissible and consistent, and prunes a state a table has no entry

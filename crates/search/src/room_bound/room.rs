@@ -1,16 +1,22 @@
 //! A room's geometry, and the keeper's moves its tables are built over.
 //!
-//! A room Q is a side of its door: a component of the keeper's floor, boxes
-//! ignored, once the door is taken out (see `candidates`). So the door is
-//! the only cell outside Q next to Q, and every other side of the door
-//! touches it: the floor outside Q is connected. In the relaxed problem of
-//! a table no box lies outside Q, so the keeper walks anywhere there for
-//! free, and one node stands for all of it. The keeper's nodes are the Q
-//! indices `0..n`, then `n` for the floor outside Q.
+//! A room Q is a region of the keeper's floor, boxes ignored, whose
+//! boundary — every floor cell outside Q next to Q — is its doors, at most
+//! a few (see `candidates` in the parent module). With one door Q is a
+//! side of it: a component of the floor once the door is taken out, and
+//! every other side of the door touches it, so the floor outside Q is
+//! connected. With more doors neither holds: no door need be an
+//! articulation point, and the outside may fall into several components.
+//! In the relaxed problem of a table no box lies outside Q, so the keeper
+//! walks anywhere there for free, and one node stands for all of it;
+//! merging the outside's parts is another freedom the table's costs do
+//! not count, so the tables stay lower bounds (see docs/room-bound.md,
+//! Rooms with several doors). The keeper's nodes are the Q indices
+//! `0..n`, then `n` for the floor outside Q.
 //!
-//! Index `n` also names the door as a box's cell: a push out of Q can only
-//! land on the door, and a push into Q, an entry, can only start from it.
-//! An entry leaves the keeper on the door, node `n`.
+//! Index `n` also names the doors as a box's cell: a push out of Q can
+//! only land on a door, and a push into Q, an entry, can only start from
+//! one. An entry leaves the keeper on its door, node `n`.
 use super::bit;
 use sokomind_core::{Board, Cell, NONE, OPPOSITE, State};
 use std::mem::size_of;
@@ -21,10 +27,12 @@ const NOT: u8 = u8::MAX;
 /// and a node fits a u8.
 pub(super) const MAX_ROOM: usize = 62;
 
-/// One room Q: its door and its cells, which every table over Q shares.
+/// One room Q: its doors and its cells, which every table over Q shares.
 /// A built table keeps its room, so the room's bytes count while it lives.
 pub(super) struct Room {
-    door: Cell,
+    /// The doors, sorted: the floor cells outside Q next to Q, which the
+    /// candidate that made the room listed.
+    doors: Vec<Cell>,
     /// Q's cells in increasing order; a cell's position is its Q index.
     cells: Vec<Cell>,
     /// Per board cell, its Q index, or `NOT`.
@@ -32,19 +40,28 @@ pub(super) struct Room {
 }
 
 impl Room {
-    /// The room on side `cells` of `door` (see the module docs).
-    pub(super) fn new(board: &Board, door: Cell, mut cells: Vec<Cell>) -> Self {
+    /// The room on `cells` behind `doors` (see the module docs). `doors`
+    /// must hold every floor cell outside the room next to it, which is
+    /// what the tables' entries and exits cross; both lists are sorted
+    /// here.
+    pub(super) fn new(board: &Board, mut doors: Vec<Cell>, mut cells: Vec<Cell>) -> Self {
         debug_assert!(!cells.is_empty() && cells.len() <= MAX_ROOM);
+        debug_assert!(!doors.is_empty());
+        doors.sort_unstable();
         cells.sort_unstable();
         let mut index = vec![NOT; board.neighbors().len()];
         for (q, &cell) in cells.iter().enumerate() {
             index[usize::from(cell)] = q as u8;
         }
-        Self { door, cells, index }
+        Self {
+            doors,
+            cells,
+            index,
+        }
     }
 
-    pub(super) fn door(&self) -> Cell {
-        self.door
+    pub(super) fn doors(&self) -> &[Cell] {
+        &self.doors
     }
 
     pub(super) fn cells(&self) -> &[Cell] {
@@ -75,21 +92,25 @@ impl Room {
 
     /// The heap bytes the room holds.
     pub(super) fn bytes(&self) -> usize {
-        self.cells.capacity() * size_of::<Cell>() + self.index.capacity()
+        self.doors.capacity() * size_of::<Cell>()
+            + self.cells.capacity() * size_of::<Cell>()
+            + self.index.capacity()
     }
 
-    /// Q split at the door's line: across the line through the door's
-    /// first neighbor in Q, by column when that neighbor is above or below
-    /// the door, else by row. The neighbor's side is the second half. The
-    /// first half is empty when no cell of Q lies before that line.
+    /// Q split at its first door's line: across the line through that
+    /// door's first neighbor in Q, by column when that neighbor is above
+    /// or below the door, else by row. The neighbor's side is the second
+    /// half. The first half is empty when no cell of Q lies before that
+    /// line.
     pub(super) fn halves(&self, board: &Board) -> [u64; 2] {
+        let door = self.doors[0];
         let neighbors = board.neighbors();
         let (d, inner) = (0..OPPOSITE.len())
             .find_map(|d| {
-                let r = neighbors[usize::from(self.door)][d];
+                let r = neighbors[usize::from(door)][d];
                 (r != NONE && self.index[usize::from(r)] != NOT).then_some((d, r))
             })
-            .expect("a room touches its door");
+            .expect("a room touches its doors");
         let width = board.width();
         let line = |cell: Cell| {
             if d < 2 {
@@ -187,8 +208,8 @@ pub(super) struct Moves {
 }
 
 impl Moves {
-    /// The moves of `room`, whose door is a cell of `inside`, the keeper's
-    /// floor with boxes ignored.
+    /// The moves of `room`, whose doors are cells of `inside`, the
+    /// keeper's floor with boxes ignored.
     pub(super) fn new(board: &Board, room: &Room, inside: &[bool]) -> Self {
         let neighbors = board.neighbors();
         let (mut steps, mut pushes, mut entries) = (Vec::new(), Vec::new(), Vec::new());
@@ -213,7 +234,7 @@ impl Moves {
                 if xi != NOT {
                     pushes.push((u, (xi, room.node(t) as u8)));
                 } else if ti != NOT {
-                    // `x` is outside Q and next to it, so it is the door.
+                    // `x` is outside Q and next to it, so it is a door.
                     entries.push((u, ti));
                 }
             }

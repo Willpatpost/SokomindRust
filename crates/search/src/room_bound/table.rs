@@ -2,8 +2,8 @@
 //!
 //! The relaxed problem of a table keeps only the boxes of labels LAB that
 //! are inside room Q. The keeper walks the floor outside Q for free, a box
-//! of LAB may enter through the door while the board has one to spare, and
-//! a box leaves by a push onto the door. A goal state has the boxes of LAB
+//! of LAB may enter through a door while the board has one to spare, and
+//! a box leaves by a push onto a door. A goal state has the boxes of LAB
 //! in Q on exactly Q's goals of their labels. A move counts when it ends
 //! with the keeper on a cell of part P. The table holds, for each state
 //! reachable from the start's projection that reaches a goal state, the
@@ -36,7 +36,7 @@
 use super::room::{Moves, Room};
 use super::{Ledger, SizeFailure, bit};
 use crate::{arena::mix, heuristic::Heuristic};
-use sokomind_core::{Board, MAX_BOXES, NONE, OPPOSITE, State};
+use sokomind_core::{Board, Cell, MAX_BOXES, NONE, OPPOSITE, State};
 use std::mem::{size_of, take};
 
 /// An empty slot of `Values`.
@@ -266,8 +266,9 @@ struct Rules {
     /// Q's cell count, and the bits a code takes.
     n: usize,
     width: usize,
-    /// Per Q index, then `n` for the door, bit c set when a lone box of
-    /// code c there can still reach a goal of its label.
+    /// Per Q index, then `n` for the doors, bit c set when a lone box of
+    /// code c there — at some door, for `n` — can still reach a goal of
+    /// its label.
     alive: Vec<u64>,
     /// Per code, the Q indices where a lone box of that code is alive but
     /// can't leave Q over live cells: more such boxes than goals in Q is a
@@ -629,18 +630,23 @@ impl TableBuild {
         let total: Vec<u32> = (0..=k)
             .map(|c| slots.iter().filter(|&&x| usize::from(x) == c).count() as u32)
             .collect();
-        let alive: Vec<u64> = room
-            .cells()
-            .iter()
-            .copied()
-            .chain([room.door()])
-            .map(|cell| {
-                (1..=k)
-                    .filter(|&c| !heuristic.dead(rep[c], cell))
-                    .fold(0, |mask, c| mask | (1 << c))
-            })
-            .collect();
-        // A cell next to Q is in Q or is the door, node `n`.
+        let alive_at = |cell: Cell| {
+            (1..=k)
+                .filter(|&c| !heuristic.dead(rep[c], cell))
+                .fold(0, |mask, c| mask | (1 << c))
+        };
+        // The doors come last, as node `n`: alive for a code when a lone
+        // box of it on some door can still reach a goal, since the box an
+        // entry brings stood on one of them, and a state with a solution
+        // holds every box on a live cell.
+        let mut alive: Vec<u64> = room.cells().iter().map(|&cell| alive_at(cell)).collect();
+        alive.push(
+            room.doors()
+                .iter()
+                .map(|&door| alive_at(door))
+                .fold(0, |some, door| some | door),
+        );
+        // A cell next to Q is in Q or a door of it, node `n`.
         let neighbors = board.neighbors();
         let near: Vec<[u8; 4]> = room
             .cells()
