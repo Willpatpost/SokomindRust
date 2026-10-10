@@ -1912,30 +1912,42 @@ mod tests {
     }
 
     /// A state reserves a 12-byte record, two bytes per box, an 8-byte queue
-    /// entry and 8 to 16 bytes of table, so no budget holds a full
-    /// `MAX_STATES`, from one box to `MAX_BOXES` on `MAX_CELLS` cells, with
-    /// or without keeper sides' larger tables, and the bytes reserved for
-    /// the limit that fits stay within the budget. Every budget is sized
-    /// without allocating, through [`Arena::capacity`]: an arena at the top
-    /// would reserve chunk lists for millions of the four-record chunks unit
-    /// tests use.
+    /// entry and 8 to 16 bytes of table, so the first budget that holds a
+    /// full `MAX_STATES` depends on the box count and the target. From one
+    /// box to `MAX_BOXES` on `MAX_CELLS` cells, with
+    /// or without keeper sides' larger tables: every budget below the first
+    /// that holds the full limit scales it to what fits, its bytes reserved
+    /// within the budget, and that budget and every larger one hold exactly
+    /// the limit, so a full search ends `MemoryLimit` below it and
+    /// `StateLimit` from it on. Every budget is sized without allocating,
+    /// through [`Arena::capacity`]: an arena at the top would reserve chunk
+    /// lists for millions of the four-record chunks unit tests use.
     #[test]
-    fn memory_binds_a_full_limit_at_every_budget() {
-        for memory_mib in MEMORY_MIB_RANGE {
-            for (cells, boxes, sides) in [
-                (4, 1, false),
-                (MAX_CELLS, 1, false),
-                (4, MAX_BOXES, false),
-                (MAX_CELLS, MAX_BOXES, false),
-                (MAX_CELLS, MAX_BOXES, true),
-            ] {
-                let fixed = fixed_bytes(cells, boxes, sides);
+    fn memory_binds_a_full_limit_below_the_budget_that_holds_it() {
+        for (cells, boxes, sides) in [
+            (4, 1, false),
+            (MAX_CELLS, 1, false),
+            (4, MAX_BOXES, false),
+            (MAX_CELLS, MAX_BOXES, false),
+            (MAX_CELLS, MAX_BOXES, true),
+        ] {
+            let fixed = fixed_bytes(cells, boxes, sides);
+            let mut held = false;
+            for memory_mib in MEMORY_MIB_RANGE {
                 let capacity = Arena::capacity(fixed, boxes, MAX_STATES, memory_mib).unwrap();
-                assert!(
-                    capacity.limit < MAX_STATES,
-                    "{cells} cells, {boxes} boxes, sides {sides}, {memory_mib} MiB"
-                );
                 assert!(capacity.bytes <= memory_mib << 20);
+                held |= capacity.limit == MAX_STATES;
+                if held {
+                    assert_eq!(
+                        capacity.limit, MAX_STATES,
+                        "{cells} cells, {boxes} boxes, sides {sides}, {memory_mib} MiB"
+                    );
+                } else {
+                    assert!(
+                        capacity.limit < MAX_STATES,
+                        "{cells} cells, {boxes} boxes, sides {sides}, {memory_mib} MiB"
+                    );
+                }
             }
         }
     }

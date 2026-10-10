@@ -119,7 +119,7 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `deploy` | NGINX configuration |
 | `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |
 | `benchmarks` | Reviewed benchmark baselines (see Validation) |
-| `docs` | Design notes for the stage ladder, the sealed-corral check, route polish and the room bound: why each looks the way it does, and the measurements behind it |
+| `docs` | Design notes for the stage ladder, the sealed-corral check, route polish, the room bound and its hall abstraction: why each looks the way it does, and the measurements behind it |
 | `Dockerfile`, `compose.yaml` | Images and the full stack (see Full stack with Docker) |
 | `.github/workflows/ci.yml` | CI (see Validation) |
 
@@ -440,15 +440,18 @@ Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
 are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
 per arena (`sokomind_search::MAX_STATES`), 1024 MiB accounted search storage, and
 one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration),
-and take 128 MiB when they name no budget. The search crate, and so the browser
-worker, accepts budgets up to 1024 MiB too, so the web app sends the full state
-cap and the budget its memory select names (16 to 1024 MiB, 64 by default) to
-either engine. A state costs a 12-byte record, 2 bytes per box, an 8-byte queue
-entry, and 8 to 16 bytes of index table, so the memory budget always binds
+and take 128 MiB when they name no budget. The search crate accepts budgets up
+to 4095 MiB in the browser worker, the wasm32 ceiling, and 32768 MiB natively,
+so the web app sends the full state cap and the budget its memory select names
+(16 to 1024 MiB, 64 by default) to either engine. A state costs a 12-byte
+record, 2 bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index
+table, so every budget the server, the worker and the web app can name binds
 before the state cap: on the catalog's boards 64 MiB holds about 0.91-2.10M
 states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a run that fills its
-arena reports a memory limit. The arena holds at most the smaller of the state
-cap and what the budget holds. Records and their queue entries grow in blocks of
+arena reports a memory limit. A native budget past what holds the full state
+cap — 32768 MiB holds it at every box count — instead ends a full arena at the
+state limit, and the room bound's tables take what such a budget leaves. The
+arena holds at most the smaller of the state cap and what the budget holds. Records and their queue entries grow in blocks of
 2^16 as the search fills them, and the index table has two sizes: it starts at
 2^16 slots (256 KiB), or its full size when that is smaller, and grows straight
 to its full size once more than half full. None passes the budget, so a small

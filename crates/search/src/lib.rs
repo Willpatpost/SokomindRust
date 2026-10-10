@@ -85,28 +85,46 @@ use std::ops::RangeInclusive;
 /// in queue keys, records and the state table, with the all-ones id
 /// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
-/// queue entry and 8 to 16 bytes of index table, so no budget in
-/// [`MEMORY_MIB_RANGE`] holds this many: 1024 MiB, its end, holds 11,177,698
-/// states at `MAX_BOXES` boxes on `MAX_CELLS` cells (11,167,215 in Optimal,
-/// whose heuristic tables are larger) and 33,554,431 at one box (the engine
-/// test `memory_binds_a_full_limit_at_every_budget`). A search that fills a
-/// request at this limit therefore ends with [`Status::MemoryLimit`], never
-/// [`Status::StateLimit`]. Records, the queue and the table are allocated
-/// only as the search fills them, so one that ends early, as on a small
-/// board, allocates little of its budget.
+/// queue entry and 8 to 16 bytes of index table, so whether a budget in
+/// [`MEMORY_MIB_RANGE`] holds this many depends on the box count and the
+/// target: 1024 MiB holds 11,177,698 states at `MAX_BOXES` boxes on
+/// `MAX_CELLS` cells (11,167,215 in Optimal, whose heuristic tables are
+/// larger) and 33,554,431 at one box (the engine test
+/// `memory_binds_a_full_limit_below_the_budget_that_holds_it`); the range's
+/// wasm end holds the full limit at one box but not at `MAX_BOXES`; and its
+/// native end, 32768 MiB, holds the full limit at every box count, leaving
+/// what it does not spend on records to the room bound's tables. A search
+/// that fills a request at this limit therefore ends with
+/// [`Status::MemoryLimit`] at a budget that cannot hold it, and
+/// [`Status::StateLimit`] at one that can. Records, the queue and the table
+/// are allocated only as the search fills them, so one that ends early, as
+/// on a small board, allocates little of its budget.
 pub const MAX_STATES: usize = 60_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
 pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;
 /// The `memory_mib` budgets [`Search::new`] accepts. A caller may cap
-/// requests lower but never below this range's start. No budget holds a
-/// full [`MAX_STATES`] (see there for the per-state cost), so a larger budget
-/// raises a full limit's scaled-down state count all the way to this range's
-/// end.
-pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=1024;
-// Below 4 GiB, so a budget in bytes, and every count the arena allocates
-// within it, fits a usize on wasm32.
-const _: () = assert!(*MEMORY_MIB_RANGE.end() < 4096);
+/// requests lower but never below this range's start. The target picks the
+/// end: on wasm32 a budget's bytes, and the reservation the arena reports
+/// for the limit it sizes, are a 32-bit usize and the linear memory the
+/// search runs in tops out below 4 GiB, so there the end is 4095 MiB, while
+/// a native search may name up to 32768 MiB, above the most a full
+/// [`MAX_STATES`] arena of `MAX_BOXES`-box states and its index table
+/// charge (see there). The server caps requests far below either end
+/// (`MEMORY_MIB` in crates/server/src/solve.rs) and the web app's memory
+/// select below that, so only the native corpus example and probe runs name
+/// the upper budgets, whose room beyond a full arena the room bound's
+/// tables take.
+pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = 4..=MAX_MEMORY_MIB;
+/// The range's end on 64-bit targets; see [`MEMORY_MIB_RANGE`].
+#[cfg(target_pointer_width = "64")]
+const MAX_MEMORY_MIB: usize = 32_768;
+/// The range's end on wasm32, whose usize and linear memory top out below
+/// 4 GiB.
+#[cfg(target_pointer_width = "32")]
+const MAX_MEMORY_MIB: usize = 4095;
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(MAX_MEMORY_MIB < 4096);
 
 /// Which search [`Search::new`] runs. Only `Optimal` can produce a [`Proof`].
 /// [`Mode::as_str`] gives its wire name: the server's `mode` field, the WASM

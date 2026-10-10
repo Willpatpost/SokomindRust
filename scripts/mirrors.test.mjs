@@ -180,7 +180,7 @@ test("decodeHealth reads api.rs's health reply, which CI's smoke test polls for"
 test('the #memory select offers only budgets within MEMORY_MIB, up to its cap', () => {
   const memory = items('web/index.html', /<select id="memory">([\s\S]*?)<\/select>/, /value="(\d+)"/g).map(Number);
   const cap = read('crates/server/src/solve.rs', /const MEMORY_MIB: RangeInclusive<usize> = \*MEMORY_MIB_RANGE\.start\(\)\.\.=(\d+);/);
-  const floor = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = (\d+)\.\.=\d+;/);
+  const floor = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = (\d+)\.\.=MAX_MEMORY_MIB;/);
   assert.equal(Math.max(...memory), cap);
   assert.ok(Math.min(...memory) >= floor, `#memory offers less than MEMORY_MIB_RANGE's ${floor} MiB start`);
 });
@@ -404,11 +404,17 @@ test('protocol.ts and the README quote sokomind_search::MAX_STATES', () => {
 });
 
 test("the README and protocol.ts quote the ends of the search crate's limit ranges", () => {
-  const floor = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = (\d+)\.\.=\d+;/);
-  const top = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = \d+\.\.=(\d+);/);
+  const floor = read('crates/search/src/lib.rs', /pub const MEMORY_MIB_RANGE: RangeInclusive<usize> = (\d+)\.\.=MAX_MEMORY_MIB;/);
+  const native = read('crates/search/src/lib.rs', /#\[cfg\(target_pointer_width = "64"\)\]\nconst MAX_MEMORY_MIB: usize = ([\d_]+);/);
+  const wasm = read('crates/search/src/lib.rs', /#\[cfg\(target_pointer_width = "32"\)\]\nconst MAX_MEMORY_MIB: usize = ([\d_]+);/);
   const states = read('crates/search/src/lib.rs', /pub const MAX_STATES_RANGE: RangeInclusive<usize> = (\d+)\.\.=MAX_STATES;/);
-  assert.equal(read('README.md', /accepts budgets up to (\d+) MiB/), top);
-  assert.equal(read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers\s+\*\s+and both engines accept/), top);
+  assert.equal(read('README.md', /budgets up to (\d+) MiB in the browser worker/), wasm);
+  assert.equal(read('README.md', /the wasm32 ceiling, and (\d+) MiB natively/), native);
+  assert.equal(read('README.md', /(\d+) MiB holds it at every box count/), native);
+  assert.ok(
+    read('web/src/protocol.ts', /(\d+) MiB, the largest budget the #memory select offers\s+\*\s+and both engines accept/) <= wasm,
+    'the #memory select offers a budget the browser worker refuses',
+  );
   assert.equal(read('README.md', /state, and (\d+) MiB and cap/), floor);
   assert.equal(read('README.md', /ms, (\d+) state, and/), states);
 });

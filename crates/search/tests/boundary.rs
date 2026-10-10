@@ -96,7 +96,10 @@ fn limits_follow_the_exported_ranges() {
 }
 
 /// The WASM search throws these texts when it refuses to start or a route
-/// rebuild fails, so the typed variants keep the old wording. `TooLong` is
+/// rebuild fails, so the typed variants keep the old wording. The `Limits`
+/// text names the target's `MEMORY_MIB_RANGE` end, 32768 here and 4095 on
+/// wasm32, which only the native corpus example and probe runs can exceed.
+/// `TooLong` is
 /// only a guard now: `web/src/solver.worker.ts` never rebuilds a best past
 /// `MAX_ROUTE`, and it and POST /api/solve check the replay limit first and
 /// report `ReplayError::PastLimit`'s text instead.
@@ -105,7 +108,7 @@ fn search_errors_keep_their_messages() {
     let cases = [
         (
             SearchError::Limits.to_string(),
-            "Use 1..60000000 states and 4..1024 MiB",
+            "Use 1..60000000 states and 4..32768 MiB",
         ),
         (
             SearchError::BudgetTooSmall.to_string(),
