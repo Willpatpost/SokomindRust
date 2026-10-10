@@ -399,6 +399,15 @@ and what it measured. These were rejected, for soundness or by measurement:
 - Sokomind2's linear-conflict and interaction-boost terms, and goal cuts as a
   heuristic term: none is a lower bound, and the first two gave a false optimal
   proof and a false bound there.
+- A table over an abstraction of a region past the exact tables' cell cap —
+  Grand Hall's 99-cell hall — with its cells cut into zones, a state the
+  per-zone count of each label's boxes and the keeper's zone, and moves that
+  mirror the real ones at the cost of the cell they end on: sound by the
+  room tables' own lemmas, and it built and passed the oracle checks, but
+  freeing its zones from the hall part cost more per-push charge than the
+  zone crossings it charged back — a box pushed many times within one zone
+  or teleported out and in pays it little — so the keep test dropped it on
+  every board tried, Grand Hall included (`docs/hall-abstraction.md`).
 - Starting each expansion's assignment solve from the goal potentials its
   label group's last solve left, instead of from zero: the estimates stay
   exact and every counter matched, but it was slower in every mode (job

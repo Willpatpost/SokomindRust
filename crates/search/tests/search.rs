@@ -158,11 +158,17 @@ fn assert_route(board: &Board, route: &str, moves: u32, context: &str) {
 /// node count. With `must_finish`, a limit is a failure; otherwise a run cut
 /// short by one only has to stay consistent. Every run must keep the stats'
 /// accounting identities.
-fn engines_agree(board: &Board, rows: &str, optimum: Option<u32>, must_finish: bool) -> usize {
+fn engines_agree(
+    board: &Board,
+    rows: &str,
+    optimum: Option<u32>,
+    must_finish: bool,
+    states: usize,
+) -> usize {
     let mut full = 1;
     for mode in Mode::ALL {
         let context = format!("{mode:?} on {rows:?}");
-        let mut search = drive(board, mode, 20_000, optimum, &context);
+        let mut search = drive(board, mode, states, optimum, &context);
         assert_consistent(board, &mut search, optimum, &context);
         let stats = search.stats();
         assert_eq!(
@@ -361,7 +367,6 @@ fn room_board(rng: &mut Lcg) -> String {
     rows.push(wall);
     rows.join("\n")
 }
-
 /// The names the server API and the wasm worker exchange with their clients.
 #[test]
 fn mode_and_status_names_are_stable() {
@@ -404,7 +409,7 @@ fn engines_agree_with_bfs_on_fixed_boards() {
     for (rows, optimum) in BOARDS.into_iter().chain(reordered) {
         let board = Board::parse(rows).unwrap();
         assert_eq!(bfs(&board), optimum, "{rows:?}");
-        engines_agree(&board, rows, optimum, true);
+        engines_agree(&board, rows, optimum, true, 20_000);
     }
 }
 
@@ -603,8 +608,11 @@ fn capped_optimal_bound_keeps_the_interrupted_f() {
 /// All three modes against the BFS oracle on 200 boards from `generate`,
 /// plus two limited exact runs per board. Boards whose oracle would see more
 /// than 10,000 states are skipped to keep the test fast in debug builds.
-/// Returns how many of the boards tested were solvable and unsolvable.
-fn engines_agree_on_generated(generate: fn(&mut Lcg) -> String) -> (usize, usize) {
+/// `states` is each run's state limit, floored high enough that the room
+/// bound's build, which the search pays for as pops, gets to finish: a
+/// search that solves or exhausts early stops paying it. Returns how many
+/// of the boards tested were solvable and unsolvable.
+fn engines_agree_on_generated(generate: fn(&mut Lcg) -> String, states: usize) -> (usize, usize) {
     let mut rng = Lcg(1);
     let (mut solvable, mut unsolvable) = (0, 0);
     for _ in 0..200 {
@@ -617,7 +625,7 @@ fn engines_agree_on_generated(generate: fn(&mut Lcg) -> String) -> (usize, usize
             Some(_) => solvable += 1,
             None => unsolvable += 1,
         }
-        let full = engines_agree(&board, &rows, optimum, false);
+        let full = engines_agree(&board, &rows, optimum, false, states);
         // Stop the exact engine midway and one node short of finishing.
         for max_states in [full / 2, full - 1] {
             if max_states == 0 {
@@ -633,7 +641,7 @@ fn engines_agree_on_generated(generate: fn(&mut Lcg) -> String) -> (usize, usize
 
 #[test]
 fn engines_agree_with_bfs_on_generated_boards() {
-    let (solvable, unsolvable) = engines_agree_on_generated(random_board);
+    let (solvable, unsolvable) = engines_agree_on_generated(random_board, 20_000);
     assert!(
         solvable >= 40 && unsolvable >= 40,
         "{solvable} solvable, {unsolvable} unsolvable"
@@ -645,7 +653,7 @@ fn engines_agree_with_bfs_on_generated_boards() {
 /// incumbent) against the oracle.
 #[test]
 fn engines_agree_with_bfs_on_generated_room_boards() {
-    let (solvable, unsolvable) = engines_agree_on_generated(room_board);
+    let (solvable, unsolvable) = engines_agree_on_generated(room_board, 20_000);
     assert!(
         solvable >= 60 && unsolvable >= 80,
         "{solvable} solvable, {unsolvable} unsolvable"
