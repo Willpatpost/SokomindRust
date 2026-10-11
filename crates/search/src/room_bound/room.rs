@@ -49,6 +49,16 @@ impl Room {
         debug_assert!(!doors.is_empty());
         doors.sort_unstable();
         cells.sort_unstable();
+        // `candidates` checks that the doors name the room's whole
+        // boundary; hold it here too, so a generator that stops checking
+        // cannot quietly make tables whose boundary it lied about.
+        debug_assert!(cells.iter().all(|&c| {
+            board.neighbors()[usize::from(c)].iter().all(|&next| {
+                next == NONE
+                    || doors.binary_search(&next).is_ok()
+                    || cells.binary_search(&next).is_ok()
+            })
+        }));
         let mut index = vec![NOT; board.neighbors().len()];
         for (q, &cell) in cells.iter().enumerate() {
             index[usize::from(cell)] = q as u8;

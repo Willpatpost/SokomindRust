@@ -437,12 +437,12 @@ struct Cuts<'a> {
 impl Cuts<'_> {
     /// Adds to `out` every component of the floor less `cut` that is a
     /// candidate: sorted, at most `MAX_ROOM` cells, holding a marked cell,
-    /// no larger than the rest, and with `cut` for its whole boundary. A
-    /// component's boundary can only hold cut cells — any other floor cell
-    /// next to it would be part of it — so the last check is that every
-    /// cell of the cut stands next to the component. The largest
-    /// component floods in full however big, so one cut costs
-    /// O(|inside|); the whole pass stops at [`MAX_STEPS`] cells.
+    /// no larger than the rest, and with `cut` for its whole boundary:
+    /// every cut cell stands next to the component, and every floor cell
+    /// next to it lies in it or in the cut, which the flood's stamps could
+    /// otherwise carve around. The largest component floods in full
+    /// however big, so one cut costs O(|inside|); the whole pass stops at
+    /// [`MAX_STEPS`] cells.
     fn try_cut(
         &mut self,
         cut: &[Cell],
@@ -500,7 +500,24 @@ impl Cuts<'_> {
                         .any(|&c| c != NONE && self.epoch[usize::from(c)] == self.age)
                 })
                 .count();
-            if boundary != cut.len()
+            // The flood stops at the cut, the walls and the cells an
+            // earlier component of this cut stamped, and a big component
+            // stamps only its first `MAX_ROOM` cells, so a cut that splits
+            // nothing can still carve one into pieces a later flood
+            // finishes. Such a piece's boundary holds floor the cut does
+            // not name, and the room it would make would lie about its
+            // doors (the one-door pass drops such a side as big; see its
+            // flood). A true component's boundary can only hold cut cells
+            // — any other floor cell next to it would be part of it — so
+            // every floor cell next to the piece must lie in it or in the
+            // cut.
+            let sealed = self.queue.iter().all(|&c| {
+                neighbors[usize::from(c)].iter().all(|&next| {
+                    next == NONE || cut.contains(&next) || self.epoch[usize::from(next)] == self.age
+                })
+            });
+            if !sealed
+                || boundary != cut.len()
                 || !self.queue.iter().any(|&c| self.marked[usize::from(c)])
                 || 2 * self.queue.len() > self.total - cut.len()
             {
@@ -1175,5 +1192,47 @@ mod tests {
         }
         assert_eq!(engine.status(), Status::Solved);
         assert_eq!(engine.best_moves(), Some(3));
+    }
+
+    /// A corridor two cells wide: a cut along one column splits nothing,
+    /// but the pair pass's first flood stops big past `MAX_ROOM` cells
+    /// and stamps them, so a later flood would finish a carved piece of
+    /// the same component whose boundary the cut does not name. The piece
+    /// is not a candidate; the corridor's across cuts still find its true
+    /// pockets.
+    #[test]
+    fn a_carved_piece_of_an_unsplit_corridor_is_not_a_candidate() {
+        let mut rows = vec!["OOOO".to_string()];
+        for row in 1..=42 {
+            let middle = match row {
+                1 => "R ",
+                2 => "S ",
+                40 => "X ",
+                _ => "  ",
+            };
+            rows.push(format!("O{}O", middle));
+        }
+        rows.push("OOOO".to_string());
+        let board = Board::parse(&rows.join("\n")).unwrap();
+        let start = board.initial();
+        let mut ledger = ledger();
+        let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
+        let neighbors = board.neighbors();
+        for (doors, cells) in &found {
+            for &cell in cells {
+                for &next in &neighbors[usize::from(cell)] {
+                    assert!(
+                        next == NONE || cells.contains(&next) || doors.contains(&next),
+                        "a candidate's boundary holds floor its doors do not name"
+                    );
+                }
+            }
+        }
+        let box_cell = (40 * 4 + 1) as Cell;
+        assert!(
+            found.iter().any(|(_, cells)| cells.contains(&box_cell)),
+            "the pocket behind an across cut holds the box, among {} candidates",
+            found.len()
+        );
     }
 }

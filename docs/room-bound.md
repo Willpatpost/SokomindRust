@@ -283,9 +283,17 @@ pool past 512 cells yields no multi-door candidates at all. Not every
 three-door region is sought: one whose boundary holds no two-door
 candidate's boundary is not grown from. A component of the floor less a cut
 is kept when it is at most 62 cells, holds a marked cell, is no larger than
-the rest, and has the cut for its whole boundary — which is to check that
-every cell of the cut stands next to it, since a component's boundary can
-only hold cut cells. These candidates can cross, so the build skips one that
+the rest, and has the cut for its whole boundary: every cell of the cut
+stands next to it, and every floor cell next to it lies in it or in the
+cut. The second half is checked, not assumed: the flood that finds
+components stops not only at the cut and the walls but at the cells an
+earlier component of the same cut stamped, and a big component stamps only
+its first 62 cells, so a cut that splits nothing can carve one into pieces
+a later flood finishes, whose boundary holds floor the cut does not name.
+The one-door pass's flood drops such a side as big; `try_cut` rejects such
+a piece. On Grand Hall the pair pass found 2,214 candidates before the
+check and 115 after, none of the difference kept, and no bound moved.
+These candidates can cross, so the build skips one that
 crosses a room it has built, and the rooms it keeps stay pairwise disjoint.
 A multi-door room's tables are kept only when they raise S at the start over
 the rooms already kept, with the rooms they would replace freed: the parts a
