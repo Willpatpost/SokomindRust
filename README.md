@@ -341,6 +341,21 @@ no key width tables it: under u128 keys its build fails past the forward
 search's cap, and the wider keys' cost un-builds tables elsewhere (measured,
 not kept; `docs/room-bound.md` has the numbers).
 
+The wide candidates draw their build work from a floor of their own, one cap
+beyond the rooms' four with the rooms' leftover flowing in, so the budget the
+rooms spend cannot starve them (2026-10-11, the development host). On Grand
+Hall the share builds the band's 20-cell sub-region tables under u64 keys for
+the first time — the largest reaches 7.34M states — and the keep test drops
+every one by 31 to 35: the hall part gives up the pushes of the boxes that
+merely cross the band on their way to the wings' goals, more than a table
+that charges an entry free and an exit one move can charge back. So the
+start's S stays 270, the bound at 60M states stays 298, and the band keeps no
+table by the keep test rather than the key width; the floor's cost is build
+time, Grand Hall's Optimal build at 1M states and 64 MiB growing from about
+2.5 s to 7.9 s on tables that drop. Across the catalog the floor raises six
+Optimal bounds at the gate's config, Grand Hall's own 262 to
+266 among them, and lowers none (`docs/room-bound.md` has the numbers).
+
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
 either neighbor is a wall or frozen box or both are dead cells for its label.

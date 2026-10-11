@@ -864,6 +864,54 @@ kept bytes from 7.3 to 5.0 MB, against the triple pass's six gains
 standing and Grand Hall's; bench:update re-records it. The gate, the
 observe runs and native/WASM parity all hold.
 
+### The wide work share (2026-10-11, the development host)
+
+The wide candidates — four and five doors — draw their build work from a
+floor of their own: one cap beyond the rooms' four, with whatever the
+rooms' budget leaves flowing to the wide phase once it begins. Before it,
+one budget served both. On Grand Hall at 60M states the rooms' candidates
+leave 47.2M of the 67.1M units, and the wide phase behind them dies among
+the four-door pieces, before any five-door candidate begins; on catalog
+boards at the gate's config the rooms can spend the whole 4.2M, and no
+wide candidate runs at all. The share was first cut as a cap of one cap,
+without the flow, and the gen-v2-340053 twins fell, 57 to 56 and 65 to
+62: their rooms leave budget the wide candidates had been spending, and
+the smaller wide phase reshaped the capped search's frontier — the
+boards' assignment prunes collapsed from 120 to 14 — which the keep test
+at the start cannot see. With the leftover flowing in, no board's wide
+phase shrinks, both falls went away, and two more boards gained.
+
+On Grand Hall the share reaches the band's sub-regions, and their tables
+build under u64 keys for the first time: the 20-cell pieces behind
+{(6,3),(6,4),(9,7),(10,7)} and its neighbours reach 7.34M, 960,795 and
+960,795 states at 60M states and 32768 MiB, and at 1M states and 256 MiB,
+where the kept limit is 64 MiB, the first size-fails into halves of 4,531
+and 166,645 states. The keep test drops every one. The small pieces
+charge exactly what they free, and the 20-cell pieces lose by 31 to 35:
+the band is a road, and the hall part gives up the pushes of every box
+that crosses it — four X boxes climb from the bottom room to the wings'
+goals, each freeing the pushes that end in the piece — while the table
+charges its own boxes' expulsion only, an entry free and an exit one
+move. A table over fewer labels would not help: the hall part gives
+pushes up by the part's cells, whatever the labels, and a smaller LAB
+only shrinks what the table charges. So the band still has no table, by
+the keep test rather than the key width, and the start's S stays 270 at
+60M states and 32768 MiB, the same four parts, the bound at 60M states
+still 298.
+
+The catalog gains where the wide pieces are destinations: at the gate's
+config the floor raises six Optimal bounds — Grand Hall's own 262 to 266,
+gen-v2-320093 74 to 75, gen-v2-340272 156 to 160, gen-v2-370002 172 to
+174, gen-v2-370193 152 to 156 and gen-v2-360372 152 to 156 — and lowers
+none. The kept tables cost their bytes, which the gate's S2 records on
+seven boards, and the search counters move with the bounds. The floor's
+cost is build time: on Grand Hall at 1M states and 64 MiB the wide phase
+spends the rooms' leftover and its share, and the Optimal build grows
+from about 2.5 s to 7.9 s (bench:observe), all of it on band tables the
+keep test drops; a time limit shorter than that drops the build whole,
+as any over-long build already did. The gate, the observe runs and
+native/WASM parity all hold.
+
 ## Rejected approaches
 
 - **A side split with box identities.** Splitting the room into two halves and

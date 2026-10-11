@@ -34,6 +34,16 @@ const MIN_CAP: u64 = 1 << 20;
 const MAX_CAP: u64 = 1 << 24;
 /// The build's work budget, in units, is this many caps.
 const WORK_PER_CAP: usize = 4;
+/// The wide candidates — four and five doors — draw their build work from
+/// a share of at least this many caps, beyond the rooms' `WORK_PER_CAP`:
+/// whatever the rooms' budget leaves once their candidates run out flows
+/// to the wide phase, which adds this share to it, so the rooms cannot
+/// starve the wide candidates however much of the budget they spend. The
+/// build order puts the wider candidates last, so the rooms draw from
+/// their share first, and the wide phase never shortens it.
+const WIDE_WORK_PER_CAP: usize = 1;
+/// The fewest doors a candidate needs to draw from the wide work share.
+const WIDE_DOORS: usize = 4;
 /// A room is skipped when the tables of the rooms it encloses reached more
 /// than the cap over this many states: its own search, which holds theirs,
 /// would very likely pass the cap and waste its work.
@@ -258,7 +268,8 @@ impl Ledger {
 /// the list runs the one-door rooms first — in the order the build always
 /// gave them, by boundary width, size, first door, then first cell — and
 /// the wider rooms behind them, so the build tries what it always tried
-/// before anything new, and the new candidates spend only the work left.
+/// before anything new, and the wide candidates draw from a work share
+/// the rooms cannot starve (see `WIDE_WORK_PER_CAP`).
 ///
 /// A side's flood stops at more than `MAX_ROOM` cells, so a door costs
 /// O(`MAX_ROOM`) rather than O(|inside|). A side cut off is too large to
@@ -820,6 +831,9 @@ struct Attempt {
     failed: bool,
     /// The door's width (see `RoomBuild`).
     width: u8,
+    /// Whether the room draws from the wide work share (see
+    /// `WIDE_WORK_PER_CAP`).
+    wide: bool,
     /// Whether the room encloses built rooms, which it replaces if its
     /// whole-room table builds.
     replaces: bool,
@@ -880,7 +894,7 @@ impl Attempt {
 /// over the rooms already kept (see `conclude`).
 ///
 /// A size failure is a forward search past `cap`, a refused buffer, a table
-/// past the kept limit, or the work budget running out. It marks the room,
+/// past the kept limit, or a work share running out. It marks the room,
 /// so each room enclosing it behind a door at least as wide is skipped.
 ///
 /// A replacement never lowers the tables' sum: R(C, C, LAB_C) >= the sum of
@@ -907,8 +921,11 @@ pub(crate) struct RoomBuild {
     attempt: Option<Attempt>,
     /// The most states a table's forward search may reach.
     cap: usize,
-    /// The work units left.
+    /// The work units left for the rooms of at most three doors.
     work: usize,
+    /// The work units left for the wide candidates (see
+    /// `WIDE_WORK_PER_CAP`).
+    wide_work: usize,
 }
 
 impl RoomBuild {
@@ -972,6 +989,7 @@ impl RoomBuild {
             attempt: None,
             cap,
             work: WORK_PER_CAP * cap,
+            wide_work: WIDE_WORK_PER_CAP * cap,
         })
     }
 
@@ -987,9 +1005,46 @@ impl RoomBuild {
         units: &mut usize,
     ) -> Option<Option<RoomBound>> {
         // Each pass spends units, or moves on to a part or a candidate.
+        // A spent share ends only its own candidates: the rooms' work
+        // running out skips the rooms left and goes on to the wide share,
+        // and a spent wide share skips the wide candidates left. An
+        // attempt whose share ran out ends as one the budget could not
+        // finish (see `abandon`), keeping what it built.
         loop {
-            if self.work == 0 || (self.attempt.is_none() && self.next == self.candidates.len()) {
-                return Some(self.finish(board, start));
+            if self
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| self.share_spent(attempt.wide))
+            {
+                self.abandon(board, start);
+                continue;
+            }
+            if self.attempt.is_none() {
+                // Once the wide candidates begin, the rooms' leftover
+                // flows to their share: the share is a floor the rooms'
+                // budget cannot starve, not a cap on what its leftover
+                // would have paid for. The fold is idempotent, for no
+                // wide candidate draws from the rooms' pool again.
+                if self.next < self.candidates.len()
+                    && self.candidates[self.next].0.len() >= WIDE_DOORS
+                {
+                    self.wide_work += self.work;
+                    self.work = 0;
+                }
+                while self.next < self.candidates.len()
+                    && self.share_spent(self.candidates[self.next].0.len() >= WIDE_DOORS)
+                {
+                    let (doors, cells) = {
+                        let candidate = &mut self.candidates[self.next];
+                        (take(&mut candidate.0), take(&mut candidate.1))
+                    };
+                    self.next += 1;
+                    self.ledger.release(doors);
+                    self.ledger.release(cells);
+                }
+                if self.next == self.candidates.len() {
+                    return Some(self.finish(board, start));
+                }
             }
             if *units == 0 {
                 return None;
@@ -1000,11 +1055,19 @@ impl RoomBuild {
             };
             if let Some((part, build)) = &mut attempt.build {
                 let part = *part;
-                let mut slice = (*units).min(self.work);
+                let mut slice = (*units).min(if attempt.wide {
+                    self.wide_work
+                } else {
+                    self.work
+                });
                 let given = slice;
                 let step = build.step(&attempt.moves, &mut slice, &mut self.ledger);
                 *units -= given - slice;
-                self.work -= given - slice;
+                if attempt.wide {
+                    self.wide_work -= given - slice;
+                } else {
+                    self.work -= given - slice;
+                }
                 match step {
                     Ok(Step::Running) => continue,
                     Ok(Step::Done(table)) => {
@@ -1041,6 +1104,7 @@ impl RoomBuild {
         };
         self.next += 1;
         let width = boundary_width(board, &doors, &cells);
+        let wide = doors.len() >= WIDE_DOORS;
         // One-door rooms nest or are disjoint, so a room meeting this one
         // holds it if larger and lies inside it if smaller. A multi-door
         // candidate can also cross a built room, sharing cells without
@@ -1092,6 +1156,7 @@ impl RoomBuild {
             tables,
             failed: false,
             width,
+            wide,
             replaces,
         });
     }
@@ -1190,9 +1255,22 @@ impl RoomBuild {
         )
     }
 
-    /// Ends the build, the work budget spent or every candidate tried: the
-    /// room bound of the rooms built, if any.
-    fn finish(&mut self, board: &Board, start: &State) -> Option<RoomBound> {
+    /// Whether the work share that pays for a candidate of `wide` doors is
+    /// spent (see `WIDE_WORK_PER_CAP`).
+    fn share_spent(&self, wide: bool) -> bool {
+        if wide {
+            self.wide_work == 0
+        } else {
+            self.work == 0
+        }
+    }
+
+    /// Concludes a running attempt whose work share ran out mid-build, as a
+    /// room the budget could not finish: its in-flight build is freed, the
+    /// room is marked failed, and what it already built stands to the keep
+    /// test. The build goes on to the share's remaining candidates, or the
+    /// other share's.
+    fn abandon(&mut self, board: &Board, start: &State) {
         if let Some(mut attempt) = self.attempt.take() {
             if let Some((_, mut build)) = attempt.build.take() {
                 build.free(&mut self.ledger);
@@ -1200,6 +1278,12 @@ impl RoomBuild {
             }
             self.conclude(board, start, attempt);
         }
+    }
+
+    /// Ends the build, a work share spent or every candidate tried: the
+    /// room bound of the rooms built, if any.
+    fn finish(&mut self, board: &Board, start: &State) -> Option<RoomBound> {
+        self.abandon(board, start);
         if self.built.is_empty() {
             return None;
         }
@@ -1494,6 +1578,52 @@ mod tests {
                 .any(|(doors, cells)| *doors == neck && *cells == pocket),
             "among {} candidates",
             found.len()
+        );
+    }
+
+    /// The wide work share is a floor: a spent rooms' share still keeps
+    /// wide rooms on the reserved share alone, and the rooms' leftover
+    /// flows to the wide phase, so a spent wide share still keeps them on
+    /// that — here the four- and five-door rooms behind the neck either
+    /// way, which the old single budget ended the build before reaching
+    /// when the rooms spent it all.
+    #[test]
+    fn the_wide_work_share_is_the_wide_candidates_own() {
+        let board =
+            Board::parse("OOOOOOOO\nO      O\nOA     O\nOa  B  O\nO   b  O\nOOOO  RO\nOOOOOOOO")
+                .unwrap();
+        let start = board.initial();
+        let heuristic = crate::heuristic::Heuristic::new(&board, Some(start.player));
+        let drive = |mut build: RoomBuild| -> Option<RoomBound> {
+            loop {
+                let mut units = 1 << 22;
+                if let Some(bound) = build.step(&board, &start, &heuristic, &mut units) {
+                    return bound;
+                }
+            }
+        };
+
+        let mut build = RoomBuild::new(&board, &start, 1_000, 16, 0, 0).unwrap();
+        build.work = 0;
+        let bound = drive(build).expect("wide rooms build on the wide share");
+        assert!(
+            !bound.rooms.is_empty()
+                && bound
+                    .rooms
+                    .iter()
+                    .all(|built| built.room.doors().len() >= WIDE_DOORS),
+            "a spent rooms' share still keeps wide rooms"
+        );
+
+        let mut build = RoomBuild::new(&board, &start, 1_000, 16, 0, 0).unwrap();
+        build.wide_work = 0;
+        let bound = drive(build).expect("the wide candidates build on the rooms' leftover");
+        assert!(
+            bound
+                .rooms
+                .iter()
+                .any(|built| built.room.doors().len() >= WIDE_DOORS),
+            "a spent wide share still keeps wide rooms on the rooms' leftover"
         );
     }
 }
