@@ -107,31 +107,63 @@ impl Room {
             + self.index.capacity()
     }
 
-    /// Q split at its first door's line: across the line through that
-    /// door's first neighbor in Q, by column when that neighbor is above
-    /// or below the door, else by row. The neighbor's side is the second
-    /// half. The first half is empty when no cell of Q lies before that
-    /// line.
+    /// Q split in two. With one door the line runs through that door's
+    /// first neighbor in Q, by column when the neighbor is above or below
+    /// the door, else by row, and the neighbor's side is the second half.
+    /// With more doors no one door's line is right — the first door can
+    /// sit at Q's edge and leave one half empty — so the line runs across
+    /// Q's longer extent at the median cell along it: by row when Q is
+    /// taller, by column when wider, ties by row. Either half may be
+    /// empty; the split test drops such halves.
     pub(super) fn halves(&self, board: &Board) -> [u64; 2] {
-        let door = self.doors[0];
-        let neighbors = board.neighbors();
-        let (d, inner) = (0..OPPOSITE.len())
-            .find_map(|d| {
-                let r = neighbors[usize::from(door)][d];
-                (r != NONE && self.index[usize::from(r)] != NOT).then_some((d, r))
-            })
-            .expect("a room touches its doors");
         let width = board.width();
-        let line = |cell: Cell| {
-            if d < 2 {
-                usize::from(cell) % width
-            } else {
-                usize::from(cell) / width
-            }
-        };
         let mut low = 0u64;
+        if self.doors.len() == 1 {
+            let door = self.doors[0];
+            let neighbors = board.neighbors();
+            let (d, inner) = (0..OPPOSITE.len())
+                .find_map(|d| {
+                    let r = neighbors[usize::from(door)][d];
+                    (r != NONE && self.index[usize::from(r)] != NOT).then_some((d, r))
+                })
+                .expect("a room touches its doors");
+            let line = |cell: Cell| {
+                if d < 2 {
+                    usize::from(cell) % width
+                } else {
+                    usize::from(cell) / width
+                }
+            };
+            for (q, &cell) in self.cells.iter().enumerate() {
+                if line(cell) < line(inner) {
+                    low |= 1 << q;
+                }
+            }
+            return [low, self.all() & !low];
+        }
+        let (mut rows, mut cols) = ((0usize, 0usize), (0usize, 0usize));
+        for &cell in &self.cells {
+            let c = usize::from(cell);
+            rows.0 = rows.0.min(c / width);
+            rows.1 = rows.1.max(c / width);
+            cols.0 = cols.0.min(c % width);
+            cols.1 = cols.1.max(c % width);
+        }
+        let by_row = rows.1 - rows.0 >= cols.1 - cols.0;
+        let mut values: Vec<usize> = self
+            .cells
+            .iter()
+            .map(|&cell| {
+                let c = usize::from(cell);
+                if by_row { c / width } else { c % width }
+            })
+            .collect();
+        values.sort_unstable();
+        let line = values[(values.len() - 1) / 2];
         for (q, &cell) in self.cells.iter().enumerate() {
-            if line(cell) < line(inner) {
+            let c = usize::from(cell);
+            let at = if by_row { c / width } else { c % width };
+            if at < line {
                 low |= 1 << q;
             }
         }

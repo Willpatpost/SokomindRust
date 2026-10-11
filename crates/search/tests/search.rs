@@ -368,22 +368,23 @@ fn room_board(rng: &mut Lcg) -> String {
     rows.join("\n")
 }
 
-/// A walled 4..=5 x 5..=7 hall beside a room of five to seven cells, grown
-/// at random from the three cells behind a three-cell neck in the wall
-/// between them: three floor cells stacked in the wall's column, which no
-/// pair of them splits, so only the triple pass of `candidates` finds the
-/// room. One or two boxes, sometimes one of them an A, start off the
-/// hall's rim, the last sometimes in the room. One or two of their goals
-/// lie in the room, deepest first behind the neck, where pushes through
-/// the neck reach, so the exact search builds the room's table, whose
-/// bound and prunes then fire. About a quarter of the spare hall floor is
-/// walled, but never the cells in front of the neck. Every board parses;
-/// many are unsolvable.
+/// A walled 4..=5-wide hall beside a room of five to nine cells, grown at
+/// random from the cells behind a three-to-five-cell neck in the wall
+/// between them: as many floor cells stacked in the wall's column, which
+/// no narrower set of them splits, so only the triple and wide passes of
+/// `candidates` find the room. One or two boxes, sometimes one of them an
+/// A, start off the hall's rim, the last sometimes in the room. One or
+/// two of their goals lie in the room, deepest first behind the neck,
+/// where pushes through the neck reach, so the exact search builds the
+/// room's table, whose bound and prunes then fire. About a quarter of the
+/// spare hall floor is walled, but never the cells in front of the neck.
+/// Every board parses; many are unsolvable.
 fn neck_board(rng: &mut Lcg) -> String {
-    let (hall, height) = (4 + rng.below(2), 5 + rng.below(3));
+    let doors = 3 + rng.below(3);
+    let (hall, height) = (4 + rng.below(2), doors + 2 + rng.below(2));
     let width = hall + 1 + 2 + rng.below(2);
-    let neck = 1 + rng.below(height - 3);
-    let mut room: Vec<(usize, usize)> = (0..3).map(|d| (hall + 1, neck + d)).collect();
+    let neck = 1 + rng.below(height - doors - 1);
+    let mut room: Vec<(usize, usize)> = (0..doors).map(|d| (hall + 1, neck + d)).collect();
     for _ in 0..2 + rng.below(3) {
         loop {
             let (x, y) = room[rng.below(room.len())];
@@ -401,7 +402,7 @@ fn neck_board(rng: &mut Lcg) -> String {
     }
     let at = |(x, y): (usize, usize)| y * width + x;
     let mut corridor: Vec<usize> = Vec::new();
-    for d in (0..3).rev() {
+    for d in (0..doors).rev() {
         let mut x = hall + 1;
         while room.contains(&(x, neck + d)) {
             corridor.push(at((x, neck + d)));
@@ -412,7 +413,7 @@ fn neck_board(rng: &mut Lcg) -> String {
     for cell in (0..cells.len()).filter(|&c| c % width < hall) {
         cells[cell] = b' ';
     }
-    for d in 0..3 {
+    for d in 0..doors {
         cells[at((hall, neck + d))] = b' ';
     }
     let mut room: Vec<usize> = room.into_iter().map(at).collect();
@@ -459,7 +460,7 @@ fn neck_board(rng: &mut Lcg) -> String {
     }
     cells[rng.take(&mut free)] = b'R';
     for cell in free {
-        if (cell / width < neck || cell / width > neck + 2 || cell % width < hall - 2)
+        if (cell / width < neck || cell / width > neck + doors - 1 || cell % width < hall - 2)
             && rng.below(100) < 25
         {
             cells[cell] = b'O';
@@ -767,9 +768,9 @@ fn engines_agree_with_bfs_on_generated_room_boards() {
     );
 }
 
-/// The three-door tables behind a three-cell neck, their raised children
-/// and their prunes, against the oracle: no pair of the neck's cells
-/// isolates the room, so only the triple pass reaches it.
+/// The three-to-five-door tables behind a neck, their raised children
+/// and their prunes, against the oracle: no narrower cut than the neck
+/// isolates the room, so only the triple and wide passes reach it.
 #[test]
 fn engines_agree_with_bfs_on_generated_neck_boards() {
     let (solvable, unsolvable) = engines_agree_on_generated(neck_board, 20_000);

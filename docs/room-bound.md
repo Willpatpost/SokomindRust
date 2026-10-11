@@ -2,7 +2,7 @@
 
 The room bound (`crates/search/src/room_bound.rs` and `room_bound/`) raises
 Optimal's lower bound with exact tables for the board's rooms of at most
-three doors. The module docs say what each part does. This file records why
+five doors. The module docs say what each part does. This file records why
 the bound is sound, how its build fits the search's memory and time, the
 measurements behind it, with the SLURM job that produced each number, and
 the approaches it replaced.
@@ -270,7 +270,7 @@ than O(floor). These candidates are laminar: any two nest or are disjoint,
 which `candidates` proves, so one cell of a room built earlier tells whether
 it holds a candidate, lies inside it, or lies apart from it.
 
-The rooms of at most three doors: a region whose boundary — the floor cells
+The rooms of at most five doors: a region whose boundary — the floor cells
 outside it next to it — is the cut that isolates it. Their doors come from a
 pool of the floor cells within 62 steps of a box or a goal with two floor
 neighbors at least: a kept region holds a box or a goal, so each of its doors
@@ -281,9 +281,17 @@ cells; three, as every triple of pool cells pairwise within such a box,
 under budgets of the triple pass's own — 131,072 cuts, 2^23 visited cells
 and 2^21 examined combinations — so neither pass starves the other. The
 step budget carries the pass's cost and reaches deep into a small pool's
-enumeration, where the regions behind three-cell necks sit. A pool past
-512 cells yields no multi-door candidates at all, and the triple
-enumeration stops at its budgets, so not every three-door region is
+enumeration, where the regions behind three-cell necks sit. Four doors are
+tried as every two disjoint adjacent pairs of pool cells, in order of the
+cut's span so the tight door bands run first, and five as each four-door
+candidate's doors with one pool cell more — which finds the regions a
+wider cut of a found region isolates — and as every two adjacent pairs
+with one pool cell more at the cut's own span, for the pockets whose every
+four cells leave one connecting; the wide pass runs under 65,536 cuts and
+2^24 visited cells of its own, and a cut whose cells span more than 16
+cells along either axis is not tried. A pool past
+512 cells yields no multi-door candidates at all, and the triple and wide
+enumerations stop at their budgets, so not every wide region is
 sought. A component of the floor less a cut
 is kept when it is at most 62 cells, holds a marked cell, is no larger than
 the rest, and has the cut for its whole boundary: every cell of the cut
@@ -406,8 +414,11 @@ cell. The built parts therefore stay disjoint whatever the order, which is all
 the sum needs.
 
 A room that encloses no built room tries its whole-room table, then, if that
-failed or its key needs more than 63 bits, the two halves of the room, split at
-the door's line. It tries a half only when the half holds some, but not all, of
+failed or its key needs more than 63 bits, the two halves of the room: with
+one door split at the door's line, with more split across the room's longer
+extent at the median cell along it, since the first door can sit at the
+room's edge and leave one half empty. It tries a half only when the half
+holds some, but not all, of
 the room's labels. A half with none has no table. A half with all of them
 differs from the whole room only in which moves count, so its key, forward
 search and kept size are the whole room's, and it would very likely fail
@@ -829,6 +840,27 @@ gen-v2-340048 72 to 73, and the two gen-v2-350108 boards 112 to 114 and
 132 to 133, with expansions falling on eight more; the kept tables cost
 their bytes, which the gate's S2 records. The gate, the observe runs and
 native/WASM parity all hold.
+
+### Wide cuts (2026-10-11, the development host)
+
+The wide pass — four doors as two adjacent pairs in order of the cut's
+span, five as a four-door candidate's doors with one pool cell more, and
+the raw pair-pair-single cuts the grown ones cannot grow from — lifts
+Grand Hall further: the reshuffled candidate set builds a stronger
+20-cell wing table of value 33 beside a 16-cell piece of value 20, the
+start's S reaches 270, and the bound 298 at 60M states and 4000 or
+32768 MiB (292 after the triple pass, 290 before it), expanding 13.53M
+states. At 1M states and 256 MiB the bound rises from 285 to 290; at
+64 MiB nothing changes. The middle band's cut exists at last — the
+wings-pair quad {(4,4),(4,5),(4,9),(4,10)} and its growth with the
+chimney cell {(11,7)} isolate the 57-cell band — but its tables cannot
+build: the whole room's key needs 120 bits against the u64's 63, and the
+halves share the whole room's cells, so their key is the same. The band
+waits on wider keys. On the catalog the wide pass trades one board for
+another's tables: gen-v2-340272's gate bound falls 157 to 156, its
+kept bytes from 7.3 to 5.0 MB, against the triple pass's six gains
+standing and Grand Hall's; bench:update re-records it. The gate, the
+observe runs and native/WASM parity all hold.
 
 ## Rejected approaches
 

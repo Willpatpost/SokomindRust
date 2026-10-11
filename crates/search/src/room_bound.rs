@@ -42,10 +42,10 @@ const ENCLOSED_SHARE: usize = 16;
 const KEPT_SHARE: u64 = 4;
 /// The most doors a room may have. Every door widens the relaxed problem
 /// the tables over the room solve — the keeper leaves and returns at any
-/// of them — so a bound behind many doors says little; three is where the
-/// catalog's regions of the kind still pay (docs/room-bound.md, Rooms
-/// with several doors).
-const MAX_DOORS: usize = 3;
+/// of them — so a bound behind many doors says little; five is where the
+/// regions the wide pass finds still pay (docs/room-bound.md, Rooms with
+/// several doors).
+const MAX_DOORS: usize = 5;
 /// The most cells the door pool may hold before the multi-door candidates
 /// are skipped: the cuts the pool makes are tried in sorted order under a
 /// budget, and a giant pool would only ever reach its start.
@@ -73,6 +73,27 @@ const TRIPLE_STEPS: usize = 1 << 23;
 /// examine, span-filtered or not, so a giant pool cannot spend the
 /// caller's time even before a cut is tried.
 const TRIPLE_COMBOS: usize = 1 << 21;
+/// The most cuts the wide pass — the four- and five-door cuts — may try,
+/// in sorted order, under budgets of its own like the triple pass's.
+/// Set with `WIDE_STEPS` so a small board's sweep reaches the spans its
+/// door bands sit at, deep in the enumeration, while a giant pool still
+/// stops early.
+const WIDE_CUTS: usize = 1 << 16;
+/// The most cells the wide pass's cuts' floods and scans may visit in
+/// all, for the same reason as `TRIPLE_STEPS`, and sized with
+/// `WIDE_CUTS`: a small board's spans cluster low, so the sweep spends
+/// its budget before the widest spans, where the regions behind bands of
+/// doors two wide sit.
+const WIDE_STEPS: usize = 1 << 24;
+/// The most combinations the wide pass's enumeration may examine, for
+/// the same reason as `TRIPLE_COMBOS`.
+const WIDE_COMBOS: usize = 1 << 21;
+/// The widest span, along either axis, between the cells of a wide cut.
+/// A region behind a band of doors two wide is compact, or the band
+/// leaves gaps the flood would cross, so its doors sit close together;
+/// the raw four- and five-cell combinations are too many to examine, and
+/// this bounds them to the neighborhoods that isolate anything.
+const WIDE_SPAN: usize = 16;
 
 // Rooms are disjoint, so there are at most `MAX_CELLS`, each with at most
 // two tables, and the tables' sum fits u32 with room for the hall part.
@@ -216,7 +237,13 @@ impl Ledger {
 /// and `MAX_STEPS` visited cells; three, as every triple of pool cells
 /// pairwise within `MAX_ROOM`, under budgets of the triple pass's own —
 /// `TRIPLE_CUTS` cuts, `TRIPLE_STEPS` visited cells and `TRIPLE_COMBOS`
-/// examined combinations — so neither pass starves the other. A pool
+/// examined combinations — so neither pass starves the other. Four doors
+/// are tried as every two disjoint adjacent pairs of pool cells within a
+/// `WIDE_SPAN` box, and five as every two such pairs with one pool cell
+/// more, under `WIDE_CUTS` cuts, `WIDE_STEPS` visited cells and
+/// `WIDE_COMBOS` examined combinations: a region behind a band of doors
+/// two wide is isolated by no narrower cut, and the raw four- and
+/// five-cell combinations are too many to examine. A pool
 /// past `MAX_POOL` cells yields no multi-door candidates at all, so a
 /// giant board cannot pay for them, and the triple enumeration stops at
 /// its combination budget, so not every three-door region is sought.
@@ -404,6 +431,141 @@ fn candidates(
                 }
             }
         }
+        // The wide cuts: every two disjoint adjacent pairs of pool cells,
+        // tried in order of the cut's span — the widest Chebyshev gap
+        // between its cells — so the tight door bands run first and the
+        // budgets die in the tail rather than the front. Then every
+        // four-door candidate's doors with one pool cell more, which
+        // finds the regions a wider cut of a found region isolates:
+        // Grand Hall's middle band, two neck pairs and the chimney cell.
+        // A region behind a band of doors two wide is isolated by no
+        // narrower cut, and the raw four- and five-cell combinations are
+        // too many to examine.
+        let mut pairs = Vec::new();
+        for (a, &cell) in pool.iter().enumerate() {
+            for &next in &neighbors[usize::from(cell)] {
+                if next != NONE && pool[..a].contains(&next) {
+                    ledger.push(&mut pairs, (next, cell))?;
+                }
+            }
+        }
+        let (mut wide, mut examined) = (0, 0);
+        let mut steps = WIDE_STEPS;
+        'span: for s in 1..=WIDE_SPAN {
+            for p in 0..pairs.len() {
+                for q in (p + 1)..pairs.len() {
+                    let (left, right) = (pairs[p], pairs[q]);
+                    if left.0 == right.0
+                        || left.0 == right.1
+                        || left.1 == right.0
+                        || left.1 == right.1
+                    {
+                        continue;
+                    }
+                    let band = span(left.0, right.0)
+                        .max(span(left.0, right.1))
+                        .max(span(left.1, right.0))
+                        .max(span(left.1, right.1));
+                    if band != s {
+                        continue;
+                    }
+                    examined += 1;
+                    if examined > WIDE_COMBOS {
+                        break 'span;
+                    }
+                    wide += 1;
+                    if wide > WIDE_CUTS {
+                        break 'span;
+                    }
+                    cut.clear();
+                    cut.extend_from_slice(&[left.0, left.1, right.0, right.1]);
+                    cut.sort_unstable();
+                    cuts.try_cut(&cut, &mut out, ledger, &mut steps)?;
+                }
+            }
+        }
+        // The five-door cuts: each four-door candidate's doors with one
+        // pool cell more.
+        let mut grown: Vec<[Cell; 4]> = Vec::new();
+        for (doors, _) in out.iter().filter(|(doors, _)| doors.len() == 4) {
+            ledger.push(&mut grown, [doors[0], doors[1], doors[2], doors[3]])?;
+        }
+        'grown: for doors in &grown {
+            for &extra in &pool {
+                if doors.contains(&extra) {
+                    continue;
+                }
+                examined += 1;
+                if examined > WIDE_COMBOS {
+                    break 'grown;
+                }
+                wide += 1;
+                if wide > WIDE_CUTS {
+                    break 'grown;
+                }
+                cut.clear();
+                cut.extend_from_slice(doors);
+                cut.push(extra);
+                cuts.try_cut(&cut, &mut out, ledger, &mut steps)?;
+            }
+        }
+        ledger.release(grown);
+        // The five-door cuts no four-door cut grows from — a pocket
+        // behind five neck cells, whose every four cells leave one
+        // connecting — as every two adjacent pairs with one pool cell
+        // more, tried at the cut's own span so the tight necks run first
+        // and the budgets die in the tail.
+        'raw: for s in 1..=WIDE_SPAN {
+            for p in 0..pairs.len() {
+                for q in (p + 1)..pairs.len() {
+                    let (left, right) = (pairs[p], pairs[q]);
+                    if left.0 == right.0
+                        || left.0 == right.1
+                        || left.1 == right.0
+                        || left.1 == right.1
+                    {
+                        continue;
+                    }
+                    let band = span(left.0, right.0)
+                        .max(span(left.0, right.1))
+                        .max(span(left.1, right.0))
+                        .max(span(left.1, right.1));
+                    if band > s {
+                        continue;
+                    }
+                    for &extra in &pool {
+                        if extra == left.0
+                            || extra == left.1
+                            || extra == right.0
+                            || extra == right.1
+                        {
+                            continue;
+                        }
+                        let total = band
+                            .max(span(left.0, extra))
+                            .max(span(left.1, extra))
+                            .max(span(right.0, extra))
+                            .max(span(right.1, extra));
+                        if total != s {
+                            continue;
+                        }
+                        examined += 1;
+                        if examined > WIDE_COMBOS {
+                            break 'raw;
+                        }
+                        wide += 1;
+                        if wide > WIDE_CUTS {
+                            break 'raw;
+                        }
+                        cut.clear();
+                        cut.extend_from_slice(&[left.0, left.1, right.0, right.1, extra]);
+                        cut.sort_unstable();
+                        cuts.try_cut(&cut, &mut out, ledger, &mut steps)?;
+                    }
+                }
+            }
+        }
+        ledger.release(pairs);
     }
     ledger.release(cut);
     ledger.release(pool);
@@ -412,8 +574,10 @@ fn candidates(
     ledger.release(seeds);
     ledger.release(marked);
     // The passes find one region through several cuts; the first copy in
-    // cell order stays.
-    out.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    // cell order stays, and among equal cells the narrowest cut's, so a
+    // region a wide cut also isolates keeps the doors of its narrowest
+    // cut and its place in the build's order.
+    out.sort_unstable_by(|a, b| a.1.cmp(&b.1).then(a.0.len().cmp(&b.0.len())));
     let mut at = 0;
     while at + 1 < out.len() {
         if out[at].1 == out[at + 1].1 {
@@ -1274,6 +1438,56 @@ mod tests {
         let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
         let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
         let (pocket, neck) = (list(&[9, 10, 17, 18, 25, 26]), list(&[11, 19, 27]));
+        assert!(
+            found
+                .iter()
+                .any(|(doors, cells)| *doors == neck && *cells == pocket),
+            "among {} candidates",
+            found.len()
+        );
+    }
+
+    /// A pocket behind a four-cell neck: no pair or triple of the neck's
+    /// cells splits the floor, so only the wide pass's two adjacent pairs
+    /// find it.
+    #[test]
+    fn a_pocket_behind_four_doors_is_a_candidate() {
+        let board =
+            Board::parse("OOOOOOOO\nOa  B  O\nO A    O\nO      O\nO   b  O\nOOOO  RO\nOOOOOOOO")
+                .unwrap();
+        let start = board.initial();
+        let mut ledger = ledger();
+        let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
+        let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
+        let (pocket, neck) = (
+            list(&[9, 10, 17, 18, 25, 26, 33, 34]),
+            list(&[11, 19, 27, 35]),
+        );
+        assert!(
+            found
+                .iter()
+                .any(|(doors, cells)| *doors == neck && *cells == pocket),
+            "among {} candidates",
+            found.len()
+        );
+    }
+
+    /// A pocket behind a five-cell neck: only the wide pass's two
+    /// adjacent pairs with one pool cell more find it.
+    #[test]
+    fn a_pocket_behind_five_doors_is_a_candidate() {
+        let board = Board::parse(
+            "OOOOOOOO\nOa  B  O\nO A    O\nO      O\nO      O\nO   b  O\nOOOO  RO\nOOOOOOOO",
+        )
+        .unwrap();
+        let start = board.initial();
+        let mut ledger = ledger();
+        let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
+        let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
+        let (pocket, neck) = (
+            list(&[9, 10, 17, 18, 25, 26, 33, 34, 41, 42]),
+            list(&[11, 19, 27, 35, 43]),
+        );
         assert!(
             found
                 .iter()

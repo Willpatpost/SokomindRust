@@ -274,7 +274,7 @@ from the start, as plain PEA* does, raised the 64 MiB sum to 3435, but took
 starting at half the limit lowered one at 1 GiB.
 
 Before its search proper, Optimal builds the room bound (`docs/room-bound.md`).
-Each room of at most three doors that holds a box or a goal gets exact
+Each room of at most five doors that holds a box or a goal gets exact
 tables of the moves that end inside it, in a relaxed problem that keeps only
 some labels' boxes in the room and lets them enter through a door for free;
 the one-door rooms come from each floor cell taken as a door, the wider from
@@ -331,6 +331,15 @@ hold the wings' searches and the gate's numbers stand. Across the catalog the
 pass raises six bounds at the gate's config, theme-parking's by 5 and
 gen-v2-320118's by 9 (2026-10-11, the development host; `docs/room-bound.md`
 has the numbers).
+
+The wide cuts — four doors as two adjacent pairs in order of the cut's span,
+five as a four-door candidate's doors with one pool cell more — lift Grand
+Hall again, to 298 at 60M states and 4000 or 32768 MiB and 290 at 1M states
+and 256 MiB, through a stronger wing table the reshuffled candidates build.
+Grand Hall's 57-cell middle band sits behind its five-door cut at last, but
+its key needs 120 bits against the u64's 63, and the halves share the whole
+room's cells, so it waits on wider keys (2026-10-11, the development host;
+`docs/room-bound.md` has the numbers).
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
