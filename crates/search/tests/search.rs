@@ -367,6 +367,113 @@ fn room_board(rng: &mut Lcg) -> String {
     rows.push(wall);
     rows.join("\n")
 }
+
+/// A walled 4..=5 x 5..=7 hall beside a room of five to seven cells, grown
+/// at random from the three cells behind a three-cell neck in the wall
+/// between them: three floor cells stacked in the wall's column, which no
+/// pair of them splits, so only the triple pass of `candidates` finds the
+/// room. One or two boxes, sometimes one of them an A, start off the
+/// hall's rim, the last sometimes in the room. One or two of their goals
+/// lie in the room, deepest first behind the neck, where pushes through
+/// the neck reach, so the exact search builds the room's table, whose
+/// bound and prunes then fire. About a quarter of the spare hall floor is
+/// walled, but never the cells in front of the neck. Every board parses;
+/// many are unsolvable.
+fn neck_board(rng: &mut Lcg) -> String {
+    let (hall, height) = (4 + rng.below(2), 5 + rng.below(3));
+    let width = hall + 1 + 2 + rng.below(2);
+    let neck = 1 + rng.below(height - 3);
+    let mut room: Vec<(usize, usize)> = (0..3).map(|d| (hall + 1, neck + d)).collect();
+    for _ in 0..2 + rng.below(3) {
+        loop {
+            let (x, y) = room[rng.below(room.len())];
+            let next = match rng.below(4) {
+                0 => (x + 1, y),
+                1 => (x - 1, y),
+                2 => (x, y + 1),
+                _ => (x, y.wrapping_sub(1)),
+            };
+            if next.0 > hall && next.0 < width && next.1 < height && !room.contains(&next) {
+                room.push(next);
+                break;
+            }
+        }
+    }
+    let at = |(x, y): (usize, usize)| y * width + x;
+    let mut corridor: Vec<usize> = Vec::new();
+    for d in (0..3).rev() {
+        let mut x = hall + 1;
+        while room.contains(&(x, neck + d)) {
+            corridor.push(at((x, neck + d)));
+            x += 1;
+        }
+    }
+    let mut cells = vec![b'O'; width * height];
+    for cell in (0..cells.len()).filter(|&c| c % width < hall) {
+        cells[cell] = b' ';
+    }
+    for d in 0..3 {
+        cells[at((hall, neck + d))] = b' ';
+    }
+    let mut room: Vec<usize> = room.into_iter().map(at).collect();
+    for &cell in &room {
+        cells[cell] = b' ';
+    }
+    let mut boxes = vec![b'X'; 1 + rng.below(2)];
+    if rng.below(3) == 0 {
+        let index = rng.below(boxes.len());
+        boxes[index] = b'A';
+    }
+    let mut free: Vec<usize> = (0..cells.len())
+        .filter(|&c| (1..hall - 1).contains(&(c % width)) && (1..height - 1).contains(&(c / width)))
+        .collect();
+    for (index, &label) in boxes.iter().enumerate() {
+        let start = if index + 1 == boxes.len() && rng.below(4) == 0 {
+            let start = rng.take(&mut room);
+            corridor.retain(|&c| c != start);
+            start
+        } else {
+            rng.take(&mut free)
+        };
+        cells[start] = label;
+    }
+    let mut free: Vec<usize> = (0..cells.len())
+        .filter(|&c| c % width < hall && cells[c] == b' ')
+        .collect();
+    let in_room = 1 + rng.below(2);
+    for (index, &label) in boxes.iter().enumerate() {
+        let goal = if label == b'X' {
+            b'S'
+        } else {
+            label.to_ascii_lowercase()
+        };
+        let cell = if index >= in_room {
+            rng.take(&mut free)
+        } else if let Some(cell) = corridor.pop() {
+            room.retain(|&c| c != cell);
+            cell
+        } else {
+            rng.take(&mut room)
+        };
+        cells[cell] = goal;
+    }
+    cells[rng.take(&mut free)] = b'R';
+    for cell in free {
+        if (cell / width < neck || cell / width > neck + 2 || cell % width < hall - 2)
+            && rng.below(100) < 25
+        {
+            cells[cell] = b'O';
+        }
+    }
+    let wall = "O".repeat(width + 2);
+    let mut rows = vec![wall.clone()];
+    for row in cells.chunks(width) {
+        rows.push(format!("O{}O", std::str::from_utf8(row).unwrap()));
+    }
+    rows.push(wall);
+    rows.join("\n")
+}
+
 /// The names the server API and the wasm worker exchange with their clients.
 #[test]
 fn mode_and_status_names_are_stable() {
@@ -660,6 +767,18 @@ fn engines_agree_with_bfs_on_generated_room_boards() {
     );
 }
 
+/// The three-door tables behind a three-cell neck, their raised children
+/// and their prunes, against the oracle: no pair of the neck's cells
+/// isolates the room, so only the triple pass reaches it.
+#[test]
+fn engines_agree_with_bfs_on_generated_neck_boards() {
+    let (solvable, unsolvable) = engines_agree_on_generated(neck_board, 20_000);
+    assert!(
+        solvable >= 40 && unsolvable >= 40,
+        "{solvable} solvable, {unsolvable} unsolvable"
+    );
+}
+
 /// Frozen move-optima ported from the reference solver's fixtures
 /// (`tests/fixtures/solver-v2/{known-optima,benchmark-corpus,tunnel-soundness,
 /// pattern-deadlock-soundness}.ts`), run through the exact kernel as
@@ -824,11 +943,16 @@ fn a_solved_child_is_kept_whatever_its_f() {
         let context = format!("max_states {max_states}");
         let mut search =
             Search::new(board.clone(), board.initial(), Mode::Optimal, max_states, 8).unwrap();
+        let root = search.lower_bound();
         assert!(
-            search.lower_bound().is_some_and(|root| root + 2 < 6),
-            "the goal's f must lie well past the root bound: {context}"
+            root.is_some_and(|root| root + 2 < 6),
+            "the goal's f must lie well past the root bound {root:?}: {context}"
         );
-        search.advance(1);
+        // The detour region behind a three-cell neck now tables, so the
+        // build takes the first advance's slots before the root expands.
+        while search.status() == Status::Running && search.expanded() == 0 {
+            search.advance(1);
+        }
         assert_eq!(
             (search.expanded(), search.best_moves()),
             (1, Some(6)),

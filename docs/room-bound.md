@@ -276,12 +276,15 @@ pool of the floor cells within 62 steps of a box or a goal with two floor
 neighbors at least: a kept region holds a box or a goal, so each of its doors
 stands that close to one, and a cell with one floor neighbor cannot close a
 region that keeps it. Two doors are tried as every pair of pool cells within
-a 62-cell box of each other; three, as the boundary of a two-door candidate
-with one pool cell more, which finds the regions a wider cut of a found
-region isolates. Both run in sorted order under a budget of 8,192 cuts, and a
-pool past 512 cells yields no multi-door candidates at all. Not every
-three-door region is sought: one whose boundary holds no two-door
-candidate's boundary is not grown from. A component of the floor less a cut
+a 62-cell box of each other, under a budget of 8,192 cuts and 2^21 visited
+cells; three, as every triple of pool cells pairwise within such a box,
+under budgets of the triple pass's own — 131,072 cuts, 2^23 visited cells
+and 2^21 examined combinations — so neither pass starves the other. The
+step budget carries the pass's cost and reaches deep into a small pool's
+enumeration, where the regions behind three-cell necks sit. A pool past
+512 cells yields no multi-door candidates at all, and the triple
+enumeration stops at its budgets, so not every three-door region is
+sought. A component of the floor less a cut
 is kept when it is at most 62 cells, holds a marked cell, is no larger than
 the rest, and has the cut for its whole boundary: every cell of the cut
 stands next to it, and every floor cell next to it lies in it or in the
@@ -808,6 +811,24 @@ so no budget takes a run much past the 60M state limit. Each doubling of the
 states a run holds raised the bound by 1 to 2, against a gap of 136 to the
 shortest route found, 422 moves (see `route-polish.md`). Memory cannot close
 that gap; a higher bound needs a stronger bound.
+
+### Triple cuts (2026-10-11, the development host)
+
+The three-door pass — every triple of pool cells pairwise within a 62-cell
+box, under budgets of its own — reaches the regions no pair isolates. On
+Grand Hall the two wings table at last: the 20-cell wing behind the cut
+{(1,6),(5,4),(5,5)} and its mirror behind {(1,8),(5,9),(5,10)}, values 28
+each, raise the start's S from 258 to 264 where the memory holds their
+forward searches, and the bound at 60M states from 290 to 292 at both 4000
+and 32768 MiB, expanding 13.66M states against 14.32M. At 1M states and
+256 MiB the bound rises from 278 to 285. At 64 MiB the wings' searches do
+not fit and nothing moves: 262 at 20k states, 277 at 1M, the gate's and
+observe's configs both. The catalog gains at the gate's config:
+theme-parking 65 to 70, gen-v2-320118 64 to 73, gen-v2-320093 71 to 73,
+gen-v2-340048 72 to 73, and the two gen-v2-350108 boards 112 to 114 and
+132 to 133, with expansions falling on eight more; the kept tables cost
+their bytes, which the gate's S2 records. The gate, the observe runs and
+native/WASM parity all hold.
 
 ## Rejected approaches
 

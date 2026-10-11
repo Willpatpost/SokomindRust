@@ -50,14 +50,29 @@ const MAX_DOORS: usize = 3;
 /// are skipped: the cuts the pool makes are tried in sorted order under a
 /// budget, and a giant pool would only ever reach its start.
 const MAX_POOL: usize = 512;
-/// The most cuts the pool's pairs and the grown three-door cuts may try,
-/// in sorted order. Trying a cut costs one flood of the floor, so a board
-/// with a giant pool cannot try them all.
+/// The most cuts the pool's pairs may try, in sorted order. Trying a cut
+/// costs one flood of the floor, so a board with a giant pool cannot try
+/// them all.
 const MAX_CUTS: usize = 8_192;
-/// The most cells the multi-door cuts' floods and scans may visit in all,
-/// so the enumeration cannot spend the caller's time on a giant board:
-/// each cut scans the floor once and floods the components it finds.
+/// The most cells the pairs' cuts' floods and scans may visit in all, so
+/// the enumeration cannot spend the caller's time on a giant board: each
+/// cut scans the floor once and floods the components it finds.
 const MAX_STEPS: usize = 1 << 21;
+/// The most cuts the triple pass may try, in sorted order. It runs beside
+/// the pairs with budgets of its own, so neither pass starves the other
+/// where a board's pool is large.
+const TRIPLE_CUTS: usize = 1 << 17;
+/// The most cells the triple pass's cuts' floods and scans may visit in
+/// all, for the same reason as `MAX_STEPS`. It carries the pass's real
+/// cost — each cut scans the floor once — and is set so a pool of a few
+/// hundred cells reaches the triples deep in its enumeration, where the
+/// regions behind three-cell necks sit, while a giant pool still stops
+/// early.
+const TRIPLE_STEPS: usize = 1 << 23;
+/// The most combinations of pool cells the triple pass's enumeration may
+/// examine, span-filtered or not, so a giant pool cannot spend the
+/// caller's time even before a cut is tried.
+const TRIPLE_COMBOS: usize = 1 << 21;
 
 // Rooms are disjoint, so there are at most `MAX_CELLS`, each with at most
 // two tables, and the tables' sum fits u32 with room for the hall part.
@@ -197,13 +212,14 @@ impl Ledger {
 /// stands within `MAX_ROOM` steps of one, and a cell with one floor
 /// neighbor cannot close a region that keeps it, since dropping the cell
 /// leaves its neighbor's region whole. Two doors are tried as every pair
-/// of pool cells within `MAX_ROOM` of each other; three, as the boundary
-/// of a two-door candidate with one pool cell more, which finds the
-/// regions a wider cut of a found region isolates. Both run in sorted
-/// order and stop at `MAX_CUTS` cuts, and a pool past `MAX_POOL` cells
-/// yields no multi-door candidates at all, so a giant board cannot pay
-/// for them. Not every three-door region is sought: one whose boundary
-/// holds no two-door candidate's boundary is not grown from.
+/// of pool cells within `MAX_ROOM` of each other, under `MAX_CUTS` cuts
+/// and `MAX_STEPS` visited cells; three, as every triple of pool cells
+/// pairwise within `MAX_ROOM`, under budgets of the triple pass's own —
+/// `TRIPLE_CUTS` cuts, `TRIPLE_STEPS` visited cells and `TRIPLE_COMBOS`
+/// examined combinations — so neither pass starves the other. A pool
+/// past `MAX_POOL` cells yields no multi-door candidates at all, so a
+/// giant board cannot pay for them, and the triple enumeration stops at
+/// its combination budget, so not every three-door region is sought.
 ///
 /// A candidate of several doors can cross another — the one-door
 /// candidates nest or are disjoint, but a wider cut can share cells with a
@@ -329,10 +345,10 @@ fn candidates(
         queue,
         epoch,
         age: 1 << 20,
-        steps: 0,
     };
     let mut cut = ledger.vec(MAX_DOORS)?;
     let mut tried = 0;
+    let mut steps = MAX_STEPS;
     if !pool.is_empty() && pool.len() <= MAX_POOL {
         let width = board.width();
         let span = |a: Cell, b: Cell| {
@@ -353,33 +369,41 @@ fn candidates(
                 cut.clear();
                 cut.push(pool[a]);
                 cut.push(pool[b]);
-                cuts.try_cut(&cut, &mut out, ledger)?;
+                cuts.try_cut(&cut, &mut out, ledger, &mut steps)?;
             }
         }
-        // The three-door cuts: each two-door candidate's doors with one
-        // pool cell more.
-        let mut grown = Vec::new();
-        for (doors, _) in out.iter().filter(|(doors, _)| doors.len() == 2) {
-            ledger.push(&mut grown, (doors[0], doors[1]))?;
-        }
-        'grown: for &(a, b) in &grown {
-            for &extra in &pool {
-                if extra == a || extra == b {
+        // The three-door cuts: every triple of pool cells pairwise within
+        // a `MAX_ROOM` box, in pool order. A region behind a three-cell
+        // neck is isolated by no pair, so the pairs alone miss it, and
+        // the growth that ran here before grew only from the two-door
+        // candidates the pairs found.
+        let (mut triples, mut examined) = (0, 0);
+        let mut steps = TRIPLE_STEPS;
+        'triples: for a in 0..pool.len() {
+            for b in (a + 1)..pool.len() {
+                if span(pool[a], pool[b]) > MAX_ROOM {
                     continue;
                 }
-                tried += 1;
-                if tried > MAX_CUTS {
-                    break 'grown;
+                for c in (b + 1)..pool.len() {
+                    examined += 1;
+                    if examined > TRIPLE_COMBOS {
+                        break 'triples;
+                    }
+                    if span(pool[a], pool[c]) > MAX_ROOM || span(pool[b], pool[c]) > MAX_ROOM {
+                        continue;
+                    }
+                    triples += 1;
+                    if triples > TRIPLE_CUTS {
+                        break 'triples;
+                    }
+                    cut.clear();
+                    cut.push(pool[a]);
+                    cut.push(pool[b]);
+                    cut.push(pool[c]);
+                    cuts.try_cut(&cut, &mut out, ledger, &mut steps)?;
                 }
-                cut.clear();
-                cut.push(a);
-                cut.push(b);
-                cut.push(extra);
-                cut.sort_unstable();
-                cuts.try_cut(&cut, &mut out, ledger)?;
             }
         }
-        ledger.release(grown);
     }
     ledger.release(cut);
     ledger.release(pool);
@@ -415,8 +439,8 @@ fn candidates(
 /// The scratch the multi-door cuts share: the board they cut, the floor
 /// and the marked cells a kept region holds, the flood's stamps and
 /// queue, and the floor's cell count. `candidates` tries one cut at a
-/// time through [`Self::try_cut`], until [`MAX_CUTS`] cuts or
-/// [`MAX_STEPS`] visited cells.
+/// time through [`Self::try_cut`], each pass under the cut and cell
+/// budgets it passes down.
 struct Cuts<'a> {
     board: &'a Board,
     inside: &'a [bool],
@@ -430,8 +454,6 @@ struct Cuts<'a> {
     age: u32,
     /// The flood's queue.
     queue: Vec<Cell>,
-    /// The cells the cuts' scans and floods have visited.
-    steps: usize,
 }
 
 impl Cuts<'_> {
@@ -441,13 +463,14 @@ impl Cuts<'_> {
     /// every cut cell stands next to the component, and every floor cell
     /// next to it lies in it or in the cut, which the flood's stamps could
     /// otherwise carve around. The largest component floods in full
-    /// however big, so one cut costs O(|inside|); the whole pass stops at
-    /// [`MAX_STEPS`] cells.
+    /// however big, so one cut costs O(|inside|); the whole pass stops
+    /// when its caller's cell budget runs out.
     fn try_cut(
         &mut self,
         cut: &[Cell],
         out: &mut Vec<Candidate>,
         ledger: &mut Ledger,
+        steps: &mut usize,
     ) -> Result<(), SizeFailure> {
         let neighbors = self.board.neighbors();
         // The stamps of this cut's components run from `begin` up; an
@@ -456,10 +479,12 @@ impl Cuts<'_> {
         // already flooded.
         let begin = self.age + 1;
         for cell in (0..self.inside.len() as Cell).filter(|&cell| self.inside[usize::from(cell)]) {
-            if self.steps >= MAX_STEPS {
+            if *steps == 0 {
                 return Ok(());
             }
-            self.steps += 1;
+            // A component's flood may overrun the budget's end, as the
+            // one-door pass's sides do; the next one does not start.
+            *steps = steps.saturating_sub(1);
             let first = usize::from(cell);
             if self.epoch[first] >= begin || cut.contains(&cell) {
                 continue;
@@ -479,7 +504,7 @@ impl Cuts<'_> {
                     }
                     self.epoch[n] = self.age;
                     self.queue.push(next);
-                    self.steps += 1;
+                    *steps = steps.saturating_sub(1);
                     if self.queue.len() > MAX_ROOM {
                         big = true;
                         break;
@@ -1232,6 +1257,28 @@ mod tests {
         assert!(
             found.iter().any(|(_, cells)| cells.contains(&box_cell)),
             "the pocket behind an across cut holds the box, among {} candidates",
+            found.len()
+        );
+    }
+
+    /// A pocket behind a three-cell neck: no pair of the neck's cells
+    /// splits the floor, so only the triple pass of `candidates` finds
+    /// it. The pocket holds box A and its goal, the main area box B, its
+    /// goal and the keeper.
+    #[test]
+    fn a_pocket_behind_three_doors_is_a_candidate() {
+        let board =
+            Board::parse("OOOOOOOO\nOa  B  O\nO A    O\nO   b  O\nOOOO  RO\nOOOOOOOO").unwrap();
+        let start = board.initial();
+        let mut ledger = ledger();
+        let found = candidates(&board, &start, &inside(&board, &start), &mut ledger).unwrap();
+        let list = |cells: &[usize]| cells.iter().map(|&c| c as Cell).collect::<Vec<_>>();
+        let (pocket, neck) = (list(&[9, 10, 17, 18, 25, 26]), list(&[11, 19, 27]));
+        assert!(
+            found
+                .iter()
+                .any(|(doors, cells)| *doors == neck && *cells == pocket),
+            "among {} candidates",
             found.len()
         );
     }

@@ -322,6 +322,16 @@ Hall's bound reaches 284 at 2048 MiB, where memory ends the search at 89 s, and
 stop at 2^26 - 1, about 67.1M states, so a higher bound needs a stronger bound,
 not more memory.
 
+The three-door cuts — every triple of pool cells within a 62-cell box, on
+budgets of their own beside the pairs — reach the regions no pair isolates.
+On Grand Hall the two wings table at last, behind the cuts {(1,6),(5,4),(5,5)}
+and its mirror: the bound at 60M states rises from 290 to 292 at 4000 and
+32768 MiB, and at 1M states and 256 MiB from 278 to 285, while 64 MiB cannot
+hold the wings' searches and the gate's numbers stand. Across the catalog the
+pass raises six bounds at the gate's config, theme-parking's by 5 and
+gen-v2-320118's by 9 (2026-10-11, the development host; `docs/room-bound.md`
+has the numbers).
+
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when
 either neighbor is a wall or frozen box or both are dead cells for its label.
