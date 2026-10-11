@@ -619,6 +619,17 @@ keeps 6 of the gate's 10 gains, for about 3 s of kicks there against
 uncapped kicks' 27 s. 1 per state would keep 2, stop Grand Hall at 432, and
 cost gen-v2-350250 two moves in production.
 
+Swept at 64 (2026-10-11, the development host): Grand Hall's route at 60M
+states, 64 MiB and no time limit is the same 429 moves, 224 pushes, the
+same route letter for letter and the same 633 s, for the cap never binds
+there — the kicks end their round on their own at 502M units, inside the
+960M that 16 per state already gives, so no larger cap can change the
+route. 256 per state cannot even be named: 60M states times 256 passes
+the u32 the most kick work must fit on wasm32, and uncapped kicks end at
+429 besides (job 49509's traced runs). What would shorten the route is
+not more kick work but a different pool of optima to kick from (see
+Left out, for now).
+
 ## Left out, for now
 
 These come from the reference's Quality route repair, or were considered here:
