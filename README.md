@@ -320,7 +320,9 @@ start's 214. With the memory cap lifted in a build made for the run, Grand
 Hall's bound reaches 284 at 2048 MiB, where memory ends the search at 89 s, and
 286 at 4000 MiB, where 60M states end it at 151 s (job 49425). The arena's ids
 stop at 2^26 - 1, about 67.1M states, so a higher bound needs a stronger bound,
-not more memory.
+not more memory — measured at that ceiling, 2,103,322 states sit queued at
+f = 298 with the arena holding its full 60M, so the 299 point is beyond the
+search's reach as well (2026-10-11, the development host).
 
 The three-door cuts — every triple of pool cells within a 62-cell box, on
 budgets of their own beside the pairs — reach the regions no pair isolates.
@@ -391,7 +393,11 @@ to 103 s, so neither more time nor more memory shortened it (job 49425). That
 is where the polish's jobs stop gaining, and the kicks start there: with no
 time limit Quality now returns 429 moves (224 pushes) at 64 MiB, about 404 s
 after the start (job 49484), and the kicks' work cap leaves that run alone
-at the 60M-state limit (job 49509). The shortest route found so far is 422 moves
+at the 60M-state limit (job 49509). At 256 MiB the polish goes further on its
+own, to 424 moves (220 pushes; 1024 MiB gives the same), no time limit — the
+memory the deeper jobs need, not the kicks' starting points; a pool of optima
+to kick from was measured against it and kept nothing (2026-10-11, the
+development host; `docs/route-polish.md`). The shortest route found so far is 422 moves
 (220 pushes), by probes that kicked from the polish's other local optima
 (jobs 49472 and 49487).
 `docs/route-polish.md` has the catalog-wide numbers and the polish's earlier

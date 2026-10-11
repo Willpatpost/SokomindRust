@@ -985,3 +985,15 @@ native/WASM parity all hold.
   against nine gains. A key that stays u64 under 64 bits and widens only
   past them would avoid the cost, but no board showed a table only the
   wider key can hold and pay for. The code is not in the tree.
+- **The single-box walk floor.** The estimate prices pushes and the
+  keeper's walk to its first push; the walking between a box's pushes is
+  unpriced, and Grand Hall's best route spends 204 walks on it, 90 of
+  them in the middle band. A term bounding one box's inter-stand walking
+  — the maze distances between the stands of its pushes, admissible
+  because one box's intervals are disjoint — was measured on that route
+  (2026-10-11, the development host): the largest box's floor is 30,
+  several more at 29, while the sums over boxes, 317 in all, overlap and
+  cannot add. The band's walking is spread across the boxes, and a term
+  that captures more than one box's share needs the push paths' stands,
+  which the heuristic's distance tables do not hold. Not built: the
+  ceiling is a third of the prize, and the cost a path-aware heuristic.

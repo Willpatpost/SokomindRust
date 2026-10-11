@@ -630,6 +630,34 @@ the u32 the most kick work must fit on wasm32, and uncapped kicks end at
 not more kick work but a different pool of optima to kick from (see
 Left out, for now).
 
+### The pool of optima (2026-10-11, the development host, not kept)
+
+Kicks from each optimum — the sweep that found Grand Hall's 422 — were
+tried as a product mechanism, four ways. A pool of routes beside the
+best, holding the optima the kicks' descents settle at or leave behind,
+with kicks from its members in turn, made the route worse: 431 against
+429 at 60M states and 64 MiB, for the member kicks dilute the
+best-starting kicks the 434-432-431-429 chain needs, and the round of
+no-gain kicks ends the polish before the chain completes. Staged — the
+product's round first, then kicks from the pool — held 429 both with a
+drifting origin and with a fixed one over a fresh pair cycle that
+provably covered the pair the sweep's 422 came from; the kick job itself
+finds nothing there, for its caps are the product's, 2^20 expansions
+and the arena's freed share against the sweep's 2^22 and 1024 MiB, and
+job 49472 already measured a chain-critical kick past 2^20. Giving the
+kicks the sweep's expansions and four times the work, at 256 MiB where
+the polish's share holds the bigger stores, changed nothing: 424 moves
+against the product's own 424 at the same budget, 4422 s against 1172.
+The pool is not in the tree.
+
+The measurement it rode on found the real lever. The product's own
+polish, given room, descends further on Grand Hall than any pool of
+optima: at 60M states and 64 MiB, no time limit, it ends at 429 moves;
+at 256 MiB, at 424, 220 pushes, 1172 s; at 1024 MiB, the same 424, 220
+pushes, 1189 s — the memory lever saturates at 256 MiB. What shortens
+the route at the bigger budgets is the memory the deeper jobs need, not
+the kicks' starting points.
+
 ## Left out, for now
 
 These come from the reference's Quality route repair, or were considered here:
