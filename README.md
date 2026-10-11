@@ -337,9 +337,9 @@ five as a four-door candidate's doors with one pool cell more — lift Grand
 Hall again, to 298 at 60M states and 4000 or 32768 MiB and 290 at 1M states
 and 256 MiB, through a stronger wing table the reshuffled candidates build.
 Grand Hall's 57-cell middle band sits behind its five-door cut at last, but
-its key needs 120 bits against the u64's 63, and the halves share the whole
-room's cells, so it waits on wider keys (2026-10-11, the development host;
-`docs/room-bound.md` has the numbers).
+no key width tables it: under u128 keys its build fails past the forward
+search's cap, and the wider keys' cost un-builds tables elsewhere (measured,
+not kept; `docs/room-bound.md` has the numbers).
 
 Every mode shares a sound post-push deadlock rule, the greatest freeze
 fixpoint over the pushed box's component, where an axis holds a box when

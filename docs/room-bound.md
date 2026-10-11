@@ -855,8 +855,10 @@ states. At 1M states and 256 MiB the bound rises from 285 to 290; at
 wings-pair quad {(4,4),(4,5),(4,9),(4,10)} and its growth with the
 chimney cell {(11,7)} isolate the 57-cell band — but its tables cannot
 build: the whole room's key needs 120 bits against the u64's 63, and the
-halves share the whole room's cells, so their key is the same. The band
-waits on wider keys. On the catalog the wide pass trades one board for
+halves share the whole room's cells, so their key is the same. Wider
+keys were tried for it and not kept (see Rejected approaches): the band
+passes their gate and fails its build past the forward search's cap. On
+the catalog the wide pass trades one board for
 another's tables: gen-v2-340272's gate bound falls 157 to 156, its
 kept bytes from 7.3 to 5.0 MB, against the triple pass's six gains
 standing and Grand Hall's; bench:update re-records it. The gate, the
@@ -923,3 +925,15 @@ observe runs and native/WASM parity all hold.
 - **More rooms.** Grand Hall has no further single-door room to table. Rooms
   with two doors, or a split of the hall, would each need a new soundness
   argument, and were not pursued.
+- **u128 table keys.** Built, measured, and not kept (2026-10-11, the
+  development host). The keys' 127 bits let Grand Hall's 57-cell middle band
+  past `TableBuild::new`'s gate — its layout and node need 120 — but the
+  band's build then fails: the relaxed problem lets all eleven of the
+  board's X boxes enter while the band holds fewer, and the forward search
+  passes its cap. The wider keys help no table that fits, and they cost
+  every one: the forward search's chunks double to 16 bytes a state and
+  the kept values to 18, which un-builds tables across the catalog — the
+  gate falls on six boards, Grand Hall's own gate bound from 262 to 231,
+  against nine gains. A key that stays u64 under 64 bits and widens only
+  past them would avoid the cost, but no board showed a table only the
+  wider key can hold and pay for. The code is not in the tree.
