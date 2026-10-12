@@ -1,6 +1,6 @@
 use crate::{MAX_STATES, MAX_STATES_RANGE, MEMORY_MIB_RANGE, SearchError, Status};
 use queue::Queue;
-use sokomind_core::{Cell, MAX_BOXES, MAX_CELLS, MAX_ROUTE, NONE, State};
+use sokomind_core::{Cell, MAX_BOXES, MAX_ROUTE, NONE, State};
 use std::mem::size_of;
 
 mod queue;
@@ -10,7 +10,7 @@ pub(crate) const NIL: u32 = u32::MAX;
 
 /// Bits of a node id in a queue key, in a record's parent field and in a
 /// table slot.
-const ID_BITS: u32 = 26;
+const ID_BITS: u32 = 28;
 /// Low `ID_BITS` set: extracts an id, and stands for NIL in a record.
 const ID_MASK: u32 = (1 << ID_BITS) - 1;
 /// Bits of a table slot above its id, which hold the state's [`tag`].
@@ -31,10 +31,13 @@ const _: () = assert!(MAX_STATES < ID_MASK as usize);
 pub(crate) const G_SAT: u32 = u32::MAX - 1;
 const _: () = assert!((MAX_ROUTE as u64) < Key::F_SAT && Key::F_SAT < G_SAT as u64);
 
-/// Largest h a queue entry may carry: MAX_BOXES push distances, each below
-/// `MAX_CELLS`, plus at most `MAX_CELLS` for the root's keeper walk to its
-/// first push.
-pub(crate) const MAX_QUEUED_H: u32 = ((MAX_BOXES + 1) * MAX_CELLS) as u32;
+/// Largest h a queue entry may carry: the u16 width of `Node::h`'s storage
+/// and of the key's h field. Every f an enqueue builds comes from
+/// [`push::key`], which clamps h here, so the h a key stores is its f's own
+/// and reads back whole. An estimate past it clamps to it: a smaller
+/// admissible h, on boards whose estimates outgrow the u16 the node stores
+/// anyway.
+pub(crate) const MAX_QUEUED_H: u32 = u16::MAX as u32;
 
 /// Log2 of the records in a full [`Chunk`]. Unit tests use four-record
 /// chunks, so that small searches cross many chunk boundaries.
@@ -133,9 +136,9 @@ fn known(h: u16) -> Option<u32> {
 #[derive(Clone, Copy)]
 struct Record {
     g: u32,
-    /// Parent id in bits 0..26 ([`ID_MASK`] at the root), bits 26..28
-    /// spare and zero, the push direction in bits 28..30, then
-    /// [`Record::CLOSED`] and [`Record::SUPERSEDED`].
+    /// Parent id in bits 0..28 ([`ID_MASK`] at the root), the push
+    /// direction in bits 28..30, then [`Record::CLOSED`] and
+    /// [`Record::SUPERSEDED`].
     link: u32,
     player: Cell,
     h: u16,
@@ -179,14 +182,14 @@ impl Record {
 }
 
 /// Queue entry `(f, h, id)` packed into one integer, f in the top 20 bits,
-/// h in the next 18 and the id in the low `ID_BITS` (26), so integer order
+/// h in the next 16 and the id in the low `ID_BITS` (28), so integer order
 /// is exactly tuple order: lowest f first, then lowest h, then oldest.
 /// Values past a field saturate; see [`Key::F_SAT`]. 8 bytes on wasm32 and
 /// 64-bit alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Key(u64);
 impl Key {
-    const H_BITS: u32 = 18;
+    const H_BITS: u32 = 16;
     const F_SHIFT: u32 = Self::H_BITS + ID_BITS;
     /// Largest stored f. A key reading `F_SAT` stands for any f at or above
     /// it: never more than the true f, so a frontier read from keys stays a
@@ -321,9 +324,9 @@ pub(crate) struct Arena {
     /// a chunk of room per record chunk, of the same size.
     queue: Queue,
     /// Open-addressed slots, each [`NIL`] when empty, or a node id in the
-    /// low [`ID_BITS`] with its state's [`tag`] in the top [`TAG_BITS`] (6).
+    /// low [`ID_BITS`] with its state's [`tag`] in the top [`TAG_BITS`] (4).
     /// A probe loads a slot's record only when the tags match, which for a
-    /// different state happens one time in 64, so a find reads about one
+    /// different state happens one time in 16, so a find reads about one
     /// record when it hits and almost none when it misses. Ids stay below
     /// [`ID_MASK`], so no bound slot reads as [`NIL`].
     ///
@@ -386,10 +389,10 @@ impl Arena {
         } = Self::capacity(fixed_bytes, boxes, max_states, memory_mib)?;
         let records = limit + 1;
         // The chunk lists, the records' and the queue's, one entry per CHUNK
-        // records each, are the buffers the budget does not charge: no budget
-        // holds more than 2^25 records, so each is at most 512 entries, 36 KiB
-        // together, though the four-record chunks of unit tests make them far
-        // longer.
+        // records each, are the buffers the budget does not charge: no
+        // request holds more than MAX_STATES records, so each is at most
+        // 3,907 entries, 281 KiB together, though the four-record chunks of
+        // unit tests make them far longer.
         let first = records.min(CHUNK);
         let mut chunks = Vec::new();
         chunks
@@ -980,6 +983,7 @@ impl Arena {
 mod tests {
     use super::*;
     use crate::testkit::Lcg;
+    use sokomind_core::MAX_CELLS;
     use std::collections::HashMap;
 
     #[test]
@@ -1770,17 +1774,17 @@ mod tests {
     /// The key's field widths, with the largest key any node can carry one
     /// below `u64::MAX`, and the worst f a queued node can reach exact.
     #[test]
-    fn keys_split_into_twenty_eighteen_and_twenty_six_bits() {
+    fn keys_split_into_twenty_sixteen_and_twenty_eight_bits() {
         assert_eq!(
             (Key::F_SAT, Key::H_SAT, ID_MASK),
-            ((1 << 20) - 1, (1 << 18) - 1, (1 << 26) - 1)
+            ((1 << 20) - 1, (1 << 16) - 1, (1 << 28) - 1)
         );
         let largest = Key::new(Key::F_SAT, Key::H_SAT, ID_MASK - 1);
         assert_eq!(largest.0, u64::MAX - 1);
         // MAX_ROUTE plus Policy::FAST's weight, the largest, times the largest
         // h (checked by scripts/mirrors.test.mjs).
         let worst = MAX_ROUTE as u64 + 5 * u64::from(MAX_QUEUED_H);
-        assert_eq!(worst, 775_840);
+        assert_eq!(worst, 427_675);
         let key = Key::new(worst, MAX_QUEUED_H, MAX_STATES as u32);
         assert_eq!(
             (key.f(), key.h(), key.id()),

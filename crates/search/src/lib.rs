@@ -81,9 +81,9 @@ pub use proof::Proof;
 use sokomind_core::{Board, MAX_ROUTE, State, StateError};
 use std::ops::RangeInclusive;
 
-/// Largest per-search state limit accepted anywhere. Node ids fill 26 bits
+/// Largest per-search state limit accepted anywhere. Node ids fill 28 bits
 /// in queue keys, records and the state table, with the all-ones id
-/// (`ID_MASK` in the arena, 2^26 - 1 = 67,108,863) reserved, so this stays
+/// (`ID_MASK` in the arena, 2^28 - 1 = 268,435,455) reserved, so this stays
 /// below it. A state costs a 12-byte record, two bytes per box, an 8-byte
 /// queue entry and 8 to 16 bytes of index table, so whether a budget in
 /// [`MEMORY_MIB_RANGE`] holds this many depends on the box count and the
@@ -91,15 +91,15 @@ use std::ops::RangeInclusive;
 /// `MAX_CELLS` cells (11,167,215 in Optimal, whose heuristic tables are
 /// larger) and 33,554,431 at one box (the engine test
 /// `memory_binds_a_full_limit_below_the_budget_that_holds_it`); the range's
-/// wasm end holds the full limit at one box but not at `MAX_BOXES`; and its
-/// native end, 32768 MiB, holds the full limit at every box count, leaving
-/// what it does not spend on records to the room bound's tables. A search
-/// that fills a request at this limit therefore ends with
-/// [`Status::MemoryLimit`] at a budget that cannot hold it, and
-/// [`Status::StateLimit`] at one that can. Records, the queue and the table
-/// are allocated only as the search fills them, so one that ends early, as
-/// on a small board, allocates little of its budget.
-pub const MAX_STATES: usize = 60_000_000;
+/// wasm end holds the full limit at no box count, and its native end,
+/// 32768 MiB, holds the full limit at every box count, leaving what it does
+/// not spend on records to the room bound's tables. A search that fills a
+/// request at this limit therefore ends with [`Status::MemoryLimit`] at a
+/// budget that cannot hold it, and [`Status::StateLimit`] at one that can.
+/// Records, the queue and the table are allocated only as the search fills
+/// them, so one that ends early, as on a small board, allocates little of
+/// its budget.
+pub const MAX_STATES: usize = 256_000_000;
 /// The `max_states` values [`Search::new`] accepts. Callers that validate
 /// limits themselves check against this range, never a copy of it.
 pub const MAX_STATES_RANGE: RangeInclusive<usize> = 1..=MAX_STATES;

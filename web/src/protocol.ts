@@ -11,7 +11,7 @@ export const PAST_LIMIT_MESSAGE = `Position and route together exceed the ${MAX_
  * about 0.91-2.10M states, and 1024 MiB, the largest budget the #memory select offers
  * and both engines accept, 14.68-33.55M. Every solve sends this cap, so its memory
  * budget alone sizes the arena, which grows its records, queue and table as it fills. */
-export const MAX_STATES = 60_000_000;
+export const MAX_STATES = 256_000_000;
 /** Matches sokomind_search::Mode::parse, which WasmSearch and POST /api/solve
  * apply to `mode`; also the values of the #mode select. */
 export const MODES = ['fast', 'quality', 'optimal'] as const;

@@ -144,8 +144,8 @@ Each edge is one push plus a shortest walk to its stand, the cell behind the
 box. Keeper position remains part of state identity. Walks are reconstructed
 only for reported routes.
 Each arena record is 12 bytes plus its box cells, each queue entry one 8-byte
-key packing `f`, `h`, and a 26-bit arena id, and each table slot a 4-byte arena
-index whose 6 spare bits hold a hash tag, so a probe skips most other states'
+key packing `f`, `h`, and a 28-bit arena id, and each table slot a 4-byte arena
+index whose 4 spare bits hold a hash tag, so a probe skips most other states'
 records unread.
 
 The estimate is the assignment's push count. The start state also adds the
@@ -318,11 +318,18 @@ at 5 s and 256 MiB or 1 GiB, and 283 at 30 s and 1 GiB. The open cases' sum at
 machine slow enough that the build does not finish, the bound stays at the
 start's 214. With the memory cap lifted in a build made for the run, Grand
 Hall's bound reaches 284 at 2048 MiB, where memory ends the search at 89 s, and
-286 at 4000 MiB, where 60M states end it at 151 s (job 49425). The arena's ids
-stop at 2^26 - 1, about 67.1M states, so a higher bound needs a stronger bound,
-not more memory — measured at that ceiling, 2,103,322 states sit queued at
-f = 298 with the arena holding its full 60M, so the 299 point is beyond the
-search's reach as well (2026-10-11, the development host).
+286 at 4000 MiB, where 60M states end it at 151 s (job 49425). The arena's
+ids stopped at 2^26 - 1, about 67.1M states, and at that ceiling 2,103,322
+states sat queued at f = 298 with the arena holding its full 60M, so the 299
+point read as beyond the search's reach (2026-10-11, the development host).
+That was a packing limit, not a memory one: the record's parent field held
+two spare bits past the id, and the queue key's h field held 18 bits where
+the node's own storage ends at 16, so the id now fills 28 bits and the state
+limit 256M, with every queued h clamped at the u16 width a stored estimate
+already ends at. At 256M states and 32768 MiB the search holds its full
+arena, expands 58.9M states in 19.1 minutes, and ends at f = 301: 299 and
+300 fell to exhaustion, and the bound rose from 298 to 301 (2026-10-12, the
+development host; `docs/room-bound.md` has the numbers).
 
 The three-door cuts — every triple of pool cells within a 62-cell box, on
 budgets of their own beside the pairs — reach the regions no pair isolates.
@@ -486,7 +493,7 @@ are that letter in lowercase. `o`, `r`, `s` and `x` are reserved, because no box
 carries `O`, `R` or `S` and `X`'s goal is spelled `S`; the parser rejects them
 with their row and column, like any other unsupported symbol.
 Boards are limited to 4096 cells and 32 boxes (all imported puzzles fit). Routes
-are limited to 100,000 moves. Native requests cap at 30 seconds, 60,000,000 states
+are limited to 100,000 moves. Native requests cap at 30 seconds, 256,000,000 states
 per arena (`sokomind_search::MAX_STATES`), 1024 MiB accounted search storage, and
 one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration),
 and take 128 MiB when they name no budget. The search crate accepts budgets up
@@ -535,7 +542,7 @@ add latency.
   asks once at startup and shows "Native solver connected" when that reply
   arrives; otherwise "Browser mode" stays on show. Either way, both engines
   remain selectable.
-* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 60000000, memory_mib: 128}`.
+* `POST /api/solve` — `{rows: string[], actions: "", mode: "fast"|"quality"|"optimal", time_ms: 5000, max_states: 256000000, memory_mib: 128}`.
   Only `rows` and `mode` are required; the values shown are the defaults. The
   limits start at 10 ms, 1 state, and 4 MiB and cap as under Layout and
   boundaries. The reply is `{status, route, moves, pushes, expanded, generated,

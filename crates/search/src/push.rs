@@ -18,7 +18,7 @@
 //! it: nothing here reads the policy or the incumbent or touches the queue,
 //! only the bound, the reopen flag and the weight each call passes in.
 use crate::{
-    arena::{Arena, Key, Node, Slot},
+    arena::{Arena, Key, MAX_QUEUED_H, Node, Slot},
     corral::Corral,
     deadlock::{ALL_BOXES, Deadlock},
     heuristic::{Heuristic, ParentGroup},
@@ -162,10 +162,13 @@ impl Child {
 }
 
 /// The f [`Arena::enqueue`] takes for a node at `g` with estimate `h`:
-/// `g + weight * h` at the current weight, which the queue key saturates.
-/// Exact, since even `u32::MAX` for all three fits a u64.
+/// `g + weight * h` at the current weight, with `h` clamped at
+/// [`MAX_QUEUED_H`] so the f and the h the key stores agree, and the whole
+/// saturated by the queue key. Exact, since even `u32::MAX` for all three
+/// fits a u64.
 #[inline]
 pub(crate) fn key(g: u32, h: u32, weight: u32) -> u64 {
+    let h = h.min(MAX_QUEUED_H);
     u64::from(g) + u64::from(weight) * u64::from(h)
 }
 

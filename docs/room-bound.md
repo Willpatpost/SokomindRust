@@ -817,11 +817,13 @@ a run at 1024 MiB is `main`'s search). It ran on a Xeon Platinum 8581C with
 | 4000 MiB | 60M states | 60,000,000 | 14,199,363 | 151.2 s | 286 | 3.49 GiB |
 
 At 4000 MiB the bound was 282 at 30 s, 284 at 60 s and 285 at 120 s, and last
-rose to 286 at 144.8 s. The arena's ids stop at 2^26 - 1, about 67.1M states,
-so no budget takes a run much past the 60M state limit. Each doubling of the
-states a run holds raised the bound by 1 to 2, against a gap of 136 to the
-shortest route found, 422 moves (see `route-polish.md`). Memory cannot close
-that gap; a higher bound needs a stronger bound.
+rose to 286 at 144.8 s. The arena's ids stopped at 2^26 - 1, about 67.1M
+states, so no budget took a run much past the 60M state limit — a ceiling
+the 28-bit repack below lifted. Each doubling of the states a run holds
+raised the bound by 1 to 2, against a gap of 136 to the shortest route
+found, 422 moves (see `route-polish.md`). Memory could not close that gap
+at 26-bit ids; the repack below took the bound three further before the
+states ended again.
 
 ### Triple cuts (2026-10-11, the development host)
 
@@ -911,6 +913,40 @@ from about 2.5 s to 7.9 s (bench:observe), all of it on band tables the
 keep test drops; a time limit shorter than that drops the build whole,
 as any over-long build already did. The gate, the observe runs and
 native/WASM parity all hold.
+
+### The 28-bit id repack (2026-10-12, the development host)
+
+The queue key, the record's parent field and the table slot all ended an id
+at 26 bits, and the packing read as tight: the key's f field needs 20 bits,
+since MAX_ROUTE plus the Fast weight times the largest queued h reached
+775,840, and its h field needed 18, since that largest h was the estimate's
+own bound, MAX_BOXES push distances plus the root's keeper walk, 135,168.
+Two facts made it loose. The record's parent field held two spare bits past
+the id — the push direction and the two flags sit at 28..32 — and the h
+field's 18 bits held a number no stored estimate keeps: `Node::h` is a u16
+that marks anything past 65,535 unknown. So the id now fills 28 bits, the
+parent field's own spare bits with nothing else moved; the key's h field
+holds 16, and every f an enqueue builds clamps its h at `u16::MAX` first
+(`push::key`), so the f and the h a key stores agree and the h reads back
+whole; an estimate past the clamp queues smaller — still admissible — on
+boards whose estimates outgrow the u16 the node stores anyway. The table
+slot's tag shrank from 6 bits to 4, so a probe loads a record it need not
+one time in 16 against one in 64, and the state limit rose from 60M to
+256M, which the native budget ceiling holds at every box count.
+
+Measured, on Grand Hall, Optimal at 256M states and 32768 MiB: the search
+ends at its state limit with the arena full — 256,000,000 generated,
+224,167,839 unique, the queue peaking at 230,544,103, 14.9 GiB reserved —
+after expanding 58,920,705 states in 1,143.9 s, no reopening. The frontier
+ends at f = 301: the 2,103,322 states the 2026-10-11 histogram found queued
+at f = 298 are gone, the 299 and 300 layers fell to exhaustion after them,
+and the bound rose from 298 to 301, so no route of 300 moves or fewer
+exists. The 2026-10-11 reading, that the 299 point lay beyond the search's
+reach, was the packing's, not memory's. The gate is unchanged route for
+route (hard 0, changed 0), the observe boards hold, and native/WASM parity
+holds its 171 cases; the WASM side never reaches the new ids, since its
+4095 MiB ceiling binds an arena far below them. The optimum lies in
+[301, 424].
 
 ## Rejected approaches
 
