@@ -403,10 +403,12 @@ after the start (job 49484), and the kicks' work cap leaves that run alone
 at the 60M-state limit (job 49509). At 256 MiB the polish goes further on its
 own, to 424 moves (220 pushes; 1024 MiB gives the same), no time limit — the
 memory the deeper jobs need, not the kicks' starting points; a pool of optima
-to kick from was measured against it and kept nothing (2026-10-11, the
-development host; `docs/route-polish.md`). The shortest route found so far is 422 moves
+to kick from was measured against it and kept nothing, losing at every memory
+tier, 428 against 424 at the sweep's own 1024 MiB (2026-10-11 and 2026-10-12,
+the development host; `docs/route-polish.md`). The shortest route found so far is 422 moves
 (220 pushes), by probes that kicked from the polish's other local optima
-(jobs 49472 and 49487).
+(jobs 49472 and 49487); its route was never stored, and the same kicks from
+the current base find nothing better, so it stays unverified.
 `docs/route-polish.md` has the catalog-wide numbers and the polish's earlier
 measurements.
 The sealed-corral check covers the reference's corral deadlock check, at the same

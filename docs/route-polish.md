@@ -648,7 +648,16 @@ job 49472 already measured a chain-critical kick past 2^20. Giving the
 kicks the sweep's expansions and four times the work, at 256 MiB where
 the polish's share holds the bigger stores, changed nothing: 424 moves
 against the product's own 424 at the same budget, 4422 s against 1172.
-The pool is not in the tree.
+The one cell that run left open — 1024 MiB, the sweep's own memory — ran
+on 2026-10-12 from the current tree, the pool patch on main with
+`PAIR_POPS` at the sweep's 2^22: 428 moves against the product's own 424
+at the same budget, 1246 s. The pool loses at every tier — 431 against
+429 at 64 MiB, level at 256, 428 against 424 at 1024 — and the sweep's
+422 owed its route to the tree it kicked from, the 436-era optima the
+multi-start and kick descents left, not to the caps: from the current
+base the same kicks from every optimum find nothing better. The pool is
+not in the tree, and the 422 stays a throwaway whose route was never
+stored.
 
 The measurement it rode on found the real lever. The product's own
 polish, given room, descends further on Grand Hall than any pool of
