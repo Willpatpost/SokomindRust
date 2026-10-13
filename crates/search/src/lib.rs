@@ -66,6 +66,7 @@ mod deadlock;
 mod engine;
 mod exact;
 mod heuristic;
+mod lp_solver;
 mod polish;
 mod proof;
 mod push;

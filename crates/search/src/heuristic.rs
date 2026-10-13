@@ -11,6 +11,14 @@ use crate::reach::Blocks;
 use sokomind_core::{Board, Cell, MAX_BOXES, MAX_CELLS, NONE, OPPOSITE, State};
 use std::{collections::VecDeque, mem::size_of, ops::Range};
 
+/// The dual-transfer walk term the room bound carries beside its hall
+/// part: the LP that prices the off-counted pushes and keeper walks
+/// jointly, solved once at the root and evaluated per state through its
+/// duals (docs/room-bound.md). A child of this module because it reads
+/// the heuristic's own privates — the spot encoding, the label groups,
+/// the keeper's blocks.
+pub(crate) mod walk_term;
+
 /// A cell has at most one side per neighbor, and [`Blocks`] labels each
 /// side by a neighbor's direction.
 const SIDES: usize = 4;

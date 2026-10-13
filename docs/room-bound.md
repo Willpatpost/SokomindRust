@@ -204,12 +204,53 @@ charge_C ≤ M's charge, so its feasibility equals M's.
   the same assignment M_hall drops by at most [end ∉ C]. Only the start can
   have a keeper charge, so the engine subtracts it there alone, in `root`.
 
+### The walk term W
+
+M_hall's blind spot is the walking that stays on B: it charges a walk only
+as the stand charge back into B, so the keeper crossing the hall between
+boxes costs it nothing. The walk term prices those walks, and the pushes
+with them, jointly, by a linear program over the same push graph M's
+distances relax (`walk_term.rs`).
+
+Each box is a flow over the graph rather than a path, the goal assignment
+folded in per label group through absorption variables. A transport arc
+ships the keeper from a push's end to the next stand at the walk matrix's
+distance — the fewest steps ending outside C between the two, a 0-1 BFS per
+source — and an arc from a floor cell into the sink costs big-M, so only a
+push's end, a route's last, feeds it free. A push costs [end ∉ C]: the move
+ends on the box's old cell, where the keeper lands.
+
+Every route from a state induces a feasible point — its pushes are flows
+ending one same-label goal each, the goals an assignment, its between-push
+walks a transport — and the point's cost is the route's cost outside C, the
+matrix lower-bounding each walk. So the optimum W(s) never exceeds
+cost_{outside C}(π) for any route π. The oracle test in `walk_term.rs`
+checks this against exact optima, state by state, over every board the test
+kit has explored and three counted sets each.
+
+The engine does not solve the LP per state. Its rows are the same at every
+state; only the rhs moves — each box's start spot, the assignment demand,
+the keeper's cell — so a dual feasible at the root is dual feasible
+everywhere and bounds W(s) by weak duality as u·b(s), a few row lookups per
+state. Two duals are carried: the root solve's own, and the L1-minimal dual
+over the optimal face, from a second LP that minimizes Σ|u| under the
+transposed column constraints and a pin a hair under the root's objective.
+The root's own duals sit at big-M scale on rows the root leaves unpinned,
+so each state takes the larger of the two values; both are sound wherever
+they land, and neither drops by at most 1 per move — the arm is admissible,
+not consistent, and Exact reopens as its policy already does. At a state
+with every box placed the term is 0: the sink has no event to feed.
+
 ### The combined bound
 
 By the end-cell count, the parts and the cells outside C partition the moves,
 so S ≤ |π| for every route π. A move costs 1 and lowers at most the one term
-of its class, by at most 1, so S is consistent. M is admissible and
-consistent, so h = max(M, S) is both. At a goal state, S = 0.
+of its class, by at most 1, so the tables and hall arm of S is consistent. M
+is admissible and consistent, so h = max(M, S) is both. Where the walk term
+was built, S is the larger of that arm and the tables' sum plus W, ceilinged
+within the oracle's tolerance; the arm is admissible by the same partition,
+and not consistent, so Exact reopens on it as its policy allows. At a goal
+state, S = 0.
 
 ### What the engine does with h
 
@@ -230,9 +271,12 @@ consistent, so h = max(M, S) is both. At a goal state, S = 0.
   is decided against the queued h = max(M, S), and a deferred child is
   re-queued with the least deferred f, still a lower bound. A child that may
   be solved has M = S = 0, so it is never deferred.
-- **No reopening.** h is consistent, so a closed node never needs reopening.
-  The start's walk term makes the start alone inconsistent, and it is popped
-  first anyway.
+- **Reopening only for the walk arm.** M and the tables-and-hall arm of S are
+  consistent, so a closed node never needs reopening on them. The walk term's
+  arm is admissible but not consistent, and Exact reopens a closed node a
+  cheaper version of it reaches, as its policy always could; the weighted
+  policies build no term. The start's root stand walk makes the start alone
+  inconsistent, and it is popped first anyway.
 - **The keeper is exact.** An exact-search node carries the keeper's cell, the
   pushed box's old cell or the start's, so a table's node is exact.
 - **The lower bound** that `ExactSearch` reports reads the queue's least key,
@@ -494,6 +538,14 @@ by max(M, S). Its record keeps M, as every record does. The start is inserted
 once, so generated and unique states count it once, and a capped search's
 generated states stay within the state limit. With no table, or when the
 re-size refuses, the search goes on with the entry it has, keyed by M.
+
+The walk term is solved as the build ends, only at the capped work scale:
+its two LPs cost minutes on the large boards only a search of a million
+states or more can amortize — the cap reaches `MAX_CAP` exactly there — so
+smaller searches, every quick solve and every test's, keep S at the hall's
+arm, and a solve that fails leaves the term out the same way, S no weaker.
+The solve runs inside the build's last slice, unsliced itself, and its row
+map and dual vectors are charged to the budget with the tables and the hall.
 
 ## Measurements
 

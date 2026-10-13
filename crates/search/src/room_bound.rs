@@ -3,7 +3,10 @@
 //! Each room of at most `MAX_DOORS` doors that holds a start box or a goal
 //! gets tables R(Q, P, LAB) over disjoint parts P of Q (see `table`). The
 //! hall heuristic, which prices the moves that end outside every part,
-//! adds to their sum S, and the exact search queues max(M, S).
+//! adds to their sum S, and the exact search queues max(M, S). At the
+//! capped work scale the walk term joins S — one LP at the start, carried
+//! per state through its duals, pricing the off-counted pushes and keeper
+//! walks jointly (see `walk_term`).
 //!
 //! The tables are built before the search proper, by `RoomBuild`, in slices
 //! the search pays for as pops. The build charges every buffer to the share
@@ -15,7 +18,7 @@
 mod room;
 mod table;
 
-use crate::heuristic::{Heuristic, ParentGroup};
+use crate::heuristic::{Heuristic, ParentGroup, walk_term::WalkTerm};
 use room::{MAX_ROOM, Moves, Room};
 use sokomind_core::{Board, Cell, MAX_CELLS, NONE, State};
 use std::mem::{size_of, take};
@@ -1281,7 +1284,13 @@ impl RoomBuild {
     }
 
     /// Ends the build, a work share spent or every candidate tried: the
-    /// room bound of the rooms built, if any.
+    /// room bound of the rooms built, if any. The walk term is solved
+    /// here, once, over the parts the kept tables count — two LPs at the
+    /// start's rhs, paid before the search proper begins — but only at
+    /// the capped work scale: its LPs cost minutes on the large boards
+    /// only a search of a million states or more can amortize, and the
+    /// cap reaches `MAX_CAP` exactly there. Smaller searches — every
+    /// quick solve, every test's — keep S at the hall's own arm.
     fn finish(&mut self, board: &Board, start: &State) -> Option<RoomBound> {
         self.abandon(board, start);
         if self.built.is_empty() {
@@ -1301,15 +1310,23 @@ impl RoomBuild {
             }
         }
         let hall = Heuristic::hall(board, start.player, counted);
+        let walk = if self.cap >= MAX_CAP as usize {
+            WalkTerm::build(board, &hall, counted, start)
+        } else {
+            None
+        };
         let tables: usize = rooms
             .iter()
             .map(|b| b.room.bytes() + b.tables.capacity() * size_of::<Table>() + b.kept())
             .sum();
-        let bytes = rooms.capacity() * size_of::<RoomTables>() + tables + hall_bytes(board);
+        let bytes = (rooms.capacity() * size_of::<RoomTables>() + tables + hall_bytes(board))
+            as u64
+            + walk.as_ref().map_or(0, WalkTerm::bytes);
         Some(RoomBound {
             rooms,
             hall,
-            bytes: bytes as u64,
+            walk,
+            bytes,
         })
     }
 }
@@ -1328,10 +1345,15 @@ impl RoomParent {
     };
 }
 
-/// The built room tables and the hall part, which the search keeps.
+/// The built room tables, the hall part and the walk term, which the
+/// search keeps.
 pub(crate) struct RoomBound {
     rooms: Vec<RoomTables>,
     hall: Heuristic,
+    /// The dual-transfer walk term over the parts none of them count
+    /// (see `walk_term`): `None` when its LP could not be solved, which
+    /// leaves S no weaker than the hall's own arm.
+    walk: Option<WalkTerm>,
     /// The heap bytes all of it holds.
     bytes: u64,
 }
@@ -1356,15 +1378,25 @@ impl RoomBound {
     /// S of `state` from scratch, `None` when a projection is missing. The
     /// hall part is less the keeper's charge, which only the start can have:
     /// a push leaves the keeper where a box stood (see `Heuristic::estimate`).
+    /// The walk term's arm — the tables' sum plus the term's dual value,
+    /// ceilinged — joins the max when the term was built: it prices the
+    /// off-counted pushes and walks jointly, where the hall prices the
+    /// pushes alone.
     pub(crate) fn root(&self, state: &State) -> Option<u32> {
+        let tables = self.tables_sum(state)?;
         let hall = self.hall.estimate(state)?;
-        Some(self.tables_sum(state)? + hall.saturating_sub(self.hall.charge(state.player)))
+        let mut s = tables + hall.saturating_sub(self.hall.charge(state.player));
+        if let Some(walk) = &self.walk {
+            s = s.max(walk.arm(&self.hall, state, tables));
+        }
+        Some(s)
     }
 
     /// S of `child`, the state box `i` of `parent` reaches when pushed in
     /// direction `d` onto `to`, `None` when a projection is missing. The
     /// hall part updates the parent's incrementally, through `cache`, which
-    /// every child of one expansion shares.
+    /// every child of one expansion shares; the walk term's arm joins the
+    /// max from scratch, its O(boxes) row lookups per child.
     pub(crate) fn child_estimate(
         &self,
         parent: &State,
@@ -1384,7 +1416,11 @@ impl RoomBound {
         let hall = self
             .hall
             .child_estimate(parent_hall, &mut cache.group, parent, i, to, d)?;
-        Some(tables + hall)
+        let mut s = tables + hall;
+        if let Some(walk) = &self.walk {
+            s = s.max(walk.arm(&self.hall, child, tables));
+        }
+        Some(s)
     }
 }
 
@@ -1625,5 +1661,32 @@ mod tests {
                 .any(|built| built.room.doors().len() >= WIDE_DOORS),
             "a spent wide share still keeps wide rooms on the rooms' leftover"
         );
+    }
+
+    /// The walk term joins S only at the capped work scale, and where it
+    /// does it never passes the optimum: the pocket board driven at a
+    /// million states builds a term with a positive value at the start,
+    /// and its root bound stays at or below the 3 moves Exact proves.
+    #[test]
+    fn the_walk_term_joins_the_bound_at_the_capped_scale() {
+        let board = Board::parse("OOOOOOOO\nO   b  O\nOaA B  O\nOOO ROOO\nOOOOOOOO").unwrap();
+        let start = board.initial();
+        let heuristic = crate::heuristic::Heuristic::new(&board, Some(start.player));
+        let mut build = RoomBuild::new(&board, &start, 1 << 20, 16, 0, 0).unwrap();
+        let bound = loop {
+            let mut units = 1 << 22;
+            if let Some(bound) = build.step(&board, &start, &heuristic, &mut units) {
+                break bound.expect("the pocket board builds tables");
+            }
+        };
+        let walk = bound
+            .walk
+            .as_ref()
+            .expect("the term builds at the capped scale");
+        assert!(
+            walk.value(&bound.hall, &start) > 0.0,
+            "the term prices the start's off-counted moves"
+        );
+        assert!(bound.root(&start).is_some_and(|s| s <= 3));
     }
 }
