@@ -28,12 +28,16 @@ pub(crate) struct Lp {
     pub(crate) c: Vec<f64>,
 }
 
-/// A solved LP: the optimal objective, the row duals, and the primal
-/// solution over the structural columns.
+/// A solved LP: the optimal objective, the row duals, the primal
+/// solution over the structural columns, and the pivots the solve took
+/// across both phases — the grind's own meter, carried out so a slow
+/// build reads off its run instead of being inferred from memory
+/// growth.
 pub(crate) struct Solved {
     pub(crate) objective: f64,
     pub(crate) duals: Vec<f64>,
     pub(crate) x: Vec<f64>,
+    pub(crate) pivots: u64,
 }
 
 /// The smallest pivot element the ratio test accepts.
@@ -487,6 +491,7 @@ pub(crate) fn solve(lp: &Lp) -> Result<Solved, String> {
         objective,
         duals,
         x,
+        pivots: solver.pivots as u64,
     })
 }
 
@@ -525,6 +530,8 @@ mod tests {
             "{:?}",
             solved.duals
         );
+        // Both phases pivot off the artificial basis at least once.
+        assert!(solved.pivots > 0);
     }
 
     #[test]

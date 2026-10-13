@@ -547,6 +547,20 @@ arm, and a solve that fails leaves the term out the same way, S no weaker.
 The solve runs inside the build's last slice, unsliced itself, and its row
 map and dual vectors are charged to the budget with the tables and the hall.
 
+The build's two solves are also the term's slowest cost to iterate on — on
+Grand Hall they run past an hour together — so two native-only environment
+knobs exist for exactly that. `SOKOMIND_DUAL_CACHE` names a directory the
+first build writes its dual vectors and primal objective into, keyed by the
+fingerprint, the counted cells, and the start's rhs; a later build with the
+same inputs reads them back, re-prices the stored root dual against the
+stored objective — the solver's own `y·b` guard — and skips both solves. A
+directory that cannot be written, or an entry whose magic, dimensions, or
+guard check fail, simply solves again: the cache is best effort and never
+trusted unverified. `SOKOMIND_WALK_TERM_LOG` prints one line per build with
+each solve's pivot count, the objective, and whether the cache supplied the
+duals. Neither knob exists on wasm, whose target has no environment to read
+and no filesystem to write, and neither changes a default build.
+
 ## Measurements
 
 ### The measurement build (job 48775)
