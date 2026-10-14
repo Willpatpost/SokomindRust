@@ -2,18 +2,17 @@
 use sokomind_core::Board;
 
 fn main() {
-    // Create a minimal valid 4-box Sokoban puzzle
+    // Create a valid 4-box Sokoban puzzle
     // Each box must have a matching goal of the same letter
+    // Player must be on a valid floor cell
     
+    // Simple 4-box layout with matching labels
     let rows = vec![
-        "OO A A A A   O",   // row 0: goals a,a,a,a (4 a goals)
+        "OO A B C D   O",   // row 0: goals a,b,c,d at cols 3,5,7,9
         "OO           O",
-        "O     O      O",
-        "O    O       O",
-        "O  O         O",
-        "O      R     O",   // row 5: player R
-        "O  A A A A   O",   // row 6: boxes A,A,A,A
+        "O  R         O",   // row 2: player R at col 3
         "O            O",
+        "O  A B C D   O",   // row 4: boxes A,B,C,D at cols 3,5,7,9
         "OOOOOOOOOOOOOO",
     ];
 
@@ -26,7 +25,7 @@ fn main() {
             println!("  Goals: {:?}", board.goals());
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            println!("Error: {}", e);
         }
     }
 }
