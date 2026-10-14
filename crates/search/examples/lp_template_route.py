@@ -93,12 +93,12 @@ keeper_pos = keeper
 
 for box_id, box_plan in sorted(plan.items()):
     print(f"\nBox {box_id}:")
-    print(f"  Start: {start_spots[box_id]}")
+    print(f"  Start: {start_spots[int(box_id)]}")
     print(f"  Goal: {box_plan['goal']}")
     print(f"  Edges: {box_plan['edges']}")
-    
+
     # For each edge in the plan, simulate the move
-    current_pos = start_spots[box_id]
+    current_pos = start_spots[int(box_id)]
     for edge_idx in box_plan['edges']:
         edge = edges[edge_idx]
         frm, to, end, stand, cost = edge
