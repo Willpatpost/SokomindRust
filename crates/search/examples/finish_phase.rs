@@ -3,16 +3,16 @@ use sokomind_core::Board;
 
 fn main() {
     // Create a valid 4-box Sokoban puzzle
-    // Each box must have a matching goal of the same letter
-    // Player must be on a valid floor cell
+    // Each box letter must have exactly one matching goal letter
+    // Goals use lowercase, boxes use uppercase
     
-    // Simple 4-box layout with matching labels
+    // 4 boxes A,B,C,D with goals a,b,c,d
     let rows = vec![
-        "OO A B C D   O",   // row 0: goals a,b,c,d at cols 3,5,7,9
+        "OO a b c d   O",   // row 0: goals a,b,c,d (lowercase)
         "OO           O",
-        "O  R         O",   // row 2: player R at col 3
+        "O  R         O",   // row 2: player R
         "O            O",
-        "O  A B C D   O",   // row 4: boxes A,B,C,D at cols 3,5,7,9
+        "O  A B C D   O",   // row 4: boxes A,B,C,D (uppercase)
         "OOOOOOOOOOOOOO",
     ];
 
