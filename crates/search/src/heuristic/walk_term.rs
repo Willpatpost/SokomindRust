@@ -484,11 +484,15 @@ fn term_digest(board: &Board, counted: &[bool], goals: usize, state: &State) -> 
 }
 
 /// The cache file's name: the fingerprint a person reads, the digest
-/// the inputs wrote.
+/// the inputs wrote. The fingerprint's `:` is read as a `-` here:
+/// Windows takes a `:` in a file name as an NTFS stream, so an entry
+/// written under the fingerprint as-is could not be read back there.
+/// The fingerprint string itself stays as it is, for the digest that
+/// hashes it and the reference it matches.
 fn cache_name(board: &Board, counted: &[bool], goals: usize, state: &State) -> String {
     format!(
         "{}.{:016x}.swt",
-        board.fingerprint(),
+        board.fingerprint().replace(':', "-"),
         term_digest(board, counted, goals, state)
     )
 }
