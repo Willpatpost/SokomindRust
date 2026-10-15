@@ -132,8 +132,9 @@ const _: () = assert!(MAX_MEMORY_MIB < 4096);
 /// search's `mode` argument and the benchmark corpus's `mode` key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    // Fast's and Quality's weights copy Policy::FAST and Policy::QUALITY in
-    // engine.rs (checked by scripts/mirrors.test.mjs).
+    // Fast's, Quality's and the Quality second phase's weights copy
+    // Policy::FAST, Policy::QUALITY and Policy::QUALITY_LIGHT in engine.rs
+    // (checked by scripts/mirrors.test.mjs).
     /// Weighted A* (weight 5) that ends at its first route, however long.
     /// With no route at its stage point, under a limit of 4,096 states or
     /// more, a bounded stage search takes over in the same arena and ends at
@@ -148,7 +149,7 @@ pub enum Mode {
     /// as it would unstaged.
     Fast,
     /// Fast until its first route, but for its stage search's work (below),
-    /// then weight 3 in the same arena, shortening the route until the queue
+    /// then weight 2 in the same arena, shortening the route until the queue
     /// empties or a limit hits. The first time the arena fills, in either
     /// phase and with a route or without, or Fast's stage search ends, the
     /// search empties it but for its route, if any, which stays the bound to

@@ -207,7 +207,7 @@ starts over without it and runs as the plain search would; when it gives up at a
 full arena, the search stops at the limit as before. `docs/stage-ladder.md`
 records how its accept tests, stage point and budgets were chosen and measured.
 Quality starts as Fast, but its stage search keeps the capped work (below);
-from Fast's first route it continues in the same arena at `g + 3h` with
+from Fast's first route it continues in the same arena at `g + 2h` with
 reopenings, keeping the shortest verified incumbent until its queue empties or a
 limit hits. The first time the arena fills, in either phase and with a route or
 without, or the stage search ends, Quality empties it in place, keeping its

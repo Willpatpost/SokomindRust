@@ -160,12 +160,19 @@ impl Policy {
         polish: true,
         room_bound: false,
     };
-    /// Quality mode's second phase: [`Self::QUALITY`], except that when its
-    /// arena fills the search starts over as plain [`Self::QUALITY`],
+    /// Quality mode's second phase at weight 2: [`Self::QUALITY`] with a
+    /// lighter weight, the policy [`Self::QUALITY_RESTART`] runs until its
+    /// arena fills.
+    const QUALITY_LIGHT: Self = Self {
+        weight: 2,
+        ..Self::QUALITY
+    };
+    /// Quality mode's second phase: [`Self::QUALITY_LIGHT`], except that
+    /// when its arena fills the search starts over as plain [`Self::QUALITY`],
     /// bounded by the route it has.
     const QUALITY_RESTART: Self = Self {
         restart: Some(&Self::QUALITY),
-        ..Self::QUALITY
+        ..Self::QUALITY_LIGHT
     };
     /// Quality mode: [`Self::FAST`] until its first route, except that its
     /// stage ladder keeps the work cap (see `long_ladder`), then
@@ -195,10 +202,11 @@ impl Policy {
     /// new policy must be added here: they check that every `then` and
     /// `restart` target is listed, but cannot see which policies modes start
     /// with.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::EXACT,
         Self::FAST,
         Self::QUALITY,
+        Self::QUALITY_LIGHT,
         Self::QUALITY_RESTART,
         Self::FAST_THEN_QUALITY_RESTART,
     ];

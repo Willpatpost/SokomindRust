@@ -480,14 +480,15 @@ test("board.ts's WALL equals sokomind_core::WALL", () => {
   assert.equal(read('web/src/board.ts', /const WALL = (\d+);/), read('crates/core/src/board.rs', /pub const WALL: u8 = (\d+);/));
 });
 
-test("the README, Mode's docs and the arena's key test quote the weights of Policy::FAST and Policy::QUALITY", () => {
+test("the README, Mode's docs and the arena's key test quote the weights of Policy::FAST, Policy::QUALITY and Policy::QUALITY_LIGHT", () => {
   const fast = read('crates/search/src/engine.rs', /const FAST: Self = Self \{\s+weight: (\d+),/);
   const quality = read('crates/search/src/engine.rs', /const QUALITY: Self = Self \{\s+weight: (\d+),/);
+  const light = read('crates/search/src/engine.rs', /const QUALITY_LIGHT: Self = Self \{\s+weight: (\d+),/);
   assert.equal(read('README.md', /weighted A\* \(`g \+ (\d+)h`\)/), fast);
   assert.equal(read('crates/search/src/lib.rs', /Weighted A\* \(weight (\d+)\)/), fast);
-  assert.equal(read('README.md', /at `g \+ (\d+)h` with reopenings/), quality);
+  assert.equal(read('README.md', /at `g \+ (\d+)h` with reopenings/), light);
   assert.equal(read('README.md', /starts over at\s+`g \+ (\d+)h`/), quality);
-  assert.equal(read('crates/search/src/lib.rs', /then weight (\d+) in the same arena/), quality);
+  assert.equal(read('crates/search/src/lib.rs', /then weight (\d+) in the same arena/), light);
   assert.equal(read('crates/search/src/lib.rs', /starts over at weight (\d+)\./), quality);
   assert.equal(read('crates/search/src/arena.rs', /let worst = MAX_ROUTE as u64 \+ (\d+) \* u64::from\(MAX_QUEUED_H\);/), fast);
 });
