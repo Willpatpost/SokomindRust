@@ -462,7 +462,7 @@ It does **not** claim optimality.
 
 Fast must never emit a proof that its route is optimal or that a puzzle is unsolvable unless the architecture is explicitly redesigned to make such a proof valid.
 
-The current implementation uses weighted A* behavior for Fast. The exact weight is an implementation choice, not a sacred constant. Change it only with evidence.
+The current implementation uses weighted A* behavior for Fast (weight 5), with a bounded stage search taking over at its stage point when it has no route. The exact weight is an implementation choice, not a sacred constant. Change it only with evidence.
 
 ---
 
@@ -485,7 +485,7 @@ Quality should not become so expensive before the first route that it loses its 
 
 Quality also does **not** claim optimality unless it is eventually backed by the same kind of sound proof machinery required by Optimal mode.
 
-The current implementation transitions from a more aggressive Fast phase to a lighter weighted search and can restart its arena while retaining its incumbent. These are implementation details that may be improved if measurements justify the change.
+The current implementation transitions from Fast to a weight-2 improvement phase in the same arena, restarts once into plain weight-3 Quality with its route as the bound to beat, and polishes the route — rescheduling one box at a time in several box orders, then pairs, then same-label goal trades (docs/route-polish.md) — at the search's end and in episodes on the way. These are implementation details that may be improved if measurements justify the change.
 
 ---
 
@@ -628,6 +628,14 @@ unless the change is necessary to:
 A solver improvement is generally more valuable than cosmetic polish at this stage.
 
 ---
+
+# Campaign and experiment machinery
+
+Work aimed at one research question — one board, one bound, one construction — is campaign work, and it is where this repository's discipline is most at risk of erosion.
+
+- Campaign tools live outside the repository, or pass `npm run validate` before every commit when they live inside it.
+- An experiment that changes search behavior ships behind an environment variable, unset by default, documented with its measurement in `docs/`, and removed when the research it serves ends.
+- A result that depends on scripts outside the repository is not reproducible: record the recipe in `docs/`, or accept that the result is session-local.
 
 # Performance work must be evidence-driven
 
