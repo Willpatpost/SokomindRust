@@ -285,6 +285,42 @@ impl Ledger {
 /// before anything new, and the wide candidates draw from a work share
 /// the rooms cannot starve (see `WIDE_WORK_PER_CAP`).
 ///
+/// The board's single-door rooms, for one-shot strategic analyses: each
+/// room's door and its cells, from the same candidate detection the
+/// table build uses, flooded over the keeper's floor the same way.
+/// Only a single-door room serializes its traffic, so candidates with
+/// wider necks are dropped. A detection that cannot pay its scratch
+/// ledger returns no rooms, and the caller runs without its analysis
+/// rather than failing the search.
+pub(crate) fn gated_rooms(board: &Board, start: &State) -> Vec<(Vec<Cell>, Vec<Cell>)> {
+    let neighbors = board.neighbors();
+    let mut inside = vec![false; neighbors.len()];
+    let mut queue = vec![start.player];
+    inside[usize::from(start.player)] = true;
+    let mut at = 0;
+    while at < queue.len() {
+        let cell = queue[at];
+        at += 1;
+        for &next in &neighbors[usize::from(cell)] {
+            if next != NONE && !inside[usize::from(next)] {
+                inside[usize::from(next)] = true;
+                queue.push(next);
+            }
+        }
+    }
+    let mut ledger = Ledger {
+        live: 0,
+        limit: 1 << 22,
+        kept: 0,
+        kept_limit: 1 << 22,
+    };
+    candidates(board, start, &inside, &mut ledger)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(doors, _)| doors.len() == 1)
+        .collect()
+}
+
 /// A side's flood stops at more than `MAX_ROOM` cells, so a door costs
 /// O(`MAX_ROOM`) rather than O(|inside|). A side cut off is too large to
 /// keep, and larger than every side kept. So is a later side that runs into

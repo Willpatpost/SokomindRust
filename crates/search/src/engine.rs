@@ -10,6 +10,7 @@ use crate::{
     reach::Reach,
     room_bound::{BUILD_MIN_STATES, BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent},
     stage::{self, Done, Ladder},
+    strategic::DoorwayGuidance,
 };
 use sokomind_core::{ACTIONS, Board, MAX_CELLS, MAX_ROUTE, OPPOSITE, State};
 use std::ops::ControlFlow;
@@ -426,6 +427,11 @@ pub(crate) struct Engine {
     /// Some while the room bound builds, before the search proper, which
     /// waits with only the start in its arena, queued with M alone.
     room_build: Option<RoomBuild>,
+    /// The doorway guidance (see `strategic`): `None` unless the weighted
+    /// search's knob names it. It shifts the queue's priorities only —
+    /// the stored h, the prunes, and the exact search's admissible key
+    /// never see it.
+    strategic: Option<DoorwayGuidance>,
     /// The memory budget, which the arena is re-sized against once the
     /// room bound is built.
     memory_mib: usize,
@@ -559,6 +565,13 @@ impl Engine {
         let heuristic = Heuristic::new(&board, policy.keeper_sides.then_some(start.player));
         let deadlock = Deadlock::new(&board);
         let corral = Corral::new(&board);
+        // The doorway guidance rides only the weighted policies: there an
+        // inflated priority costs a route's shape, never a proof.
+        let strategic = if policy.weight > 1 && crate::strategic::enabled() {
+            Some(DoorwayGuidance::analyze(&board, &start))
+        } else {
+            None
+        };
         let mut search = Self {
             policy,
             reach: Reach::new(cells),
@@ -583,6 +596,7 @@ impl Engine {
             polished: None,
             rooms: None,
             room_build: None,
+            strategic,
             memory_mib,
             max_states,
         };
@@ -622,7 +636,10 @@ impl Engine {
         // start and the next insert already.
         debug_assert!(!self.arena.starved());
         if let Some(h) = h {
-            let total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
+            let mut total_h = push::root_estimate(&self.board, &self.heuristic, &self.start, h);
+            if let Some(guidance) = &self.strategic {
+                total_h = (total_h + guidance.penalty(&self.start)).min(MAX_QUEUED_H);
+            }
             self.arena
                 .enqueue(push::key(0, total_h, self.policy.weight), total_h, root);
         } else {
@@ -1365,8 +1382,12 @@ impl Engine {
             }
         }
         let id = self.arena.insert(node, slot);
+        let mut keyed = h;
+        if let Some(guidance) = &self.strategic {
+            keyed = (keyed + guidance.penalty(&node.state)).min(MAX_QUEUED_H);
+        }
         self.arena
-            .enqueue(push::key(node.g, h, self.policy.weight), h, id);
+            .enqueue(push::key(node.g, keyed, self.policy.weight), keyed, id);
         // Keep a solution even if a limit occurs before its pop.
         if goal {
             self.record(id);

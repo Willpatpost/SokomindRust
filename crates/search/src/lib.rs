@@ -73,6 +73,7 @@ mod push;
 mod reach;
 mod room_bound;
 mod stage;
+mod strategic;
 #[cfg(test)]
 mod testkit;
 

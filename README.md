@@ -48,6 +48,9 @@ behavior for experiments; each is documented with its measurement in `docs/`:
 - `SOKOMIND_PORTFOLIO_ROOMS` — a comma list of kept-room indices composing
   a second, coarser bound configuration beside the first
   (docs/room-bound.md);
+- `SOKOMIND_STRATEGIC_GUIDANCE` — steers the weighted searches toward
+  routes that respect a single-door room's crossing order
+  (docs/strategic.md);
 - `SOKOMIND_POLISH_RUNS` — raises the polish's box-order cap
   (docs/route-polish.md).
 
