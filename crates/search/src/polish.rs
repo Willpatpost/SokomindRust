@@ -47,7 +47,10 @@ pub(crate) fn replay(board: &Board, start: &State, route: &[u8]) -> Result<usize
 }
 
 /// The most runs a polish makes. A board with few boxes has fewer box
-/// orders, and makes one run per order.
+/// orders, and makes one run per order. `SOKOMIND_POLISH_RUNS` raises the
+/// cap for a native experiment (unset, or on wasm, the default stands),
+/// and a run only ever shortens the best route, so the extra runs are
+/// runs the default also makes given the time.
 const RUNS: usize = 8;
 /// The most expansions one pair job makes. A pair's nodes multiply by the
 /// second box's cells, so a pair job could otherwise run on a large board
@@ -82,6 +85,28 @@ fn strides(boxes: usize) -> impl Iterator<Item = usize> {
 
 fn gcd(a: usize, b: usize) -> usize {
     if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// The run cap for `boxes` slots: every order, clamped to the cap
+/// [`RUNS`] names — or, on a native experiment, to the higher one
+/// `SOKOMIND_POLISH_RUNS` names.
+fn run_cap(boxes: usize) -> usize {
+    (boxes * strides(boxes).count()).clamp(1, native_run_cap())
+}
+
+/// [`RUNS`], or the higher cap `SOKOMIND_POLISH_RUNS` names.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_run_cap() -> usize {
+    std::env::var("SOKOMIND_POLISH_RUNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map_or(RUNS, |asked| asked.max(RUNS))
+}
+
+/// [`RUNS`]: wasm has no environment to name a higher cap.
+#[cfg(target_arch = "wasm32")]
+fn native_run_cap() -> usize {
+    RUNS
 }
 
 /// Run `run`'s box order, as its first slot and the stride between slots.
@@ -201,7 +226,7 @@ impl Polish {
             ending,
             allowance: allowance.saturating_sub(held),
             run: 0,
-            runs: (boxes * strides(boxes).count()).clamp(1, RUNS),
+            runs: run_cap(boxes),
             next: 0,
             stride: 1,
             idle: 0,
