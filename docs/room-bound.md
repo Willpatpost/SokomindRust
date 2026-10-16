@@ -561,6 +561,16 @@ each solve's pivot count, the objective, and whether the cache supplied the
 duals. Neither knob exists on wasm, whose target has no environment to read
 and no filesystem to write, and neither changes a default build.
 
+An entry can also be built outside the solver: the certification's duals,
+root and L1, are checked dual-feasible against the LP the term would build
+(worst slack 0.0 — the Aᵀu ≤ c check the `y·b` guard cannot make across a
+counted change) and written as a `SWT1` record under the name the term
+would compute. On Grand Hall the entry built this way held the LP's exact
+root value, 175.5, and the equipped relaunch logged "cache hit" with both
+solves skipped. The checking scripts are session-local; an entry built
+outside the solver is still verified by the term's own objective guard
+before use.
+
 ## Measurements
 
 ### The measurement build (job 48775)
