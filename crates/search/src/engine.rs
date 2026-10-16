@@ -8,7 +8,7 @@ use crate::{
     polish::{self, Polish},
     push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
-    room_bound::{BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent},
+    room_bound::{BUILD_MIN_STATES, BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent},
     stage::{self, Done, Ladder},
 };
 use sokomind_core::{ACTIONS, Board, MAX_CELLS, MAX_ROUTE, OPPOSITE, State};
@@ -589,7 +589,7 @@ impl Engine {
         search.seed();
         // The build's share is what the budget leaves besides the fixed
         // buffers and the arena holding the start.
-        if policy.room_bound && search.status == Status::Running {
+        if policy.room_bound && search.status == Status::Running && node_limit >= BUILD_MIN_STATES {
             search.room_build = RoomBuild::new(
                 &search.board,
                 &search.start,

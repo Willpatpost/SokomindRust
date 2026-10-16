@@ -254,7 +254,9 @@ an episode's route never bounds the search, and the end polish still runs.
 `docs/route-polish.md` covers its bounds, memory and what was left out.
 Neither mode ever proves anything. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
-admissible A* (weight 1) with reopenings, the only source of proofs. It reports
+admissible A* (weight 1) with reopenings, the only source of proofs. Its room
+tables build only at a state budget of at least 1,000,000 states: below, the
+search dies before their pruning repays their build. It reports
 `optimal` when a goal pops or the frontier empties with a verified route, and
 `unsolvable` only when the frontier empties without one. When a limit or
 cancellation stops it with a route, it reports `optimal` if the frontier's

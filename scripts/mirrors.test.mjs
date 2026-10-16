@@ -554,6 +554,19 @@ test("the README and Mode's docs quote stage.rs's STAGE_AT, above the benchmark 
   assert.ok(observe > at, `observe's ${observe} states must exceed STAGE_AT ${at}, or its runs stage only at a full arena`);
 });
 
+test("the README and Mode's docs quote room_bound.rs's BUILD_MIN_STATES, above the benchmark gate's limit and at observe's", () => {
+  const min = read('crates/search/src/room_bound.rs', /pub\(crate\) const BUILD_MIN_STATES: usize = ([\d_]+);/);
+  assert.equal(read('README.md', /state budget of at least ([\d,]+) states/), min);
+  assert.equal(read('crates/search/src/lib.rs', /state budget of at least ([\d,]+) states/), min);
+  const gate = read('benchmarks/catalog-baseline.json', /"maxStates": (\d+),/);
+  assert.ok(
+    gate < min,
+    `the gate's ${gate} states must stay below BUILD_MIN_STATES ${min}, or its runs pay the tables' build without repaying it`,
+  );
+  const observe = read('scripts/benchmark.mjs', /const OBSERVE = \{ maxStates: ([\d_]+),/);
+  assert.ok(observe >= min, `observe's ${observe} states must reach BUILD_MIN_STATES ${min}, or its runs lose the tables' pruning`);
+});
+
 test("parity.mjs's stage cases run at the server's default budget, as the README says", () => {
   const stage = read('scripts/parity.mjs', /const STAGE_MIB = (\d+);/);
   assert.equal(stage, read('crates/server/src/solve.rs', /const DEFAULT_MEMORY_MIB: usize = (\d+);/));

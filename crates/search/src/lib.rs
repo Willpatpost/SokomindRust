@@ -179,7 +179,9 @@ pub enum Mode {
     /// Admissible A* over moves: a shortest route, proved once the search
     /// finishes. Before the search proper it builds the room bound: for each
     /// single-door room that holds a box or a goal, exact tables of the
-    /// moves its boxes need inside it, in a relaxed problem. It then queues
+    /// moves its boxes need inside it, in a relaxed problem, but only at a
+    /// state budget of at least 1,000,000 states — below, the search dies
+    /// before their pruning repays their build. It then queues
     /// each state by the larger of that bound and the assignment estimate.
     /// The build is paid for as pops (see [`Search::advance`]) and stops at
     /// a work budget scaled to the state limit. Its buffers fit the budget

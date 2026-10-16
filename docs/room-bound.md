@@ -523,6 +523,15 @@ calls bounds it like pops, and the build is deterministic, with no clock of its
 own. A search stopped during the build reports the start's bound without the
 tables.
 
+The build starts only when the arena's node limit — the declared states capped
+by the memory budget — reaches `BUILD_MIN_STATES` (1,000,000). Below that a
+search dies before the tables' pruning repays their build: at the benchmark
+gate's 20,000 states the tables' largest saving is 9,142 expanded, about
+25 ms, against builds of hundreds of milliseconds, while at observe's
+1,000,000 large saves 130,425 expanded and repays its. The bound is pruning
+only, so a search below the threshold proves the same routes with more
+expansions, and a capped one reports the start bound of M alone.
+
 A unit took 142 to 153 ns on job 49024's probe machine, where the build
 without the freeze refusal took 128 to 157. The refusal saves far more units
 than it costs: Grand Hall's build fell from 24.5M units to 7.5M, and took 1.06

@@ -29,6 +29,17 @@ use table::{MAX_VALUE, Step, Table, TableBuild};
 /// pops. A unit expands, pops or scans about one state of a table's search
 /// (see `TableBuild::step`).
 pub(crate) const BUILD_UNITS_PER_POP: usize = 64;
+/// The least state budget the room tables build at: the arena's node
+/// limit, which the declared states and the memory budget both cap, must
+/// reach it. Below, a search dies before the tables' pruning repays their
+/// build: at the benchmark gate's 20,000 states the tables' largest saving
+/// is 9,142 expanded (expert-maze), about 25 ms of search, against builds
+/// of hundreds of milliseconds (a ten-state cap measured expert-maze at
+/// 301 ms and huge at 1.48 s), while at observe's 1,000,000 states large
+/// saves 130,425 expanded and repays its build. The bound is pruning
+/// only, so a search below it proves the same routes with more
+/// expansions, and a capped one reports the start bound of M alone.
+pub(crate) const BUILD_MIN_STATES: usize = 1_000_000;
 /// A table's forward search may reach this many states per node the arena
 /// may hold, so the build scales with the search it serves, ...
 const STATES_PER_NODE: u64 = 16;
