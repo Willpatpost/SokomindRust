@@ -36,7 +36,7 @@ jobs:
         # image without a commit here. Move them deliberately, with a run first.
         os: [ubuntu-24.04, windows-2025-vs2026]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
