@@ -36,6 +36,18 @@ changes, or put a prebuilt `wasm-bindgen` in `.tools/bin`. Use `npm run dev:web`
 when the WASM package is already built. Rust changes require `npm run wasm` and a
 page reload. `npm run build` creates `web/dist` for NGINX.
 
+### Experiment knobs
+
+These environment variables are unset by default and change native search
+behavior for experiments; each is documented with its measurement in `docs/`:
+
+- `SOKOMIND_DUAL_CACHE` — a directory of certified walk-term dual caches
+  (docs/room-bound.md);
+- `SOKOMIND_WALK_TERM_LOG` — prints one line per walk-term build, its pivots
+  and whether the cache supplied the duals (docs/room-bound.md);
+- `SOKOMIND_POLISH_RUNS` — raises the polish's box-order cap
+  (docs/route-polish.md).
+
 ## Full stack with Docker
 
 Run `docker compose up --build`. Open `http://127.0.0.1:8080`. To change a
