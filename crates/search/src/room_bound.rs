@@ -1326,17 +1326,20 @@ impl RoomBuild {
         } else {
             None
         };
+        let portfolio = PortfolioArm::build(board, start, self.cap, &rooms);
         let tables: usize = rooms
             .iter()
             .map(|b| b.room.bytes() + b.tables.capacity() * size_of::<Table>() + b.kept())
             .sum();
         let bytes = (rooms.capacity() * size_of::<RoomTables>() + tables + hall_bytes(board))
             as u64
-            + walk.as_ref().map_or(0, WalkTerm::bytes);
+            + walk.as_ref().map_or(0, WalkTerm::bytes)
+            + portfolio.as_ref().map_or(0, PortfolioArm::bytes);
         Some(RoomBound {
             rooms,
             hall,
             walk,
+            portfolio,
             bytes,
         })
     }
@@ -1356,6 +1359,128 @@ impl RoomParent {
     };
 }
 
+/// The native halves of the portfolio's knob: the environment is its
+/// only source, and wasm has none, so the arm never builds there.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    /// The rooms `SOKOMIND_PORTFOLIO_ROOMS` names, from its comma
+    /// list. `None` when unset; a malformed list says so before
+    /// returning `None` — a silently ignored knob is a debugging trap.
+    pub(super) fn portfolio_rooms() -> Option<Vec<usize>> {
+        let value = std::env::var_os("SOKOMIND_PORTFOLIO_ROOMS")?;
+        let text = value.to_string_lossy();
+        match parse_rooms(&text) {
+            Some(rooms) => Some(rooms),
+            None => {
+                eprintln!(
+                    "room bound: SOKOMIND_PORTFOLIO_ROOMS is malformed \
+                     ({text}); the portfolio arm is off"
+                );
+                None
+            }
+        }
+    }
+
+    /// Whether the dual cache is armed: the second term's solves cost
+    /// what the first's do, so the arm only builds against the cache.
+    pub(super) fn dual_cache_armed() -> bool {
+        std::env::var_os("SOKOMIND_DUAL_CACHE").is_some()
+    }
+
+    /// The rooms a knob names: its comma list, sorted and
+    /// deduplicated — a repeated name prices its room once, never
+    /// twice.
+    pub(super) fn parse_rooms(text: &str) -> Option<Vec<usize>> {
+        let rooms: Option<Vec<usize>> = text
+            .split(',')
+            .map(|token| token.trim().parse::<usize>().ok())
+            .collect();
+        let mut rooms = rooms?;
+        rooms.sort_unstable();
+        rooms.dedup();
+        Some(rooms)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod native {
+    pub(super) fn portfolio_rooms() -> Option<Vec<usize>> {
+        None
+    }
+
+    pub(super) fn dual_cache_armed() -> bool {
+        false
+    }
+}
+
+/// The portfolio's second bound configuration: a walk term over a
+/// coarser counted mask — the union of the rooms the knob names — with
+/// its own hall, so the term prices those rooms' cells jointly with
+/// every move outside them while the named rooms' tables price the
+/// cells exactly. Each configuration splits the moves its own way and
+/// bounds each side, so both are admissible and their per-state max is
+/// too; the mask being a union of counted cells by construction is
+/// what keeps the second split total — no cell falls outside both its
+/// sides.
+struct PortfolioArm {
+    /// The term over the named rooms' counted union.
+    term: WalkTerm,
+    /// The term's own hall, over the same mask.
+    hall: Heuristic,
+    /// The named rooms, whose tables' sum prices the mask's cells.
+    rooms: Vec<usize>,
+    /// The heap bytes the term and its hall hold.
+    heap: u64,
+}
+
+impl PortfolioArm {
+    /// Builds the second configuration when the knob names rooms of
+    /// `rooms`: the union of their counted cells as the mask, the hall
+    /// and the term over it. `None` when the knob is unset or
+    /// malformed, when a name falls outside the built rooms (said
+    /// loudly — the same trap), and below the capped work scale or
+    /// without the dual cache armed: the second term's solves cost what
+    /// the first's do, and only the cache keeps them off the search.
+    fn build(board: &Board, start: &State, cap: usize, rooms: &[RoomTables]) -> Option<Self> {
+        if cap < MAX_CAP as usize || !native::dual_cache_armed() {
+            return None;
+        }
+        let names = native::portfolio_rooms()?;
+        let mut mask = vec![false; board.neighbors().len()];
+        for &index in &names {
+            let Some(built) = rooms.get(index) else {
+                eprintln!(
+                    "room bound: SOKOMIND_PORTFOLIO_ROOMS names room {index} \
+                     beyond the {} built; the portfolio arm is off",
+                    rooms.len()
+                );
+                return None;
+            };
+            for table in &built.tables {
+                for (q, &cell) in built.room.cells().iter().enumerate() {
+                    if bit(table.part(), q) {
+                        mask[usize::from(cell)] = true;
+                    }
+                }
+            }
+        }
+        let hall = Heuristic::hall(board, start.player, &mask);
+        let term = WalkTerm::build(board, &hall, &mask, start)?;
+        let heap = term.bytes() + hall_bytes(board) as u64;
+        Some(Self {
+            term,
+            hall,
+            rooms: names,
+            heap,
+        })
+    }
+
+    /// The heap bytes the term and its hall hold.
+    fn bytes(&self) -> u64 {
+        self.heap
+    }
+}
+
 /// The built room tables, the hall part and the walk term, which the
 /// search keeps.
 pub(crate) struct RoomBound {
@@ -1365,6 +1490,9 @@ pub(crate) struct RoomBound {
     /// (see `walk_term`): `None` when its LP could not be solved, which
     /// leaves S no weaker than the hall's own arm.
     walk: Option<WalkTerm>,
+    /// The portfolio's second configuration (see `PortfolioArm`):
+    /// `None` unless its knob names rooms, which leaves S as it is.
+    portfolio: Option<PortfolioArm>,
     /// The heap bytes all of it holds.
     bytes: u64,
 }
@@ -1386,19 +1514,45 @@ impl RoomBound {
         Some(sum)
     }
 
+    /// The portfolio's arm of S at `state`: the named rooms' tables'
+    /// sum plus the second term's dual value, ceilinged — the second
+    /// configuration's own split of the same moves, maxed in wherever
+    /// it is the stronger. `None` when a projection is missing or the
+    /// knob named nothing.
+    fn portfolio_arm(&self, state: &State) -> Option<u32> {
+        let arm = self.portfolio.as_ref()?;
+        let tables: Option<u32> = arm
+            .rooms
+            .iter()
+            .map(|&index| {
+                let built = &self.rooms[index];
+                built
+                    .tables
+                    .iter()
+                    .map(|table| table.value(&built.room, state))
+                    .sum::<Option<u32>>()
+            })
+            .sum();
+        Some((f64::from(tables?) + arm.term.value(&arm.hall, state) - 1e-6).ceil() as u32)
+    }
+
     /// S of `state` from scratch, `None` when a projection is missing. The
     /// hall part is less the keeper's charge, which only the start can have:
     /// a push leaves the keeper where a box stood (see `Heuristic::estimate`).
     /// The walk term's arm — the tables' sum plus the term's dual value,
     /// ceilinged — joins the max when the term was built: it prices the
     /// off-counted pushes and walks jointly, where the hall prices the
-    /// pushes alone.
+    /// pushes alone. The portfolio's arm joins the same max when its knob
+    /// named rooms.
     pub(crate) fn root(&self, state: &State) -> Option<u32> {
         let tables = self.tables_sum(state)?;
         let hall = self.hall.estimate(state)?;
         let mut s = tables + hall.saturating_sub(self.hall.charge(state.player));
         if let Some(walk) = &self.walk {
             s = s.max(walk.arm(&self.hall, state, tables));
+        }
+        if let Some(arm) = self.portfolio_arm(state) {
+            s = s.max(arm);
         }
         Some(s)
     }
@@ -1430,6 +1584,9 @@ impl RoomBound {
         let mut s = tables + hall;
         if let Some(walk) = &self.walk {
             s = s.max(walk.arm(&self.hall, child, tables));
+        }
+        if let Some(arm) = self.portfolio_arm(child) {
+            s = s.max(arm);
         }
         Some(s)
     }
@@ -1465,6 +1622,19 @@ mod tests {
             kept: 0,
             kept_limit: 1 << 22,
         }
+    }
+
+    /// The portfolio knob's list: the rooms it names, sorted and
+    /// deduplicated — a repeated name prices its room once; anything
+    /// that is not a comma list of numbers is malformed and refused.
+    #[test]
+    fn the_portfolio_knob_parses_room_lists() {
+        assert_eq!(native::parse_rooms("0,1"), Some(vec![0, 1]));
+        assert_eq!(native::parse_rooms(" 2 , 0 , 2 "), Some(vec![0, 2]));
+        assert_eq!(native::parse_rooms("3"), Some(vec![3]));
+        assert_eq!(native::parse_rooms(""), None);
+        assert_eq!(native::parse_rooms("0,x"), None);
+        assert_eq!(native::parse_rooms("-1"), None);
     }
 
     #[test]

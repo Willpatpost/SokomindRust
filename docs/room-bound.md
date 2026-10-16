@@ -580,6 +580,33 @@ solves skipped. The checking scripts are session-local; an entry built
 outside the solver is still verified by the term's own objective guard
 before use.
 
+The portfolio knob composes a second bound configuration beside the
+first. `SOKOMIND_PORTFOLIO_ROOMS` names a comma list of kept-room
+indices — the union of those rooms' counted cells becomes a coarser
+mask, over which the build solves a second walk term with its own
+hall, and the two configurations' arms — the named rooms' tables' sum
+plus the second term, against the full tables' sum plus the first —
+max into S per state. Each configuration splits the moves its own way
+and bounds each side, so both are admissible and their max is too; the
+mask being a union of counted cells by construction keeps the second
+split total. The arm only builds at the capped work scale with the
+dual cache armed (the second term's solves cost what the first's do);
+a malformed list or an out-of-range name is refused with a line on
+stderr, and the knob is native-only and off by default.
+
+Which rooms to name is a measurement, not a guess. On Grand Hall the
+first configuration keeps three rooms — the bottom band (tables 93
+over 26 cells) and two top rooms (33 and 20) — and handing the smaller
+top room's cells to the second term prices its passage walks, which
+neither arm of the split prices, at more than the table exactness
+loses. That configuration lifted the root's S from 322 to 327 and the
+256M-state exhaustion's frontier from 333 to 337 — four units of
+proven floor held at depth, at roughly 1.5x the Optimal search's
+runtime (Quality and Fast never build the room bound). The per-board
+sweep that finds the winning list solves each subset's LP
+out-of-process; the campaign lab's tooling carries it, and the second
+cache entry is built the same outside-the-solver way as the first.
+
 ## Measurements
 
 ### The measurement build (job 48775)

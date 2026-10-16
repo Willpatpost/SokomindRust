@@ -45,6 +45,9 @@ behavior for experiments; each is documented with its measurement in `docs/`:
   (docs/room-bound.md);
 - `SOKOMIND_WALK_TERM_LOG` — prints one line per walk-term build, its pivots
   and whether the cache supplied the duals (docs/room-bound.md);
+- `SOKOMIND_PORTFOLIO_ROOMS` — a comma list of kept-room indices composing
+  a second, coarser bound configuration beside the first
+  (docs/room-bound.md);
 - `SOKOMIND_POLISH_RUNS` — raises the polish's box-order cap
   (docs/route-polish.md).
 
