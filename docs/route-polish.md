@@ -112,8 +112,10 @@ take the coprime strides in turn, then move the first slot on, so the first
 `n × φ(n)` runs all differ. The polish makes `RUNS` (8) runs, or one per such
 order on a board with fewer: one run for one box, two for two, six for three.
 A native experiment may raise the cap through `SOKOMIND_POLISH_RUNS`; unset,
-or on wasm, the default stands. A run only ever shortens the best route, so
-a raised cap reaches routes the default also reaches given the time.
+or on wasm, the default stands. The runs phase keeps the best route any run
+reaches, but the pair and kick phases after it work from that route, so a
+raised cap can change their track and with it the polish's answer, for
+better or worse.
 
 The polish keeps the shortest route any run reaches, and a later run's route
 replaces it only when strictly shorter. It ends when every run has ended. A

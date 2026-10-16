@@ -48,9 +48,11 @@ pub(crate) fn replay(board: &Board, start: &State, route: &[u8]) -> Result<usize
 
 /// The most runs a polish makes. A board with few boxes has fewer box
 /// orders, and makes one run per order. `SOKOMIND_POLISH_RUNS` raises the
-/// cap for a native experiment (unset, or on wasm, the default stands),
-/// and a run only ever shortens the best route, so the extra runs are
-/// runs the default also makes given the time.
+/// cap for a native experiment (unset, or on wasm, the default stands).
+/// The runs phase keeps the best route any run reaches, but the pair and
+/// kick phases after it work from that route, so a raised cap can change
+/// their track and with it the polish's answer, for better or worse: on
+/// Grand Hall the default reaches 424 moves and every order 432.
 const RUNS: usize = 8;
 /// The most expansions one pair job makes. A pair's nodes multiply by the
 /// second box's cells, so a pair job could otherwise run on a large board
