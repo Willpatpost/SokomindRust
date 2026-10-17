@@ -25,6 +25,11 @@ use crate::{
 };
 use sokomind_core::{Board, Cell, MAX_ROUTE, NONE, OPPOSITE, State, Step};
 use std::{collections::BinaryHeap, mem::size_of};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    collections::VecDeque,
+    sync::{Arc, mpsc},
+};
 
 /// Replays `route` from `start` and returns how many of its moves reach the
 /// first solved state: 0 when the start is solved, the route's length when
@@ -154,6 +159,255 @@ fn pairs(board: &Board, start: &State, route: &[u8]) -> Vec<[usize; 2]> {
     pairs
 }
 
+/// How many threads the polish's kick round races on, from
+/// `SOKOMIND_POLISH_WORKERS`. Unset, or on wasm, means 1: the
+/// sequential path exactly. Native only: wasm has no environment to
+/// read and stays single-threaded.
+#[cfg(not(target_arch = "wasm32"))]
+fn workers() -> usize {
+    std::env::var("SOKOMIND_POLISH_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&workers| workers > 1)
+        .unwrap_or(1)
+}
+
+/// [`workers()`] on wasm: no environment, so no pool.
+#[cfg(target_arch = "wasm32")]
+fn workers() -> usize {
+    1
+}
+
+/// A fixed pool of worker threads for the polish's kick rounds,
+/// native only: wasm's polish stays single-threaded, and the pool is
+/// what `workers() > 1` builds. Tasks are closures that run to
+/// completion and report through the sender they capture; the driver
+/// polls the receiving end, so no step of the polish ever blocks on
+/// the pool. The pool outlives the rounds it serves — a task may
+/// hold only what it owns or shares through an `Arc` — and ends when
+/// the polish does, dropping its queue and joining its threads.
+#[cfg(not(target_arch = "wasm32"))]
+struct Pool {
+    queue: Arc<PoolQueue>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+/// A queued task: a closure that runs to completion on its worker.
+#[cfg(not(target_arch = "wasm32"))]
+type Task = Box<dyn FnOnce() + Send>;
+
+/// The pool's shared task queue: the tasks waiting, and whether the
+/// pool is ending, woken by a condition variable.
+#[cfg(not(target_arch = "wasm32"))]
+struct PoolQueue {
+    tasks: std::sync::Mutex<(VecDeque<Task>, bool)>,
+    wake: std::sync::Condvar,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Pool {
+    /// A pool of `size` threads, `None` when fewer than two were
+    /// asked for: one thread is no pool.
+    fn new(size: usize) -> Option<Self> {
+        if size <= 1 {
+            return None;
+        }
+        let queue = Arc::new(PoolQueue {
+            tasks: std::sync::Mutex::new((VecDeque::new(), false)),
+            wake: std::sync::Condvar::new(),
+        });
+        let mut threads = Vec::new();
+        for _ in 0..size {
+            let queue = Arc::clone(&queue);
+            threads.push(std::thread::spawn(move || {
+                loop {
+                    let task = {
+                        let mut guard = queue.tasks.lock().unwrap();
+                        loop {
+                            if let Some(task) = guard.0.pop_front() {
+                                break task;
+                            }
+                            if guard.1 {
+                                return;
+                            }
+                            guard = queue.wake.wait(guard).unwrap();
+                        }
+                    };
+                    task();
+                }
+            }));
+        }
+        Some(Self { queue, threads })
+    }
+
+    /// Queues `task` for the next idle worker.
+    fn submit(&self, task: Box<dyn FnOnce() + Send>) {
+        self.queue.tasks.lock().unwrap().0.push_back(task);
+        self.queue.wake.notify_one();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Pool {
+    /// Wakes every worker to end, then joins them; a running task
+    /// finishes first, so a drop waits out the round's longest kick.
+    fn drop(&mut self) {
+        self.queue.tasks.lock().unwrap().1 = true;
+        self.queue.wake.notify_all();
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// One kick trial's report: its place in the round's dispatch order,
+/// and the route the trial descended to with the units it ran — no
+/// route when the kick could not start or found nothing to descend.
+#[cfg(not(target_arch = "wasm32"))]
+struct KickResult {
+    order: usize,
+    route: Option<Vec<u8>>,
+    units: u64,
+}
+
+/// One kick round in flight on the pool: the completions still to
+/// come, those that arrived, the round's pairs as indices into the
+/// pair list (so an improvement restarts the next round after its
+/// winner), and the pool the trials run on, which joins its workers
+/// when the round goes.
+#[cfg(not(target_arch = "wasm32"))]
+struct Round {
+    done: mpsc::Receiver<KickResult>,
+    kicked: Vec<usize>,
+    /// Held for its drop: ending the round joins the pool's workers.
+    #[expect(dead_code)]
+    pool: Pool,
+    pending: usize,
+    arrived: Vec<KickResult>,
+}
+
+/// Runs `job` to its end, one unit per step, on `reach`: the route it
+/// found, cut at its first solved state, with the units it ran, or no
+/// route with the units a failed or unreplayable job spent. A task's
+/// whole job, where [`Polish::step`] slices one unit per call.
+fn run_job(
+    board: &Board,
+    heuristic: &Heuristic,
+    start: &State,
+    job: &mut Job,
+    reach: &mut Reach,
+) -> (Option<Vec<u8>>, u64) {
+    let mut units = 0;
+    loop {
+        units += 1;
+        match job.step(board, heuristic, reach) {
+            Progress::Running => {}
+            Progress::Failed => return (None, units),
+            Progress::Found(route) => {
+                let Ok(n) = replay(board, start, &route) else {
+                    return (None, units);
+                };
+                let mut route = route;
+                route.truncate(n);
+                return (Some(route), units);
+            }
+        }
+    }
+}
+
+/// The descent a kicked route gets: every box's single-box job in turn,
+/// from the route each gain leaves, until a full cycle over the boxes
+/// gains nothing, then every pair's job the same way, until a full pass
+/// over the pairs gains nothing — the polish's own spine, run to its
+/// end on one route instead of sliced through [`Polish::step`]. Each
+/// job keeps every other box's pushes in their order, so only a
+/// shorter route that replays can replace the working one. Returns the
+/// converged route and the units the descent ran, gains and failures
+/// alike.
+fn descend(
+    board: &Board,
+    heuristic: &Heuristic,
+    start: &State,
+    mut route: Vec<u8>,
+    allowance: u64,
+    reach: &mut Reach,
+) -> (Vec<u8>, u64) {
+    let boxes = board.labels().len();
+    let mut units = 0;
+    // The single-box cycle, in slot order, from wherever the last job
+    // left it: a gain counts its own job and restarts the cycle.
+    let (mut next, mut idle) = (0, 0);
+    // The pair pass, over the pairs of the route the cycle converged
+    // on, computed once: a pair's gain sends the box cycle back to
+    // work before the next pair runs.
+    let (mut pair_list, mut pair, mut pair_idle, mut in_pairs) = (Vec::new(), 0, 0, false);
+    loop {
+        if idle < boxes {
+            let slot = next;
+            next = (slot + 1) % boxes;
+            idle += 1;
+            let Some(mut job) = Job::new(board, heuristic, start, &route, &[slot], allowance)
+            else {
+                continue;
+            };
+            let (found, ran) = run_job(board, heuristic, start, &mut job, reach);
+            units += ran;
+            if let Some(found) = found
+                && found.len() < route.len()
+            {
+                route = found;
+                idle = 1;
+            }
+            continue;
+        }
+        if !in_pairs {
+            in_pairs = true;
+            pair_list = pairs(board, start, &route);
+        }
+        if pair_idle < pair_list.len() {
+            let slots = pair_list[pair];
+            pair = (pair + 1) % pair_list.len();
+            pair_idle += 1;
+            let Some(mut job) = Job::new(board, heuristic, start, &route, &slots, allowance) else {
+                continue;
+            };
+            let (found, ran) = run_job(board, heuristic, start, &mut job, reach);
+            units += ran;
+            if let Some(found) = found
+                && found.len() < route.len()
+            {
+                route = found;
+                (idle, pair_idle) = (0, 1);
+            }
+            continue;
+        }
+        break;
+    }
+    (route, units)
+}
+
+/// One kick trial for the parallel round: the same-label `pair` of
+/// `best` made to trade goals under the kick's slack bound, and the
+/// kicked route then descended. `None` when the kick cannot start or
+/// finds no route to descend; otherwise the descended route and the
+/// trial's units — an improvement only when the descent ends shorter
+/// than `best`, which the round's merge decides.
+fn kick_trial(
+    board: &Board,
+    heuristic: &Heuristic,
+    start: &State,
+    best: &[u8],
+    pair: [usize; 2],
+    allowance: u64,
+) -> Option<(Vec<u8>, u64)> {
+    let mut job = Job::kick(board, heuristic, start, best, pair, allowance)?;
+    let mut reach = Reach::new(board.tiles().len());
+    let (kicked, units) = run_job(board, heuristic, start, &mut job, &mut reach);
+    let kicked = kicked?;
+    let (descended, ran) = descend(board, heuristic, start, kicked, allowance, &mut reach);
+    Some((descended, units + ran))
+}
+
 /// The polisher: the search's route, the best route so far, the status the
 /// search ended with, and the run or pair phase and the job under way. One
 /// [`Polish::step`] is one unit of a job, so the engine slices it by pops
@@ -204,6 +458,11 @@ pub(crate) struct Polish {
     kick_work: usize,
     kicking: bool,
     job: Option<Job>,
+    /// The kick round in flight on the pool, when workers race the
+    /// kicks: `None` on the sequential path, between rounds, and on
+    /// wasm.
+    #[cfg(not(target_arch = "wasm32"))]
+    round: Option<Round>,
 }
 
 impl Polish {
@@ -241,6 +500,8 @@ impl Polish {
             kick_work: max_states.saturating_mul(KICK_WORK),
             kicking: false,
             job: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            round: None,
         }
     }
     /// Whether a polish of a route of `moves` moves can start any job
@@ -287,6 +548,13 @@ impl Polish {
         start: &State,
         reach: &mut Reach,
     ) -> bool {
+        // A kick round in flight on the pool: poll one completion, and
+        // merge the round when the last is in. A poll that finds nothing
+        // spends no kick unit — the wait is not work.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.round.is_some() {
+            return self.poll_round();
+        }
         if self.kicking {
             let Some(left) = self.kick_work.checked_sub(1) else {
                 self.job = None;
@@ -346,6 +614,13 @@ impl Polish {
                 // the kicked route as they did from the runs' best.
                 self.kick_idle += 1;
                 self.kicking = true;
+                // The workers race the whole round at once; the
+                // sequential path below takes the kicks one at a time.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(round) = self.start_round(board, heuristic, start) {
+                    self.round = Some(round);
+                    return false;
+                }
                 let pair = loop {
                     let pair = self.pairs[self.kick];
                     self.kick = (self.kick + 1) % self.pairs.len();
@@ -394,6 +669,144 @@ impl Polish {
             }
         }
         false
+    }
+
+    /// Dispatches the next kick round on the pool: every same-label
+    /// pair the round would visit, from the current kick index and in
+    /// the sequential visit order, each a whole kick trial on its own
+    /// thread's scratch. `None` on the sequential path — fewer than
+    /// two workers, or no pairs to kick — which takes the kicks one
+    /// at a time instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_round(
+        &mut self,
+        board: &Board,
+        heuristic: &Heuristic,
+        start: &State,
+    ) -> Option<Round> {
+        let workers = workers();
+        if workers <= 1 || self.swaps == 0 {
+            return None;
+        }
+        let pool = Pool::new(workers)?;
+        // The round's pairs: the same-label pairs from the kick index,
+        // wrapping, a full cycle of the round — the sequential visit
+        // order, recorded as indices into the pair list so an
+        // improvement restarts the next round after its winner.
+        let mut kicked = Vec::with_capacity(self.swaps);
+        let mut at = self.kick;
+        while kicked.len() < self.swaps {
+            let index = at;
+            at = (at + 1) % self.pairs.len();
+            if same_label(heuristic, self.pairs[index]) {
+                kicked.push(index);
+            }
+        }
+        self.kick = at;
+        let (send, done) = mpsc::channel();
+        // The trials share one board clone and one fresh heuristic:
+        // only the weighted policies polish, so the heuristic never
+        // counts keeper sides and is cheap to build.
+        let board = Arc::new(board.clone());
+        let heuristic = Arc::new(Heuristic::new(&board, None));
+        let best = Arc::new(self.best.clone());
+        let (state, allowance) = (*start, self.allowance);
+        for (order, &index) in kicked.iter().enumerate() {
+            let pair = self.pairs[index];
+            let (send, board) = (send.clone(), Arc::clone(&board));
+            let (heuristic, best) = (Arc::clone(&heuristic), Arc::clone(&best));
+            pool.submit(Box::new(move || {
+                let (route, units) =
+                    match kick_trial(&board, &heuristic, &state, &best, pair, allowance) {
+                        Some((route, units)) => (Some(route), units),
+                        None => (None, 0),
+                    };
+                let _ = send.send(KickResult {
+                    order,
+                    route,
+                    units,
+                });
+            }));
+        }
+        let pending = kicked.len();
+        Some(Round {
+            done,
+            kicked,
+            pool,
+            pending,
+            arrived: Vec::new(),
+        })
+    }
+
+    /// Polls one completion of the round in flight: a result buffers,
+    /// and the last one merges the round. A poll that finds nothing
+    /// spends no kick unit — the wait is not work. True once a merged
+    /// round ends the polish.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_round(&mut self) -> bool {
+        let Some(mut round) = self.round.take() else {
+            return false;
+        };
+        match round.done.try_recv() {
+            Ok(result) => {
+                round.pending -= 1;
+                round.arrived.push(result);
+                if round.pending == 0 {
+                    return self.merge_round(round);
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            // Every sender is gone: whatever arrived is the round.
+            Err(mpsc::TryRecvError::Disconnected) => return self.merge_round(round),
+        }
+        self.round = Some(round);
+        false
+    }
+
+    /// Merges a finished round: the first improver in dispatch order —
+    /// the one the sequential path would have found first — becomes the
+    /// best route, the next round starting after its pair, and the
+    /// budget charges the trials the sequential path would have run to
+    /// reach the same place. A round nothing improved, or a charge
+    /// that empties the budget, ends the polish.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn merge_round(&mut self, mut round: Round) -> bool {
+        round.arrived.sort_by_key(|result| result.order);
+        let winner = round.arrived.iter().position(|result| {
+            result
+                .route
+                .as_ref()
+                .is_some_and(|route| route.len() < self.best.len())
+        });
+        // The budget charges what the sequential path would have spent
+        // to reach the same place: every trial up to and including the
+        // first improver, or the whole round when nothing improved. The
+        // trials past the improver ran from the base the improvement
+        // replaced, so the sequential path never runs them — they are
+        // the round's speculation, spent in wall time but not budget.
+        let charge = match winner {
+            Some(at) => round.arrived[..=at]
+                .iter()
+                .fold(0u64, |sum, result| sum.saturating_add(result.units)),
+            None => round
+                .arrived
+                .iter()
+                .fold(0u64, |sum, result| sum.saturating_add(result.units)),
+        };
+        let spent = (charge as usize).min(self.kick_work);
+        self.kick_work -= spent;
+        if let Some(at) = winner
+            && let Some(route) = round.arrived[at].route.take()
+        {
+            self.route = route;
+            self.best.clone_from(&self.route);
+            self.kick_idle = 0;
+            self.kick = (round.kicked[at] + 1) % self.pairs.len();
+        } else {
+            // The full round left the best as it was.
+            self.kick_idle = self.swaps;
+        }
+        self.kick_work == 0 || self.kick_idle >= self.swaps
     }
 }
 
@@ -1079,5 +1492,72 @@ impl Job {
         route.reverse();
         debug_assert_eq!(route.len(), g as usize);
         Progress::Found(route)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Heuristic, Reach, descend, replay};
+    use sokomind_core::Board;
+
+    /// A detour route around the direct line: the descent's single-box
+    /// job keeps every other push — here none — and re-schedules the
+    /// box's own, finding the three pushes of the direct run where the
+    /// route took five around the block.
+    #[test]
+    fn a_descended_detour_finds_the_direct_line() {
+        let board = Board::parse(
+            "OOOOOOOOOO\n\
+             O        O\n\
+             O R X  S O\n\
+             O        O\n\
+             O        O\n\
+             OOOOOOOOOO",
+        )
+        .unwrap();
+        let start = board.initial();
+        // The box taken the long way: pushed down, along the row below,
+        // and up onto its goal — 12 moves, 5 pushes.
+        let route: Vec<u8> = "urrdldrrrdru"
+            .bytes()
+            .map(|c| match c {
+                b'u' => 0,
+                b'd' => 1,
+                b'l' => 2,
+                _ => 3,
+            })
+            .collect();
+        assert!(replay(&board, &start, &route).is_ok());
+        let heuristic = Heuristic::new(&board, None);
+        let mut reach = Reach::new(board.tiles().len());
+        let (descended, units) = descend(&board, &heuristic, &start, route, 1 << 20, &mut reach);
+        assert_eq!(descended.len(), 4);
+        assert!(units > 0);
+    }
+
+    /// The pool runs every queued task exactly once, and ends cleanly
+    /// once its senders are gone.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_pool_runs_every_task() {
+        use std::sync::{Arc, Mutex};
+        let pool = super::Pool::new(4).unwrap();
+        let count = Arc::new(Mutex::new(0));
+        let (send, recv) = std::sync::mpsc::channel();
+        for i in 0..16 {
+            let (count, send) = (Arc::clone(&count), send.clone());
+            pool.submit(Box::new(move || {
+                *count.lock().unwrap() += 1;
+                send.send(i).unwrap();
+            }));
+        }
+        drop(send);
+        let mut seen = 0;
+        while recv.recv().is_ok() {
+            seen += 1;
+        }
+        drop(pool);
+        assert_eq!(seen, 16);
+        assert_eq!(*count.lock().unwrap(), 16);
     }
 }

@@ -52,7 +52,10 @@ behavior for experiments; each is documented with its measurement in `docs/`:
   routes that respect a single-door room's crossing order
   (docs/strategic.md);
 - `SOKOMIND_POLISH_RUNS` — raises the polish's box-order cap
-  (docs/route-polish.md).
+  (docs/route-polish.md);
+- `SOKOMIND_POLISH_WORKERS` — races the polish's kick rounds on a
+  native thread pool: never a longer route, and shorter ones where
+  the polish's budget dies mid-chain (docs/parallel-polish.md).
 
 ## Full stack with Docker
 
