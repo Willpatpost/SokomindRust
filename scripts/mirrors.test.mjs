@@ -634,3 +634,8 @@ test("theme.ts's meta colors are tokens.css's app-background bases", () => {
     assert.ok(sheet.includes(dark), `${dark} is not one of tokens.css's colors`);
   }
 });
+
+test("the home page's start link goes to the catalog's first puzzle", () => {
+  const first = JSON.parse(source('data/puzzles.json'))[0];
+  assert.equal(text('web/index.html', /id="start"[^>]*href="#\/play\/([^"]+)"/), first.id);
+});

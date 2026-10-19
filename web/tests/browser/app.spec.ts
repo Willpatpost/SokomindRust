@@ -5,18 +5,20 @@ const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys o
 // "First Steps": the robot stands directly above the box, whose goal is one
 // cell below it, so a single Down push solves the puzzle.
 const SOLVED = 'Solved in 1 moves and 1 pushes.';
+const PLAY_FIRST = '/#/play/ultra-tiny';
 
 async function loaded(page: import('@playwright/test').Page) {
   // vite preview proxies /api to 127.0.0.1:3000, where the suite runs no API;
   // a 404 stands in for a host without one and keeps proxy errors out of the log.
   await page.route('**/api/health', health => health.fulfill({ status: 404 }));
-  await page.goto('/');
+  await page.goto(PLAY_FIRST);
   await expect(page.locator('#title')).toHaveText('First Steps');
 }
 
 test('renders the first catalog puzzle', async ({ page }) => {
   await loaded(page);
   await expect(page.locator('#difficulty')).toHaveText('tutorial');
+  await expect(page.locator('#position')).toHaveText('1 / 57');
   await expect(page.locator('#message')).toHaveText(MOVE_HINT);
   await expect(page.locator('#board')).toHaveAttribute('aria-label', FIRST_BOARD);
   await expect(page.locator('#solve')).toBeEnabled();
@@ -132,7 +134,7 @@ test('finds a route through the in-browser engine', async ({ page }) => {
 // clicks, so Stop always lands while the search runs and no route is on show.
 test('Stop ends a browser search and frees the controls', async ({ page }) => {
   await loaded(page);
-  await page.selectOption('#puzzles', 'huge');
+  await page.goto('/#/play/huge');
   await expect(page.locator('#title')).toHaveText('Grand Hall');
   await page.selectOption('#mode', 'quality');
   await page.selectOption('#seconds', '30');
@@ -147,7 +149,7 @@ test('Stop ends a browser search and frees the controls', async ({ page }) => {
 // the WASM metrics tuple, so a misread proof kind would change this label.
 test('Optimal mode proves the route move-optimal in the browser', async ({ page }) => {
   await loaded(page);
-  await page.selectOption('#puzzles', 'beginner-detour');
+  await page.goto('/#/play/beginner-detour');
   await expect(page.locator('#title')).toHaveText('The Detour');
   await page.selectOption('#mode', 'optimal');
   await page.click('#solve');
@@ -164,4 +166,37 @@ test('restores the solved session after a reload', async ({ page }) => {
   await expect(page.locator('#message')).toHaveText('Session restored by replaying your moves.');
   await expect(page.locator('#moves')).toHaveText('1');
   await expect(page.locator('#best-score')).toHaveText('Best: 1 moves · 1 pushes');
+});
+
+test('the home page leads into play, and Escape comes back', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/');
+  await expect(page.locator('[data-page="home"] h1')).toHaveText('Sokomind');
+  await expect(page.locator('#announcer')).toHaveText('Navigated to Home');
+  await page.click('#start');
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await expect(page.locator('#announcer')).toHaveText('Navigated to Play');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-page="home"] h1')).toBeVisible();
+  await expect(page.locator('#announcer')).toHaveText('Navigated to Home');
+});
+
+test('a route naming no catalog puzzle lands home', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/play/nope');
+  await expect(page.locator('[data-page="home"] h1')).toHaveText('Sokomind');
+  await expect(page).toHaveURL(/#\/$/);
+});
+
+test('the picker and the arrows navigate play routes', async ({ page }) => {
+  await loaded(page);
+  await page.click('#next');
+  await expect(page).toHaveURL(/#\/play\/tiny$/);
+  await expect(page.locator('#title')).toHaveText("Two's Company");
+  await expect(page.locator('#position')).toHaveText('2 / 57');
+  await page.click('#prev');
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await page.selectOption('#puzzles', 'huge');
+  await expect(page).toHaveURL(/#\/play\/huge/);
+  await expect(page.locator('#title')).toHaveText('Grand Hall');
 });

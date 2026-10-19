@@ -31,8 +31,17 @@
     </script>
   </head>
   <body>
+    <!-- A focus-moving button, not a hash link: the router owns the hash namespace. -->
+    <button id="skip" class="skip-to-content">Skip to content</button>
     <header>
-      <a href="./" class="brand">SOKOMIND <span>RUST</span></a>
+      <a href="#/" class="brand">SOKOMIND <span>RUST</span></a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="#/" data-nav="home">Home</a>
+        <a href="#/puzzles" data-nav="puzzles">Puzzles</a>
+        <a href="#/stats" data-nav="stats">Stats</a>
+        <a href="#/solver-lab" data-nav="solver-lab">Lab</a>
+        <a href="#/editor" data-nav="editor">Editor</a>
+      </nav>
       <span class="tagline">Small moves. Deep puzzles.</span>
       <details class="theme-menu">
         <summary>Theme</summary>
@@ -47,157 +56,230 @@
       </details>
       <span id="connection">Browser mode</span>
     </header>
-    <main>
-      <section aria-label="Puzzle game">
-        <div class="puzzle-picker">
-          <label for="puzzles">Puzzle</label>
-          <select id="puzzles"></select>
-          <button id="next" title="Next puzzle">Next →</button>
+    <main id="page">
+      <section data-page="home" hidden>
+        <h1 tabindex="-1">Sokomind</h1>
+        <p class="muted">Small moves. Deep puzzles. Every route a Rust engine found, verified, and can prove optimal.</p>
+        <div class="actions">
+          <!-- main.ts aims this at the saved session's puzzle; data/puzzles.json's first is the fallback (checked by scripts/mirrors.test.mjs). -->
+          <a id="start" class="button primary" href="#/play/ultra-tiny">Start playing</a>
+          <a class="button" href="#/puzzles">Browse puzzles</a>
         </div>
-        <div class="heading">
-          <div>
-            <p id="difficulty" class="eyebrow"></p>
-            <h1 id="title">Loading Rust engine…</h1>
-          </div>
-          <div class="counters">
-            <span><strong id="moves">0</strong> moves</span>
-            <span><strong id="pushes">0</strong> pushes</span>
-          </div>
-        </div>
-        <div class="board-wrap">
-          <canvas id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, Z to undo."></canvas>
-        </div>
-        <p id="hint" class="muted"></p>
-        <div class="game-controls">
-          <button id="undo">Undo <kbd>Z</kbd></button>
-          <button id="reset">Restart</button>
-          <button id="best">Replay best</button>
-          <span id="best-score" class="muted"></span>
-        </div>
-        <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
-        <div class="direction-pad" aria-label="Movement controls">
-          <button data-direction="0" aria-label="Move up">↑</button>
-          <!-- Breaks sit inside the tags so no whitespace separates the buttons. -->
-          <div>
-            <button data-direction="2" aria-label="Move left">←</button><button data-direction="1" aria-label="Move down">↓</button
-            ><button data-direction="3" aria-label="Move right">→</button>
-          </div>
-        </div>
-        <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
+        <p class="fine">Your progress and best routes stay in this browser.</p>
       </section>
-      <aside>
-        <section class="card">
-          <p class="eyebrow">SHARED RUST ENGINE</p>
-          <h2>Find a route</h2>
-          <label for="mode">Search mode</label>
-          <!-- Mode::as_str's names (crates/search/src/lib.rs), as MODES in web/src/protocol.ts (checked by scripts/mirrors.test.mjs). -->
-          <select id="mode">
-            <option value="fast" data-help="Prioritizes a quick first route. It may use extra moves and never proves optimality.">
-              Fast · first solution
-            </option>
-            <option
-              value="quality"
-              data-help="Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality."
-            >
-              Quality · improve over time
-            </option>
-            <option
-              value="optimal"
-              data-help="Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal."
-            >
-              Optimal · exact move search
-            </option>
-          </select>
-          <p id="mode-help" class="muted"></p>
-          <div class="fields">
+      <section data-page="puzzles" hidden>
+        <h1 tabindex="-1">Puzzles</h1>
+        <p class="muted">The puzzle browser arrives with the catalog phase of the port. Until then, pick puzzles on the play page.</p>
+        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+      </section>
+      <section data-page="play" aria-label="Puzzle game">
+        <div class="play-grid">
+          <div class="puzzle-picker">
+            <label for="puzzles">Puzzle</label>
+            <select id="puzzles"></select>
+            <button id="prev" title="Previous puzzle" aria-label="Previous puzzle">←</button>
+            <span id="position" class="muted"></span>
+            <button id="next" title="Next puzzle" aria-label="Next puzzle">→</button>
+          </div>
+          <div class="heading">
             <div>
-              <label for="seconds">Time budget</label>
-              <!-- Within TIME_MS in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
-              <select id="seconds">
-                <option value="5">5 seconds</option>
-                <option value="15">15 seconds</option>
-                <option value="30">30 seconds</option>
+              <p id="difficulty" class="eyebrow"></p>
+              <h1 id="title" tabindex="-1">Loading Rust engine…</h1>
+            </div>
+            <div class="counters">
+              <span><strong id="moves">0</strong> moves</span>
+              <span><strong id="pushes">0</strong> pushes</span>
+            </div>
+          </div>
+          <div class="board-wrap">
+            <canvas id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, Z to undo."></canvas>
+          </div>
+          <p id="hint" class="muted"></p>
+          <div class="game-controls">
+            <button id="undo">Undo <kbd>Z</kbd></button>
+            <button id="reset">Restart</button>
+            <button id="best">Replay best</button>
+            <span id="best-score" class="muted"></span>
+          </div>
+          <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
+          <div class="direction-pad" aria-label="Movement controls">
+            <button data-direction="0" aria-label="Move up">↑</button>
+            <!-- Breaks sit inside the tags so no whitespace separates the buttons. -->
+            <div>
+              <button data-direction="2" aria-label="Move left">←</button><button data-direction="1" aria-label="Move down">↓</button
+              ><button data-direction="3" aria-label="Move right">→</button>
+            </div>
+          </div>
+          <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
+          <aside>
+            <section class="card">
+              <p class="eyebrow">SHARED RUST ENGINE</p>
+              <h2>Find a route</h2>
+              <label for="mode">Search mode</label>
+              <!-- Mode::as_str's names (crates/search/src/lib.rs), as MODES in web/src/protocol.ts (checked by scripts/mirrors.test.mjs). -->
+              <select id="mode">
+                <option value="fast" data-help="Prioritizes a quick first route. It may use extra moves and never proves optimality.">
+                  Fast · first solution
+                </option>
+                <option
+                  value="quality"
+                  data-help="Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality."
+                >
+                  Quality · improve over time
+                </option>
+                <option
+                  value="optimal"
+                  data-help="Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal."
+                >
+                  Optimal · exact move search
+                </option>
               </select>
-            </div>
-            <div>
-              <label for="memory">Memory budget</label>
-              <!-- Up to MEMORY_MIB's cap in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
-              <select id="memory">
-                <option value="16">16 MiB</option>
-                <option value="32">32 MiB</option>
-                <option value="64" selected>64 MiB</option>
-                <option value="128">128 MiB</option>
-                <option value="256">256 MiB</option>
-                <option value="512">512 MiB</option>
-                <option value="1024">1024 MiB</option>
+              <p id="mode-help" class="muted"></p>
+              <div class="fields">
+                <div>
+                  <label for="seconds">Time budget</label>
+                  <!-- Within TIME_MS in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
+                  <select id="seconds">
+                    <option value="5">5 seconds</option>
+                    <option value="15">15 seconds</option>
+                    <option value="30">30 seconds</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="memory">Memory budget</label>
+                  <!-- Up to MEMORY_MIB's cap in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
+                  <select id="memory">
+                    <option value="16">16 MiB</option>
+                    <option value="32">32 MiB</option>
+                    <option value="64" selected>64 MiB</option>
+                    <option value="128">128 MiB</option>
+                    <option value="256">256 MiB</option>
+                    <option value="512">512 MiB</option>
+                    <option value="1024">1024 MiB</option>
+                  </select>
+                </div>
+              </div>
+              <label for="engine">Run on</label>
+              <!-- The values are ENGINES in web/src/solver-client.ts (checked by scripts/mirrors.test.mjs). -->
+              <select id="engine">
+                <option value="browser">This browser · WebAssembly</option>
+                <option value="native">Server · native Rust</option>
               </select>
-            </div>
-          </div>
-          <label for="engine">Run on</label>
-          <!-- The values are ENGINES in web/src/solver-client.ts (checked by scripts/mirrors.test.mjs). -->
-          <select id="engine">
-            <option value="browser">This browser · WebAssembly</option>
-            <option value="native">Server · native Rust</option>
-          </select>
-          <div class="actions">
-            <button id="solve" class="primary">Solve from here</button>
-            <button id="cancel" disabled>Stop</button>
-          </div>
-          <p id="search-status" role="status">Ready when you are.</p>
-          <dl class="metrics">
-            <div>
-              <dt>Expanded</dt>
-              <dd id="expanded">—</dd>
-            </div>
-            <div>
-              <dt>States</dt>
-              <dd id="generated">—</dd>
-            </div>
-            <div>
-              <dt>Memory ceiling</dt>
-              <dd id="reserved">—</dd>
-            </div>
-            <div>
-              <dt>Elapsed</dt>
-              <dd id="elapsed">—</dd>
-            </div>
-          </dl>
-          <div class="actions">
-            <button id="play" disabled>Play route</button>
-            <button id="copy" disabled>Copy route</button>
-          </div>
-          <p class="fine">
-            Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed these search limits.
-          </p>
-        </section>
-        <details class="card">
-          <summary>Import / edit a puzzle</summary>
-          <p class="muted">
-            O wall · R robot · X box · S goal. Other uppercase boxes match lowercase goals. O, R, S and X are reserved, so o, r, s and x are
-            not goals. Spaces are floor.
-          </p>
-          <label for="rows">Puzzle rows</label>
-          <!-- maxlength is Board::parse's text cap, MAX_CELLS * 2 bytes (crates/core/src/board.rs). -->
-          <textarea id="rows" spellcheck="false" rows="9" maxlength="8192"></textarea>
-          <button id="load-custom">Play these rows</button>
-        </details>
-        <details class="card">
-          <summary>Import a route</summary>
-          <p class="muted">Apply U/D/L/R moves from the start of this puzzle. You can undo to study any position.</p>
-          <label for="route-input">Move sequence</label>
-          <textarea id="route-input" spellcheck="false" rows="3" placeholder="UDLR…"></textarea>
-          <button id="load-route">Apply route</button>
-        </details>
-        <section class="rules">
-          <h2>How to play</h2>
-          <p>
-            Push every box onto its matching goal. You can push one box at a time, but you cannot pull. Use arrow keys or WASD (Z undoes),
-            swipe on the board, or the buttons.
-          </p>
-          <p id="storage" class="fine">Progress stays in this browser.</p>
-        </section>
-      </aside>
+              <div class="actions">
+                <button id="solve" class="primary">Solve from here</button>
+                <button id="cancel" disabled>Stop</button>
+              </div>
+              <p id="search-status" role="status">Ready when you are.</p>
+              <dl class="metrics">
+                <div>
+                  <dt>Expanded</dt>
+                  <dd id="expanded">—</dd>
+                </div>
+                <div>
+                  <dt>States</dt>
+                  <dd id="generated">—</dd>
+                </div>
+                <div>
+                  <dt>Memory ceiling</dt>
+                  <dd id="reserved">—</dd>
+                </div>
+                <div>
+                  <dt>Elapsed</dt>
+                  <dd id="elapsed">—</dd>
+                </div>
+              </dl>
+              <div class="actions">
+                <button id="play" disabled>Play route</button>
+                <button id="copy" disabled>Copy route</button>
+              </div>
+              <p class="fine">
+                Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed these search limits.
+              </p>
+            </section>
+            <details class="card">
+              <summary>Import / edit a puzzle</summary>
+              <p class="muted">
+                O wall · R robot · X box · S goal. Other uppercase boxes match lowercase goals. O, R, S and X are reserved, so o, r, s and x
+                are not goals. Spaces are floor.
+              </p>
+              <label for="rows">Puzzle rows</label>
+              <!-- maxlength is Board::parse's text cap, MAX_CELLS * 2 bytes (crates/core/src/board.rs). -->
+              <textarea id="rows" spellcheck="false" rows="9" maxlength="8192"></textarea>
+              <button id="load-custom">Play these rows</button>
+            </details>
+            <details class="card">
+              <summary>Import a route</summary>
+              <p class="muted">Apply U/D/L/R moves from the start of this puzzle. You can undo to study any position.</p>
+              <label for="route-input">Move sequence</label>
+              <textarea id="route-input" spellcheck="false" rows="3" placeholder="UDLR…"></textarea>
+              <button id="load-route">Apply route</button>
+            </details>
+            <section class="rules">
+              <h2>How to play</h2>
+              <p>
+                Push every box onto its matching goal. You can push one box at a time, but you cannot pull. Use arrow keys or WASD (Z
+                undoes), swipe on the board, or the buttons.
+              </p>
+              <p id="storage" class="fine">Progress stays in this browser.</p>
+            </section>
+          </aside>
+        </div>
+      </section>
+      <section data-page="editor" hidden>
+        <h1 tabindex="-1">Puzzle editor</h1>
+        <p class="muted">The editor arrives with its phase of the port. Until then, paste puzzle rows on the play page.</p>
+        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+      </section>
+      <section data-page="stats" hidden>
+        <h1 tabindex="-1">Statistics</h1>
+        <p class="muted">Solve statistics and best-route history arrive with the progress phase of the port.</p>
+        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+      </section>
+      <section data-page="solver-lab" hidden>
+        <h1 tabindex="-1">Solver Lab</h1>
+        <p class="muted">
+          The solver workspace arrives with the solver phase of the port. The play page's route card already searches every mode.
+        </p>
+        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+      </section>
     </main>
+    <p id="announcer" class="sr-only" role="status" aria-live="polite"></p>
+    <nav class="mobile-nav" aria-label="Main navigation">
+      <a href="#/" data-nav="home">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 10.5 12 3l9 7.5" />
+          <path d="M5 9.5V21h14V9.5" /></svg
+        >Home
+      </a>
+      <a href="#/puzzles" data-nav="puzzles">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
+          <rect x="14" y="14" width="7" height="7" /></svg
+        >Puzzles
+      </a>
+      <a href="#/stats" data-nav="stats">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 20v-6" />
+          <path d="M12 20V4" />
+          <path d="M19 20v-10" /></svg
+        >Stats
+      </a>
+      <a href="#/solver-lab" data-nav="solver-lab">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M9 3h6" />
+          <path d="M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3" /></svg
+        >Lab
+      </a>
+      <a href="#/editor" data-nav="editor">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg
+        >Editor
+      </a>
+    </nav>
+    <button id="to-top" title="Back to top">↑</button>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

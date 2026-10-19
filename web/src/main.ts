@@ -7,6 +7,8 @@ import { BoardView } from './board.ts';
 import { bindInput } from './input.ts';
 import * as storage from './storage.ts';
 import * as theme from './theme.ts';
+import { navigate, route, startRouter, subscribe, type Route } from './router.ts';
+import { onPage, playHash, startShell } from './shell.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
@@ -178,6 +180,8 @@ function load(puzzle: Puzzle, actions = '') {
   }
   session = next;
   select('puzzles').value = puzzle.id;
+  const index = catalog.findIndex(p => p.id === puzzle.id);
+  setText('position', index === -1 ? 'custom' : `${index + 1} / ${catalog.length}`);
   setText('title', puzzle.title);
   setText('difficulty', puzzle.difficulty);
   setText('hint', puzzle.hint || 'Match every box to its goal.');
@@ -217,6 +221,35 @@ function solve() {
   for (const metric of ['expanded', 'generated', 'reserved', 'elapsed']) setText(metric, '—');
   setStatus('Preparing search…');
   void solver.solve(choice('engine', ENGINES), request);
+}
+
+/** Loads the play route's puzzle: a shared log replays as given, and without one the
+ * saved session continues when it was saved for this puzzle. A route that names no
+ * catalog puzzle, or a log that does not replay, goes home. */
+function enterPlay(next: Route) {
+  if (next.kind !== 'play') return;
+  const puzzle = catalog.find(p => p.id === next.puzzleId);
+  if (!puzzle) {
+    navigate({ kind: 'home' });
+    return;
+  }
+  const saved = storage.session();
+  const actions = next.actionLog ?? (saved?.id === puzzle.id && saved.rows === puzzle.rows.join('\n') ? saved.actions : '');
+  try {
+    load(puzzle, actions);
+  } catch {
+    navigate({ kind: 'home' });
+  }
+}
+
+/** Aims the home page's primary action at the saved session's puzzle when one waits
+ * there, or at the catalog's first. */
+function syncHome() {
+  const saved = storage.session();
+  const id = saved && catalog.some(p => p.id === saved.id) ? saved.id : catalog[0].id;
+  const start = $<HTMLAnchorElement>('start');
+  start.href = playHash(id);
+  start.textContent = saved ? 'Resume playing' : 'Start playing';
 }
 
 /** The theme menu's labels; the values are theme.ts's lists. */
@@ -262,41 +295,43 @@ async function start() {
   mode.onchange = syncModeHelp;
   // The browser can restore the select's value on reload; match the help text.
   syncModeHelp();
+  // The shell shows the first route before the engine is ready: a play route loads
+  // once WebAssembly is, and every later one through the router.
+  let engineReady = false;
+  onPage('play', next => {
+    if (engineReady) enterPlay(next);
+  });
+  onPage('home', syncHome);
+  // Leaving the play page stops its search and playback; the session keeps saving.
+  subscribe(next => {
+    if (next.kind !== 'play') invalidate();
+  });
+  startShell();
+  startRouter();
   await init({ module_or_path: wasmUrl });
+  engineReady = true;
+  if (route().kind === 'play') enterPlay(route());
   const selector = select('puzzles');
   for (const puzzle of catalog) selector.add(new Option(`${puzzle.title} · ${puzzle.difficulty}`, puzzle.id));
   selector.add(new Option('Custom puzzle', CUSTOM_PUZZLE_ID));
-  const saved = storage.session();
-  const savedPuzzle = saved?.id === CUSTOM_PUZZLE_ID ? customPuzzle(saved.rows) : catalog.find(p => p.id === saved?.id);
-  const canRestore = savedPuzzle && savedPuzzle.rows.join('\n') === saved?.rows;
-  // A stale saved layout falls back to the saved puzzle itself, not puzzle one.
-  const target = savedPuzzle ?? catalog[0];
-  try {
-    load(target, canRestore ? saved.actions : '');
-  } catch {
-    try {
-      load(target);
-    } catch {
-      load(catalog[0]);
-      message('Saved session was invalid. Started a fresh puzzle.');
-    }
-  }
   selector.onchange = () => {
     if (selector.value === CUSTOM_PUZZLE_ID) {
-      selector.value = loaded().puzzle.id;
+      selector.value = session?.puzzle.id ?? catalog[0].id;
       $<HTMLTextAreaElement>('rows').closest('details')!.open = true;
       return;
     }
     const puzzle = catalog.find(p => p.id === selector.value);
-    if (puzzle) load(puzzle);
+    if (puzzle) navigate({ kind: 'play', puzzleId: puzzle.id });
     // Arrow keys must move the robot, not walk the dropdown after a change.
     selector.blur();
   };
-  button('next').onclick = () => {
-    const { id } = loaded().puzzle;
+  const step = (delta: number) => {
+    const id = session?.puzzle.id ?? catalog[0].id;
     const index = catalog.findIndex(p => p.id === id);
-    load(catalog[(index + 1) % catalog.length]);
+    navigate({ kind: 'play', puzzleId: catalog[(index + delta + catalog.length) % catalog.length].id });
   };
+  button('prev').onclick = () => step(-1);
+  button('next').onclick = () => step(1);
   button('undo').onclick = () => {
     invalidate();
     if (loaded().game.undo()) changed();
@@ -367,6 +402,12 @@ async function start() {
     } catch {
       message('Clipboard is unavailable in this browser.');
     }
+  };
+  // The skip button bypasses the header's controls; it must not touch the hash,
+  // which the router owns.
+  button('skip').onclick = () => {
+    $<HTMLElement>('page').focus();
+    scrollTo({ top: 0 });
   };
   addEventListener('resize', () => render());
   addEventListener('pagehide', () => saveSession());

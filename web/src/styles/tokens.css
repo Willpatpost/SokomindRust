@@ -160,12 +160,13 @@ button,
   top: 10px;
   left: 10px;
   padding: 11px 15px;
+  border: none;
   border-radius: var(--radius-sm);
   color: var(--paper-50);
   background: var(--ink-950);
   font-size: 0.8rem;
   font-weight: 800;
-  text-decoration: none;
+  cursor: pointer;
   transform: translateY(-150%);
   transition: transform 120ms ease;
 }
@@ -559,5 +560,33 @@ html[data-motion='reduced'] *::after {
   ::selection {
     color: HighlightText;
     background: Highlight;
+  }
+}
+
+/* Page transitions: an entering section's children start offset toward the
+   direction the page came from and settle. shell.ts applies and removes the
+   classes. */
+.page-enter-forward > * {
+  opacity: 0;
+  transform: translateX(16px);
+}
+
+.page-enter-back > * {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+
+.page-enter-active > * {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+
+/* The mobile navigation's bar reserves room at the bottom of the page. */
+@media (max-width: 850px) {
+  body:has(nav[aria-label='Main navigation']) {
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   }
 }

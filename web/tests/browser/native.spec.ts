@@ -21,7 +21,7 @@ async function connected(page: import('@playwright/test').Page) {
       },
     }),
   );
-  await page.goto('/');
+  await page.goto('/#/play/ultra-tiny');
   await expect(page.locator('#title')).toHaveText('First Steps');
   // The health probe starts once start() has bound every control, so waiting
   // for its label keeps clicks from racing start().
