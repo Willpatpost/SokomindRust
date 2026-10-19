@@ -476,8 +476,8 @@ test("the #engine select offers solver-client.ts's ENGINES", () => {
   );
 });
 
-test("board.ts's WALL equals sokomind_core::WALL", () => {
-  assert.equal(read('web/src/board.ts', /const WALL = (\d+);/), read('crates/core/src/board.rs', /pub const WALL: u8 = (\d+);/));
+test("protocol.ts's WALL equals sokomind_core::WALL", () => {
+  assert.equal(read('web/src/protocol.ts', /export const WALL = (\d+);/), read('crates/core/src/board.rs', /pub const WALL: u8 = (\d+);/));
 });
 
 test("the README, Mode's docs and the arena's key test quote the weights of Policy::FAST, Policy::QUALITY and Policy::QUALITY_LIGHT", () => {

@@ -195,6 +195,11 @@ h2 {
   touch-action: manipulation;
 }
 
+/* A zoomed board fills the wrap, so it holds no scrollbar. */
+.board-wrap.zoomed {
+  overflow: hidden;
+}
+
 .muted {
   color: var(--ink-muted);
   font-size: 13px;

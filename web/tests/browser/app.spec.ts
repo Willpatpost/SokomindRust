@@ -211,3 +211,21 @@ test('the DOM board renders pieces that move and celebrate', async ({ page }) =>
   await expect(page.locator('#board .crate[data-home]')).toHaveCount(1);
   await expect(page.locator('#board .trail-dot')).toHaveCount(1);
 });
+
+test('a tap on a reachable cell walks the robot there', async ({ page }) => {
+  await loaded(page);
+  const box = (await page.locator('#board').boundingBox())!;
+  // First Steps is a 5 by 5 board; the robot stands at row 1, column 2.
+  const at = (row: number, column: number) => ({
+    x: box.x + ((column + 0.5) / 5) * box.width,
+    y: box.y + ((row + 0.5) / 5) * box.height,
+  });
+  await page.mouse.click(at(1, 1).x, at(1, 1).y);
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /1 moves, 0 pushes\./);
+  await page.mouse.click(at(1, 3).x, at(1, 3).y);
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /3 moves, 0 pushes\./);
+  // The box's own cell and a wall are not walk targets.
+  await page.mouse.click(at(2, 2).x, at(2, 2).y);
+  await page.mouse.click(at(0, 2).x, at(0, 2).y);
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /3 moves, 0 pushes\./);
+});

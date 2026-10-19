@@ -15,10 +15,20 @@
   box-shadow: var(--game-board-shadow);
   width: calc(var(--columns) * var(--tile));
   height: calc(var(--rows) * var(--tile));
-  /* Swipes move the robot, so touch may only pinch-zoom. Browsers without the
-     pinch-zoom value drop that declaration and keep manipulation. */
+  /* The board owns every gesture on it — swipes, taps, the pinch zoom and its
+     pan — so touch never scrolls the page from it. */
+  touch-action: none;
+}
+
+/* An oversized board's wrap scrolls it natively; a zoomed board owns its
+   touches again, so a pan moves the board, not the wrap. This rule pair keeps
+   its order: the zoomed one must win over the panning one. */
+.board-wrap.pan .board {
   touch-action: manipulation;
-  touch-action: pinch-zoom;
+}
+
+.board-wrap.zoomed .board {
+  touch-action: none;
 }
 
 .board[data-solved] {

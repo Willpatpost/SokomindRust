@@ -9,6 +9,8 @@ import * as storage from './storage.ts';
 import * as theme from './theme.ts';
 import { navigate, route, startRouter, subscribe, type Route } from './router.ts';
 import { onPage, playHash, startShell } from './shell.ts';
+import { walkRoute } from './walk.ts';
+import { PinchZoom } from './zoom.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
@@ -61,6 +63,7 @@ const customPuzzle = (text: string): Puzzle => ({
   rows: text.split('\n'),
 });
 const board = new BoardView($('board'));
+const zoom = new PinchZoom($('board'));
 /** Undefined until start() loads the first puzzle. */
 let session: Session | undefined;
 /** The session, for code that only runs once a puzzle is loaded: event
@@ -226,6 +229,37 @@ function solve() {
   void solver.solve(choice('engine', ENGINES), request);
 }
 
+/** A tap walks the robot to the tapped cell through a walk path, replayed as a
+ * playback a new input replaces. A second quick touch resets the zoom instead,
+ * and a touch while zoomed waits out that window first, so a double tap never
+ * walks; a mouse click, which cannot zoom, always walks at once. The last tap
+ * starts unset, not at zero: performance.now() also starts near zero, and a
+ * first tap early in the page's life would otherwise read as a double. */
+const DOUBLE_TAP_MS = 300;
+let lastTap: number | undefined;
+let pendingWalk: number | undefined;
+function tap(x: number, y: number, touch: boolean) {
+  clearTimeout(pendingWalk);
+  const now = performance.now();
+  if (touch && lastTap !== undefined && now - lastTap < DOUBLE_TAP_MS) {
+    lastTap = undefined;
+    zoom.reset();
+    return;
+  }
+  if (touch) lastTap = now;
+  const walk = () => {
+    pendingWalk = undefined;
+    const current = session;
+    const cell = current === undefined ? undefined : board.cellAt(x, y);
+    if (current === undefined || cell === undefined) return;
+    if (solver.busy || solver.route !== undefined || playback.active) invalidate();
+    const route = walkRoute(current.game.width(), current.tiles, current.state.boxes, current.state.player, cell);
+    if (route !== undefined) animate(route);
+  };
+  if (touch && zoom.zoomed) pendingWalk = setTimeout(walk, DOUBLE_TAP_MS);
+  else walk();
+}
+
 /** Loads the play route's puzzle: a shared log replays as given, and without one the
  * saved session continues when it was saved for this puzzle. A route that names no
  * catalog puzzle, or a log that does not replay, goes home. */
@@ -384,7 +418,8 @@ async function start() {
     move,
     // A click does nothing while the Undo button is disabled.
     undo: () => button('undo').click(),
-    swipeable: () => board.fits,
+    swipeable: () => board.fits && !zoom.zoomed,
+    tap,
   });
   button('solve').onclick = solve;
   button('cancel').onclick = () => {

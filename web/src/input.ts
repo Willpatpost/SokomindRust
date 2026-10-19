@@ -3,8 +3,11 @@ export interface InputHandlers {
   move(direction: number): void;
   /** The Z key. */
   undo(): void;
-  /** Whether the whole board fits unscrolled, so a swipe on it may move the robot. */
+  /** Whether the whole board fits unscrolled and unzoomed, so a swipe on it may move the robot. */
   swipeable(): boolean;
+  /** A still touch or click on the board, at client coordinates and whether it
+   * came from touch: the robot walks toward it. */
+  tap(x: number, y: number, touch: boolean): void;
 }
 /** How far a swipe must travel along its main axis, in CSS pixels. */
 const SWIPE_MIN_PX = 24;
@@ -41,13 +44,13 @@ export function ignoresKey({ ctrlKey, metaKey, altKey }: { ctrlKey: boolean; met
 }
 /** Binds the on-screen direction buttons, swipes on the board and the keyboard
  * (arrow keys, WASD, Z) to the handlers. */
-export function bindInput(target: HTMLElement, { move, undo, swipeable }: InputHandlers) {
+export function bindInput(target: HTMLElement, { move, undo, swipeable, tap }: InputHandlers) {
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]'))
     control.onclick = () => move(Number(control.dataset.direction));
-  // Swipe on the board moves the robot; taps stay with the on-screen buttons.
-  // Only a clean one-finger swipe counts: a second finger (pinch), a cancelled
-  // touch, or any scroll during the gesture discards it, and an oversized
-  // board that must pan takes no swipes at all.
+  // Swipe on the board moves the robot; taps walk it. Only a clean one-finger
+  // gesture counts: a second finger (pinch), a cancelled touch, or any scroll
+  // during the gesture discards it, and a swipe needs a board that fits and is
+  // not zoomed — while either holds, a drag pans or scrolls instead.
   const scrollOffsets = () => `${scrollX},${scrollY},${target.parentElement!.scrollLeft},${target.parentElement!.scrollTop}`;
   let swipe: { id: number; x: number; y: number; scroll: string } | undefined;
   target.addEventListener(
@@ -55,9 +58,7 @@ export function bindInput(target: HTMLElement, { move, undo, swipeable }: InputH
     event => {
       const touch = event.changedTouches[0];
       swipe =
-        event.touches.length === 1 && swipeable()
-          ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, scroll: scrollOffsets() }
-          : undefined;
+        event.touches.length === 1 ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, scroll: scrollOffsets() } : undefined;
     },
     { passive: true },
   );
@@ -76,6 +77,11 @@ export function bindInput(target: HTMLElement, { move, undo, swipeable }: InputH
     },
     { passive: true },
   );
+  // A touch that ends acts; the click the browser synthesizes after it must not
+  // act twice. The last touch starts unset, not at zero: performance.now() also
+  // starts near zero, and an early page's first click would otherwise be taken
+  // for a synthesized one.
+  let lastTouch: number | undefined;
   target.addEventListener(
     'touchend',
     event => {
@@ -83,11 +89,20 @@ export function bindInput(target: HTMLElement, { move, undo, swipeable }: InputH
       swipe = undefined;
       const touch = event.changedTouches[0];
       if (!gesture || event.touches.length !== 0 || touch.identifier !== gesture.id || scrollOffsets() !== gesture.scroll) return;
-      const direction = swipeDirection(touch.clientX - gesture.x, touch.clientY - gesture.y);
-      if (direction !== undefined) move(direction);
+      lastTouch = performance.now();
+      const dx = touch.clientX - gesture.x;
+      const dy = touch.clientY - gesture.y;
+      const direction = swipeDirection(dx, dy);
+      if (direction !== undefined && swipeable()) move(direction);
+      // A still touch is a tap; an ambiguous diagonal is neither a swipe nor one.
+      else if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_MIN_PX) tap(touch.clientX, touch.clientY, true);
     },
     { passive: true },
   );
+  target.addEventListener('click', event => {
+    if (lastTouch !== undefined && performance.now() - lastTouch < 500) return;
+    tap(event.clientX, event.clientY, false);
+  });
   document.addEventListener('keydown', event => {
     if (ignoresKey(event, event.target instanceof Element && event.target.matches('input,textarea,select'))) return;
     const action = keyAction(event.key);

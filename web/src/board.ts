@@ -1,11 +1,10 @@
 import './styles/board.css';
-import type { Snapshot } from './protocol.ts';
+import { WALL, type Snapshot } from './protocol.ts';
 
 // Tile encoding, as WasmGame.tiles returns it: one byte per cell in row-major
 // order, 0 for floor, WALL for a wall or row padding, and otherwise the ASCII
 // code of a goal's label (PLAIN for an S goal). Boxes and the robot come from
-// the snapshot instead.
-const WALL = 255; // sokomind_core::WALL
+// the snapshot instead. WALL lives in protocol.ts, the contracts module.
 const PLAIN = 88; // 'X': the label of unlettered boxes and their goals
 /** The largest tile, in CSS pixels: a small board is drawn at this size. */
 const MAX_TILE_PX = 44;
@@ -57,6 +56,9 @@ export class BoardView {
   private wrap: HTMLElement;
   /** Live computed style of the board's container. */
   private wrapStyle: CSSStyleDeclaration;
+  /** The puzzle's grid shape, kept for cellAt's point mapping. */
+  private columns = 0;
+  private rows = 0;
   /** The whole board fits at MIN_TILE_PX tiles or larger, so it never scrolls and swipes can move the robot. */
   fits = true;
   /** The puzzle the elements were built for, identified by its tiles and labels,
@@ -132,6 +134,16 @@ export class BoardView {
   /** Shakes the robot against the direction it could not move. */
   blocked(direction: number) {
     restart(this.robot, ['blocked-up', 'blocked-down', 'blocked-left', 'blocked-right'][direction]!);
+  }
+
+  /** The cell a client point lands on, correct under the zoom transform: the
+   * browser maps the element's rect through it. */
+  cellAt(x: number, y: number): number | undefined {
+    const rect = this.element.getBoundingClientRect();
+    const column = Math.floor(((x - rect.left) / rect.width) * this.columns);
+    const row = Math.floor(((y - rect.top) / rect.height) * this.rows);
+    if (column < 0 || row < 0 || column >= this.columns || row >= this.rows) return undefined;
+    return row * this.columns + column;
   }
 
   /** Seats a piece at `cell`, sliding it from `from` when the two differ: the
@@ -214,6 +226,8 @@ export class BoardView {
     const tile = Math.max(MIN_TILE_PX, fit);
     this.fits = fit >= MIN_TILE_PX;
     this.wrap.classList.toggle('pan', !this.fits);
+    this.columns = width;
+    this.rows = height;
     const style = this.element.style;
     style.setProperty('--columns', String(width));
     style.setProperty('--rows', String(height));
