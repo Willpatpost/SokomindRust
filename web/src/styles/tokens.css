@@ -1,0 +1,563 @@
+/*
+ * The design system's token sheet: every color, radius, shadow and surface the
+ * app's components share, as CSS custom properties on <html>. Component CSS
+ * (style.css and later component sheets) consumes these variables and owns
+ * layout; nothing here positions anything.
+ *
+ * Three theme families (cozy-study, the default; midnight-neon; minimal-ink)
+ * each define a light palette on :root and a dark one under
+ * html[data-theme="dark"]; family selectors override the defaults, so a family
+ * block and the dark block compose. The --game-* tokens describe the board's
+ * pieces (floor, walls, goals, crates, robot); the board component supplies
+ * each typed label's hue and combines it with these tone channels. Earned
+ * board frames (achievements) override only the board's outer treatment.
+ *
+ * The values are the SokomindSolver app's design, ported 2026-10-19 for the
+ * UI/UX port program so both apps share one visual language. The boot script
+ * in web/index.html and web/src/theme.ts set the data-theme attributes; a
+ * mirrors test keeps the three in step.
+ */
+
+:root {
+  --ink-950: #171916;
+  --ink-900: #20231f;
+  --ink-800: #2c302b;
+  --ink-700: #42483f;
+  --ink-muted: #5f655b;
+  --ink-subtle: #596057;
+  --paper-50: #fbfaf5;
+  --paper-100: #f3f0e7;
+  --paper-200: #e6e0d2;
+  --paper-300: #d4ccba;
+  --sage-400: #8aa08c;
+  --sage-500: #708872;
+  --sage-600: #566e59;
+  --sage-700: #3f5744;
+  --amber-300: #f0c060;
+  --amber-400: #e5a64b;
+  --amber-500: #cb8230;
+  --amber-600: #a86820;
+  --coral-400: #d4806a;
+  --coral-500: #c8664d;
+  --blue-500: #4a7f96;
+  --shadow-soft: 0 24px 70px rgb(23 25 22 / 0.12);
+  --shadow-card: 0 10px 30px rgb(23 25 22 / 0.08);
+  --shadow-floating: 0 24px 70px rgb(23 25 22 / 0.22);
+  --card-dark-bg: #20231f;
+  --card-dark-text: #f3f0e7;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --surface-glass: rgb(251 250 245 / 0.78);
+  --surface-dialog: rgb(251 250 245 / 0.98);
+  --surface-raised: var(--paper-50);
+  --surface-subtle: var(--paper-100);
+  --border-soft: rgb(23 25 22 / 0.1);
+  --border-medium: rgb(23 25 22 / 0.16);
+  --focus-ring: rgb(74 127 150 / 0.72);
+  --modal-backdrop: rgb(23 25 22 / 0.62);
+  --app-background:
+    radial-gradient(circle at 12% 8%, rgb(255 255 255 / 0.95), transparent 28rem), linear-gradient(145deg, #f7f4eb 0%, #eee8da 100%);
+
+  /* Shared game-piece tokens. Layout remains the board component's. */
+  --game-board-border: rgb(23 25 22 / 0.16);
+  --game-board-bg: var(--ink-950);
+  --game-board-shadow: 0 18px 45px rgb(23 25 22 / 0.18), inset 0 0 0 1px rgb(255 255 255 / 0.05);
+  --game-board-solved-shadow: 0 22px 60px rgb(86 110 89 / 0.32), 0 0 0 4px rgb(112 136 114 / 0.2);
+  --game-goal-ripple: rgb(111 148 87 / 0.78);
+  --game-floor-highlight: rgb(255 255 255 / 0.35);
+  --game-floor-grain: rgb(84 72 50 / 0.035);
+  --game-floor-base: #e8e0cf;
+  --game-floor-inset: inset 0 0 0 1px rgb(23 25 22 / 0.04);
+  --game-wall-highlight: rgb(255 255 255 / 0.065);
+  --game-wall-shadow: rgb(0 0 0 / 0.1);
+  --game-wall-base: #343832;
+  --game-wall-border: rgb(255 255 255 / 0.045);
+  --game-wall-ledge: rgb(0 0 0 / 0.13);
+  /* Color channels stay tokenized while the board component supplies each label's hue. */
+  --game-goal-border-tone: 32% 40%;
+  --game-goal-ring-tone: 34% 66% / 0.42;
+  --game-goal-fill-tone: 30% 82% / 0.5;
+  --game-goal-color-tone: 38% 29%;
+  --game-crate-gradient-angle: 145deg;
+  --game-crate-start-tone: 68% 69%;
+  --game-crate-end-tone: 59% 48%;
+  --game-crate-border-tone: 48% 27%;
+  --game-crate-cross-tone: 48% 29% / 0.32;
+  --game-crate-face-border-tone: 46% 22% / 0.4;
+  --game-crate-face-bg-tone: 50% 72% / 0.55;
+  --game-crate-color-tone: 38% 18%;
+  --game-crate-home-shadow: 0 0 14px rgb(112 136 114 / 0.48);
+  --game-crate-dead-bg: linear-gradient(145deg, #dc9f64, #b7662d);
+  --game-crate-dead-border: hsl(12 65% 45%);
+  --game-crate-dead-shadow: 0 0 10px rgb(200 102 77 / 0.35), inset 0 0 0 clamp(1px, 0.18vw, 2px) rgb(200 102 77 / 0.25);
+  --game-robot-border: #294d5d;
+  --game-robot-antenna: #294d5d;
+  --game-robot-bg: linear-gradient(150deg, #75aec5, #376c83);
+  --game-robot-face:
+    radial-gradient(circle at 32% 38%, var(--paper-50) 0 7%, transparent 8%),
+    radial-gradient(circle at 68% 38%, var(--paper-50) 0 7%, transparent 8%),
+    linear-gradient(rgb(23 25 22 / 0.42), rgb(23 25 22 / 0.42)) 50% 73% / 34% 8% no-repeat, rgb(29 65 79 / 0.32);
+  --game-robot-shadow: inset 0 0 0 clamp(1px, 0.2vw, 2px) rgb(255 255 255 / 0.28), 0 2px 6px rgb(23 25 22 / 0.3);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  color-scheme: light;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  overflow-x: hidden;
+  color: var(--ink-950);
+  background: var(--app-background);
+  font-family:
+    'Avenir Next',
+    Avenir,
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  color: var(--paper-50);
+  background: var(--sage-700);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.skip-to-content {
+  position: fixed;
+  z-index: 200;
+  top: 10px;
+  left: 10px;
+  padding: 11px 15px;
+  border-radius: var(--radius-sm);
+  color: var(--paper-50);
+  background: var(--ink-950);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform 120ms ease;
+}
+
+.skip-to-content:focus {
+  transform: translateY(0);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --ink-950: #e8e6e1;
+  --ink-900: #d8d5cd;
+  --ink-800: #c4c0b6;
+  --ink-700: #a8a49a;
+  --ink-muted: #9a968c;
+  --ink-subtle: #969288;
+  --paper-50: #1a1c19;
+  --paper-100: #222420;
+  --paper-200: #2e312c;
+  --paper-300: #3e413a;
+  --sage-400: #6b8e6e;
+  --sage-500: #5a7a5d;
+  --sage-600: #4a6a4d;
+  --sage-700: #6a9a6d;
+  --amber-300: #e0b050;
+  --amber-400: #d4963c;
+  --amber-500: #ba7828;
+  --amber-600: #9a6020;
+  --coral-400: #e08a72;
+  --coral-500: #d87a62;
+  --blue-500: #5a9ab0;
+  --shadow-soft: 0 24px 70px rgb(0 0 0 / 0.4);
+  --shadow-card: 0 10px 30px rgb(0 0 0 / 0.3);
+  --shadow-floating: 0 24px 70px rgb(0 0 0 / 0.5);
+  --surface-glass: rgb(34 36 32 / 0.78);
+  --surface-dialog: rgb(34 36 32 / 0.98);
+  --surface-raised: var(--paper-50);
+  --surface-subtle: var(--paper-100);
+  --border-soft: rgb(255 255 255 / 0.08);
+  --border-medium: rgb(255 255 255 / 0.12);
+  --focus-ring: rgb(90 154 176 / 0.78);
+  --modal-backdrop: rgb(0 0 0 / 0.7);
+  --app-background:
+    radial-gradient(circle at 12% 8%, rgb(30 30 28 / 0.95), transparent 28rem), linear-gradient(145deg, #1a1c19 0%, #222420 100%);
+
+  --game-board-border: rgb(255 255 255 / 0.1);
+  --game-board-bg: #1a1c18;
+  --game-board-shadow: 0 18px 45px rgb(0 0 0 / 0.4), inset 0 0 0 1px rgb(255 255 255 / 0.05);
+  --game-board-solved-shadow: 0 22px 60px rgb(90 122 93 / 0.35), 0 0 0 4px rgb(90 122 93 / 0.25);
+  --game-goal-ripple: rgb(139 204 130 / 0.86);
+  --game-floor-highlight: rgb(255 255 255 / 0.06);
+  --game-floor-grain: rgb(200 180 140 / 0.04);
+  --game-floor-base: #3a3830;
+  --game-floor-inset: inset 0 0 0 1px rgb(255 255 255 / 0.03);
+  --game-wall-highlight: rgb(255 255 255 / 0.06);
+  --game-wall-shadow: rgb(0 0 0 / 0.15);
+  --game-wall-base: #4a4e48;
+  --game-wall-border: rgb(255 255 255 / 0.06);
+  --game-wall-ledge: rgb(0 0 0 / 0.18);
+  --game-goal-border-tone: 0% 100% / 0.35;
+  --game-goal-ring-tone: 0% 100% / 0.12;
+  --game-goal-fill-tone: 0% 100% / 0.08;
+  --game-goal-color-tone: 55% 76%;
+  --game-crate-gradient-angle: 135deg;
+  --game-crate-start-tone: 64% 31%;
+  --game-crate-end-tone: 60% 38%;
+  --game-crate-border-tone: 52% 58%;
+  --game-crate-cross-tone: 0% 100% / 0.15;
+  --game-crate-face-border-tone: 0% 100% / 0.2;
+  --game-crate-face-bg-tone: 0% 100% / 0.06;
+  --game-crate-color-tone: 48% 88%;
+  --game-crate-home-shadow: 0 0 8px 2px rgb(100 255 100 / 0.3);
+  --game-crate-dead-bg: linear-gradient(135deg, #b83030 0%, #cc4040 50%, #b83030 100%);
+  --game-crate-dead-border: #ff7a72;
+  --game-crate-dead-shadow: 0 0 10px rgb(200 102 77 / 0.35), inset 0 0 0 clamp(1px, 0.18vw, 2px) rgb(200 102 77 / 0.25);
+  --game-robot-border: #4a9aba;
+  --game-robot-antenna: #7ab8d4;
+  --game-robot-bg: linear-gradient(150deg, #75aec5, #376c83);
+  --game-robot-face: rgb(255 255 255 / 0.12);
+  --game-robot-shadow: inset 0 0 0 clamp(1px, 0.2vw, 2px) rgb(255 255 255 / 0.22), 0 2px 6px rgb(0 0 0 / 0.45);
+}
+
+html[data-theme-family='midnight-neon'] {
+  --ink-950: #10162b;
+  --ink-900: #18213d;
+  --ink-800: #273252;
+  --ink-700: #3f4c70;
+  --ink-muted: #586585;
+  --ink-subtle: #52607f;
+  --paper-50: #fafbff;
+  --paper-100: #eef2ff;
+  --paper-200: #dce3f5;
+  --paper-300: #c5cee8;
+  --sage-400: #4cc1d2;
+  --sage-500: #168fa8;
+  --sage-600: #08748f;
+  --sage-700: #075d78;
+  --amber-300: #ffd36a;
+  --amber-400: #f0b84e;
+  --amber-500: #d99024;
+  --amber-600: #ad6811;
+  --coral-400: #ef78a3;
+  --coral-500: #d94f85;
+  --blue-500: #5266d4;
+  --card-dark-bg: #10162b;
+  --card-dark-text: #f4f7ff;
+  --surface-glass: rgb(250 251 255 / 0.8);
+  --surface-dialog: rgb(250 251 255 / 0.98);
+  --border-soft: rgb(16 22 43 / 0.11);
+  --border-medium: rgb(16 22 43 / 0.18);
+  --focus-ring: rgb(82 102 212 / 0.78);
+  --modal-backdrop: rgb(16 22 43 / 0.64);
+  --app-background:
+    radial-gradient(circle at 82% 10%, rgb(83 220 235 / 0.16), transparent 27rem),
+    radial-gradient(circle at 9% 20%, rgb(116 104 224 / 0.12), transparent 24rem), linear-gradient(145deg, #f8faff 0%, #e9edfb 100%);
+  --game-board-border: rgb(16 22 43 / 0.22);
+  --game-board-bg: #11182e;
+  --game-board-shadow: 0 18px 45px rgb(22 40 88 / 0.2), inset 0 0 0 1px rgb(116 224 238 / 0.12);
+  --game-board-solved-shadow: 0 22px 60px rgb(22 143 168 / 0.28), 0 0 0 4px rgb(80 215 234 / 0.22);
+  --game-goal-ripple: rgb(23 165 187 / 0.82);
+  --game-floor-highlight: rgb(255 255 255 / 0.5);
+  --game-floor-grain: rgb(42 59 104 / 0.05);
+  --game-floor-base: #e0e6f6;
+  --game-floor-inset: inset 0 0 0 1px rgb(16 22 43 / 0.06);
+  --game-wall-base: #2b3558;
+  --game-wall-highlight: rgb(124 222 235 / 0.12);
+  --game-wall-shadow: rgb(3 7 20 / 0.25);
+  --game-robot-border: #075d78;
+  --game-robot-antenna: #075d78;
+  --game-robot-bg: linear-gradient(150deg, #68e0eb, #5266d4);
+}
+
+html[data-theme-family='midnight-neon'][data-theme='dark'] {
+  --ink-950: #f0f6ff;
+  --ink-900: #dce8fa;
+  --ink-800: #c9d6ec;
+  --ink-700: #b1c0dc;
+  --ink-muted: #9baac7;
+  --ink-subtle: #a5b3cd;
+  --paper-50: #080b18;
+  --paper-100: #10152a;
+  --paper-200: #18213b;
+  --paper-300: #293555;
+  --sage-400: #2b8397;
+  --sage-500: #259eb7;
+  --sage-600: #31bdd4;
+  --sage-700: #50d7ea;
+  --amber-300: #ffe08a;
+  --amber-400: #f7c95b;
+  --amber-500: #dfa22f;
+  --amber-600: #b97a18;
+  --coral-400: #ff82ad;
+  --coral-500: #f06498;
+  --blue-500: #8b91ff;
+  --card-dark-bg: #080b18;
+  --card-dark-text: #f0f6ff;
+  --surface-glass: rgb(16 21 42 / 0.8);
+  --surface-dialog: rgb(16 21 42 / 0.98);
+  --border-soft: rgb(110 222 238 / 0.1);
+  --border-medium: rgb(110 222 238 / 0.18);
+  --focus-ring: rgb(80 215 234 / 0.86);
+  --modal-backdrop: rgb(2 4 12 / 0.78);
+  --app-background:
+    radial-gradient(circle at 80% 8%, rgb(80 215 234 / 0.1), transparent 26rem),
+    radial-gradient(circle at 8% 18%, rgb(240 100 152 / 0.08), transparent 24rem), linear-gradient(145deg, #080b18 0%, #10152a 100%);
+  --game-board-bg: #050713;
+  --game-board-border: rgb(80 215 234 / 0.2);
+  --game-board-shadow: 0 18px 48px rgb(0 0 0 / 0.58), inset 0 0 0 1px rgb(80 215 234 / 0.12);
+  --game-board-solved-shadow: 0 22px 64px rgb(80 215 234 / 0.24), 0 0 0 4px rgb(80 215 234 / 0.2);
+  --game-goal-ripple: rgb(80 215 234 / 0.9);
+  --game-floor-base: #17203a;
+  --game-floor-highlight: rgb(139 145 255 / 0.08);
+  --game-floor-grain: rgb(80 215 234 / 0.035);
+  --game-wall-base: #293457;
+  --game-wall-highlight: rgb(80 215 234 / 0.1);
+  --game-wall-border: rgb(139 145 255 / 0.12);
+  --game-goal-border-tone: 72% 70%;
+  --game-goal-ring-tone: 70% 58% / 0.24;
+  --game-goal-fill-tone: 70% 48% / 0.14;
+  --game-goal-color-tone: 82% 75%;
+  --game-crate-start-tone: 72% 46%;
+  --game-crate-end-tone: 78% 29%;
+  --game-crate-border-tone: 85% 67%;
+  --game-crate-color-tone: 70% 91%;
+  --game-crate-home-shadow: 0 0 12px 2px rgb(80 215 234 / 0.38);
+  --game-robot-border: #50d7ea;
+  --game-robot-antenna: #f06498;
+  --game-robot-bg: linear-gradient(150deg, #50d7ea, #6a65df);
+}
+
+html[data-theme-family='minimal-ink'] {
+  --ink-950: #151616;
+  --ink-900: #222323;
+  --ink-800: #333535;
+  --ink-700: #494c4b;
+  --ink-muted: #626665;
+  --ink-subtle: #5b605e;
+  --paper-50: #ffffff;
+  --paper-100: #f6f6f3;
+  --paper-200: #e3e4df;
+  --paper-300: #c9cbc5;
+  --sage-400: #89918e;
+  --sage-500: #65706c;
+  --sage-600: #414a47;
+  --sage-700: #242b29;
+  --amber-300: #efc47a;
+  --amber-400: #dca449;
+  --amber-500: #b97927;
+  --amber-600: #8d5519;
+  --coral-400: #dd7465;
+  --coral-500: #c84d3c;
+  --blue-500: #476f74;
+  --card-dark-bg: #202222;
+  --card-dark-text: #f6f6f3;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 13px;
+  --radius-xl: 18px;
+  --surface-glass: rgb(255 255 255 / 0.86);
+  --surface-dialog: rgb(255 255 255 / 0.99);
+  --border-soft: rgb(21 22 22 / 0.14);
+  --border-medium: rgb(21 22 22 / 0.24);
+  --focus-ring: rgb(200 77 60 / 0.76);
+  --modal-backdrop: rgb(21 22 22 / 0.64);
+  --app-background:
+    linear-gradient(rgb(21 22 22 / 0.022) 1px, transparent 1px), linear-gradient(90deg, rgb(21 22 22 / 0.022) 1px, transparent 1px), #f6f6f3;
+  --game-board-bg: #222524;
+  --game-board-border: rgb(21 22 22 / 0.3);
+  --game-board-shadow: 0 12px 30px rgb(21 22 22 / 0.14);
+  --game-board-solved-shadow: 0 14px 36px rgb(65 74 71 / 0.18), 0 0 0 3px rgb(65 74 71 / 0.22);
+  --game-floor-base: #f0f0ec;
+  --game-floor-highlight: rgb(255 255 255 / 0.52);
+  --game-floor-grain: rgb(21 22 22 / 0.025);
+  --game-wall-base: #565b59;
+  --game-wall-highlight: rgb(255 255 255 / 0.08);
+  --game-goal-border-tone: 26% 34%;
+  --game-goal-ring-tone: 22% 46% / 0.28;
+  --game-goal-fill-tone: 20% 72% / 0.08;
+  --game-goal-color-tone: 28% 27%;
+  --game-crate-start-tone: 38% 70%;
+  --game-crate-end-tone: 38% 48%;
+  --game-crate-border-tone: 30% 24%;
+  --game-crate-color-tone: 26% 17%;
+  --game-crate-cross-tone: 25% 22% / 0.42;
+  --game-robot-border: #242b29;
+  --game-robot-antenna: #242b29;
+  --game-robot-bg: linear-gradient(150deg, #d9dfdc, #7b8a85);
+}
+
+html[data-theme-family='minimal-ink'][data-theme='dark'] {
+  --ink-950: #f3f4f1;
+  --ink-900: #e1e3de;
+  --ink-800: #cdd0ca;
+  --ink-700: #b3b7b1;
+  --ink-muted: #9da19b;
+  --ink-subtle: #a7aaa5;
+  --paper-50: #111212;
+  --paper-100: #191b1a;
+  --paper-200: #252826;
+  --paper-300: #383c39;
+  --sage-400: #737d79;
+  --sage-500: #8e9995;
+  --sage-600: #aeb8b3;
+  --sage-700: #d3dad6;
+  --amber-300: #f0ce8f;
+  --amber-400: #dcb269;
+  --amber-500: #bd8b43;
+  --amber-600: #966529;
+  --coral-400: #ee8b7d;
+  --coral-500: #df6655;
+  --blue-500: #83aeb4;
+  --card-dark-bg: #111212;
+  --card-dark-text: #f3f4f1;
+  --surface-glass: rgb(25 27 26 / 0.86);
+  --surface-dialog: rgb(25 27 26 / 0.99);
+  --border-soft: rgb(243 244 241 / 0.1);
+  --border-medium: rgb(243 244 241 / 0.18);
+  --focus-ring: rgb(238 139 125 / 0.82);
+  --modal-backdrop: rgb(0 0 0 / 0.78);
+  --app-background:
+    linear-gradient(rgb(243 244 241 / 0.018) 1px, transparent 1px), linear-gradient(90deg, rgb(243 244 241 / 0.018) 1px, transparent 1px),
+    #111212;
+  --game-board-bg: #080909;
+  --game-board-border: rgb(243 244 241 / 0.18);
+  --game-board-shadow: 0 16px 40px rgb(0 0 0 / 0.52);
+  --game-board-solved-shadow: 0 18px 48px rgb(211 218 214 / 0.16), 0 0 0 3px rgb(211 218 214 / 0.2);
+  --game-floor-base: #242725;
+  --game-floor-highlight: rgb(255 255 255 / 0.035);
+  --game-floor-grain: rgb(255 255 255 / 0.025);
+  --game-wall-base: #494e4b;
+  --game-goal-border-tone: 38% 68%;
+  --game-goal-ring-tone: 34% 62% / 0.24;
+  --game-goal-fill-tone: 30% 42% / 0.08;
+  --game-goal-color-tone: 44% 74%;
+  --game-crate-start-tone: 34% 42%;
+  --game-crate-end-tone: 36% 25%;
+  --game-crate-border-tone: 38% 65%;
+  --game-crate-color-tone: 38% 88%;
+  --game-crate-home-shadow: 0 0 0 2px rgb(211 218 214 / 0.64);
+  --game-robot-border: #d3dad6;
+  --game-robot-antenna: #df6655;
+  --game-robot-bg: linear-gradient(150deg, #b9c3be, #68736e);
+}
+
+/*
+ * Earned board frames (the achievements phase) change only the board's outer
+ * treatment. These overrides follow every theme variant, so compatible light
+ * and dark modes retain them.
+ */
+html[data-board-frame='sage-thread'] {
+  --game-board-border: rgb(112 136 114 / 0.78);
+  --game-board-shadow: 0 0 0 2px rgb(112 136 114 / 0.2), 0 18px 45px rgb(23 25 22 / 0.18), inset 0 0 0 1px rgb(255 255 255 / 0.05);
+}
+
+html[data-board-frame='brass-edge'] {
+  --game-board-border: rgb(203 130 48 / 0.84);
+  --game-board-shadow: 0 0 0 2px rgb(229 166 75 / 0.2), 0 18px 45px rgb(78 50 20 / 0.22), inset 0 0 0 1px rgb(255 239 198 / 0.08);
+}
+
+html[data-theme-family='midnight-neon'][data-board-frame='neon-orbit'] {
+  --game-board-border: rgb(103 221 237 / 0.88);
+  --game-board-shadow:
+    0 0 0 2px rgb(210 91 239 / 0.35), 0 0 24px rgb(73 183 220 / 0.22), 0 18px 45px rgb(3 5 15 / 0.42),
+    inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+html[data-motion='reduced'] {
+  scroll-behavior: auto !important;
+}
+
+/* A `system` motion preference defers to the OS; an explicit choice wins. */
+html[data-motion='reduced'] *,
+html[data-motion='reduced'] *::before,
+html[data-motion='reduced'] *::after {
+  scroll-behavior: auto !important;
+  animation-delay: 0ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-delay: 0ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion='full']) {
+    scroll-behavior: auto !important;
+  }
+
+  html:not([data-motion='full']) *,
+  html:not([data-motion='full']) *::before,
+  html:not([data-motion='full']) *::after {
+    scroll-behavior: auto !important;
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --shadow-card: 0 10px 30px rgb(23 25 22 / 0.16);
+  }
+
+  :focus-visible {
+    outline-width: 3px;
+  }
+
+  .skip-to-content {
+    font-size: 0.85rem;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+  }
+
+  ::selection {
+    color: HighlightText;
+    background: Highlight;
+  }
+}

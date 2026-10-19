@@ -1,3 +1,4 @@
+import './styles/tokens.css';
 import './style.css';
 import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
@@ -5,6 +6,7 @@ import catalog from '../../data/puzzles.json';
 import { BoardView } from './board.ts';
 import { bindInput } from './input.ts';
 import * as storage from './storage.ts';
+import * as theme from './theme.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
@@ -217,7 +219,44 @@ function solve() {
   void solver.solve(choice('engine', ENGINES), request);
 }
 
+/** The theme menu's labels; the values are theme.ts's lists. */
+const FAMILY_LABELS: Record<theme.ThemeFamily, string> = {
+  'cozy-study': 'Cozy study',
+  'midnight-neon': 'Midnight neon',
+  'minimal-ink': 'Minimal ink',
+};
+const APPEARANCE_LABELS: Record<theme.Appearance, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+const MOTION_LABELS: Record<theme.Motion, string> = { system: 'System', full: 'Full', reduced: 'Reduced' };
+
+/** Shows the stored preferences in the theme menu's selects. */
+function syncThemeMenu() {
+  const current = theme.preferences();
+  select('theme-family').value = current.themeFamily;
+  select('appearance').value = current.appearance;
+  select('motion').value = current.motion;
+}
+
+/** Populates the theme menu from theme.ts's lists and applies every change; a
+ * preference another tab stores arrives as a storage event, which re-syncs. */
+function bindThemeMenu() {
+  const family = select('theme-family');
+  for (const value of theme.THEME_FAMILIES) family.add(new Option(FAMILY_LABELS[value], value));
+  const appearance = select('appearance');
+  for (const value of theme.APPEARANCES) appearance.add(new Option(APPEARANCE_LABELS[value], value));
+  const motion = select('motion');
+  for (const value of theme.MOTIONS) motion.add(new Option(MOTION_LABELS[value], value));
+  syncThemeMenu();
+  family.onchange = () => theme.set({ themeFamily: choice('theme-family', theme.THEME_FAMILIES) });
+  appearance.onchange = () => theme.set({ appearance: choice('appearance', theme.APPEARANCES) });
+  motion.onchange = () => theme.set({ motion: choice('motion', theme.MOTIONS) });
+  addEventListener('storage', event => {
+    if (event.key === storage.key(theme.EXPERIENCE_KEY)) syncThemeMenu();
+  });
+}
+
 async function start() {
+  theme.start();
+  bindThemeMenu();
   const mode = select('mode');
   const syncModeHelp = () => setText('mode-help', mode.selectedOptions[0]?.dataset.help ?? '');
   mode.onchange = syncModeHelp;

@@ -12,9 +12,14 @@ export interface SavedSession {
   actions: string;
 }
 const prefix = 'sokomind-rust.v1.';
-function read(key: string): unknown {
+/** The full localStorage key `name` is stored under, as a storage event names it. */
+export function key(name: string): string {
+  return prefix + name;
+}
+/** The JSON value stored under `name`, or null when storage fails or holds no JSON. */
+export function read(name: string): unknown {
   try {
-    return JSON.parse(localStorage.getItem(prefix + key) || 'null');
+    return JSON.parse(localStorage.getItem(prefix + name) || 'null');
   } catch {
     return null;
   }

@@ -598,3 +598,39 @@ test("the README's fixture count is search.rs's fixtures", () => {
   const fixtures = items('crates/search/tests/search.rs', /fixtures! \{([\s\S]*?)\r?\n    \}/, /^ {8}(\w+): "/gm);
   assert.equal(read('README.md', /(\d+) boards whose independent/), fixtures.length);
 });
+
+test('the boot script reads the key theme.ts stores its preferences under', () => {
+  const prefix = text('web/src/storage.ts', /const prefix = '([^']+)';/);
+  const name = text('web/src/theme.ts', /export const EXPERIENCE_KEY = '([^']+)';/);
+  assert.equal(text('web/index.html', /localStorage\.getItem\('([^']+)'\)/), prefix + name);
+});
+
+test('the boot script offers the same options theme.ts exports', () => {
+  const pairs = [
+    [/export const THEME_FAMILIES = \[([\s\S]*?)\] as const;/, /pick\(\[([^\]]*)\], saved\?\.themeFamily/],
+    [/export const APPEARANCES = \[([\s\S]*?)\] as const;/, /pick\(\[([^\]]*)\], saved\?\.appearance/],
+    [/export const MOTIONS = \[([\s\S]*?)\] as const;/, /pick\(\[([^\]]*)\], saved\?\.motion/],
+  ];
+  for (const [declared, booted] of pairs)
+    assert.deepEqual(items('web/index.html', booted, /'([^']+)'/g), items('web/src/theme.ts', declared, /'([^']+)'/g));
+});
+
+test("the boot script applies the theme attributes theme.ts's apply writes", () => {
+  const applied = [
+    ...text('web/src/theme.ts', /export function apply\(prefs: Preferences, os: System\): void \{([\s\S]*?)\n\}/).matchAll(
+      /dataset\.(\w+) =/g,
+    ),
+  ].map(match => match[1]);
+  const booted = [...text('web/index.html', /<script>([\s\S]*?)<\/script>/).matchAll(/dataset\.(\w+) =/g)].map(match => match[1]);
+  assert.deepEqual(booted.toSorted(), applied.toSorted());
+});
+
+test("theme.ts's meta colors are tokens.css's app-background bases", () => {
+  const colors = [...source('web/src/theme.ts').matchAll(/light: '(#[0-9a-f]{6})', dark: '(#[0-9a-f]{6})'/g)];
+  assert.equal(colors.length, 3);
+  const sheet = source('web/src/styles/tokens.css');
+  for (const [, light, dark] of colors) {
+    assert.ok(sheet.includes(light), `${light} is not one of tokens.css's colors`);
+    assert.ok(sheet.includes(dark), `${dark} is not one of tokens.css's colors`);
+  }
+});

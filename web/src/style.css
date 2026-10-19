@@ -1,21 +1,8 @@
-:root {
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color: #dee8e9;
-  background: #111c22;
-  font-synthesis: none;
-  color-scheme: dark;
-  --muted: #99afb7;
-  --line: #30444e;
-  --accent: #91dfb6;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-}
+/*
+ * The page's layout and component styles. Every color, radius, shadow and
+ * surface comes from the token sheet in styles/tokens.css; this file owns
+ * placement only, so a theme change never touches it.
+ */
 
 header {
   max-width: 1240px;
@@ -24,7 +11,7 @@ header {
   display: flex;
   align-items: center;
   gap: 28px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .brand {
@@ -32,26 +19,67 @@ header {
   font-weight: 800;
   letter-spacing: 2px;
   text-decoration: none;
-  color: #edf6f2;
+  color: var(--ink-950);
 }
 
 .brand span {
   font-size: 11px;
-  color: var(--accent);
-  border: 1px solid #427560;
+  color: var(--sage-600);
+  border: 1px solid var(--sage-400);
   padding: 4px 6px;
   vertical-align: middle;
   letter-spacing: 1px;
 }
 
-.tagline,
-#connection {
+.tagline {
   font-size: 13px;
-  color: var(--muted);
+  color: var(--ink-muted);
+}
+
+.theme-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.theme-menu summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--paper-100);
+}
+
+.theme-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.theme-menu summary::after {
+  content: ' ▾';
+  color: var(--ink-muted);
+}
+
+.theme-fields {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 50;
+  min-width: 240px;
+  padding: 16px;
+  background: var(--surface-dialog);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-floating);
+}
+
+.theme-fields select {
+  margin-bottom: 12px;
 }
 
 #connection {
-  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-muted);
 }
 
 main {
@@ -64,9 +92,10 @@ main {
 }
 
 h1 {
+  font-family: Georgia, 'Times New Roman', Times, serif;
   font-size: 30px;
   margin: 3px 0 15px;
-  letter-spacing: -0.8px;
+  letter-spacing: -0.3px;
 }
 
 h2 {
@@ -76,9 +105,9 @@ h2 {
 
 .eyebrow {
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 750;
   letter-spacing: 1.7px;
-  color: var(--accent);
+  color: var(--sage-600);
   text-transform: uppercase;
   margin: 0 0 9px;
 }
@@ -109,22 +138,23 @@ h2 {
 .counters {
   display: flex;
   gap: 18px;
-  color: var(--muted);
+  color: var(--ink-muted);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .counters strong {
   display: block;
-  color: #eff7f5;
+  color: var(--ink-950);
   font-size: 24px;
   font-variant-numeric: tabular-nums;
 }
 
 .board-wrap {
-  background: #0c151a;
-  border: 1px solid #243943;
-  border-radius: 12px;
+  background: var(--game-board-bg);
+  border: 1px solid var(--game-board-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--game-board-shadow);
   padding: 18px;
   display: flex;
   min-height: 280px;
@@ -147,23 +177,24 @@ canvas.pan {
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--ink-muted);
   font-size: 13px;
   line-height: 1.6;
 }
 
 .fine {
-  color: var(--muted);
+  color: var(--ink-subtle);
   font-size: 11px;
   line-height: 1.6;
 }
 
 .card {
   padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
   margin-bottom: 20px;
-  background: #16252d;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .rules {
@@ -173,24 +204,24 @@ canvas.pan {
 .rules p {
   font-size: 13px;
   line-height: 1.7;
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
 label {
   display: block;
   font-size: 12px;
   font-weight: 600;
-  color: #bdd0d6;
+  color: var(--ink-800);
   margin-bottom: 8px;
 }
 
 select,
 textarea {
   width: 100%;
-  background: #101d24;
-  color: #e1edef;
-  border: 1px solid #3d535e;
-  border-radius: 5px;
+  background: var(--paper-50);
+  color: var(--ink-950);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
   padding: 10px;
   margin-bottom: 15px;
   font: inherit;
@@ -205,11 +236,11 @@ textarea {
 }
 
 button {
-  border: 1px solid #455c66;
-  background: #223640;
-  color: #dfedef;
+  border: 1px solid var(--border-medium);
+  background: var(--paper-100);
+  color: var(--ink-950);
   padding: 10px 14px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -217,8 +248,7 @@ button {
 }
 
 button:hover:enabled {
-  border-color: var(--accent);
-  color: #fff;
+  border-color: var(--sage-500);
 }
 
 button:disabled {
@@ -227,23 +257,15 @@ button:disabled {
 }
 
 button.primary {
-  background: var(--accent);
-  color: #102a20;
-  border-color: var(--accent);
+  background: var(--sage-600);
+  color: var(--paper-50);
+  border-color: var(--sage-600);
   font-weight: 700;
 }
 
 button.primary:hover:enabled {
-  color: #102a20;
-  background: #b0efcb;
-}
-
-button:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-canvas:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  background: var(--sage-500);
+  border-color: var(--sage-500);
 }
 
 .fields {
@@ -271,7 +293,7 @@ canvas:focus-visible {
 kbd {
   font: inherit;
   font-size: 10px;
-  color: var(--muted);
+  color: var(--ink-muted);
   margin-left: 6px;
 }
 
@@ -281,12 +303,12 @@ kbd {
   gap: 16px;
   font-size: 12px;
   padding: 18px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 dt {
-  color: var(--muted);
+  color: var(--ink-muted);
   margin-bottom: 5px;
 }
 
@@ -294,6 +316,7 @@ dd {
   margin: 0;
   font-family: ui-monospace, monospace;
   font-size: 15px;
+  color: var(--ink-950);
 }
 
 .direction-pad {
@@ -310,7 +333,7 @@ dd {
 
 #message {
   font-size: 14px;
-  color: var(--accent);
+  color: var(--sage-700);
   min-height: 22px;
 }
 
@@ -318,12 +341,14 @@ dd {
   font-size: 12px;
   line-height: 1.6;
   min-height: 38px;
+  color: var(--ink-muted);
 }
 
 summary {
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
+  color: var(--ink-950);
 }
 
 details[open] summary {
@@ -333,6 +358,7 @@ details[open] summary {
 @media (max-width: 850px) {
   header {
     padding: 20px;
+    gap: 14px;
   }
 
   .tagline {

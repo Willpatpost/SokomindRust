@@ -53,13 +53,20 @@ export class BoardView {
     this.canvas.style.height = `${height * tile}px`;
     const c = this.ctx;
     c.setTransform(ratio, 0, 0, ratio, 0, 0);
+    // The token sheet owns the board's palette, so the canvas follows the theme;
+    // the DOM board of the port's next increment replaces this renderer.
+    const tokens = getComputedStyle(document.documentElement);
+    const token = (name: string, fallback: string) => tokens.getPropertyValue(name).trim() || fallback;
+    const boardColor = token('--game-board-bg', '#101b21');
+    const wallColor = token('--game-wall-base', '#344c59');
+    const floorColor = token('--game-floor-base', '#1c2e37');
     // Cover the whole backing store: a kept one still holds the last frame.
-    c.fillStyle = '#101b21';
+    c.fillStyle = boardColor;
     c.fillRect(0, 0, pixelWidth / ratio, pixelHeight / ratio);
     const xy = (cell: number) => [(cell % width) * tile, Math.floor(cell / width) * tile];
     for (let cell = 0; cell < tiles.length; cell++) {
       const [x, y] = xy(cell);
-      c.fillStyle = tiles[cell] === WALL ? '#344c59' : '#1c2e37';
+      c.fillStyle = tiles[cell] === WALL ? wallColor : floorColor;
       c.fillRect(x + 1, y + 1, tile - 2, tile - 2);
       if (tiles[cell] !== 0 && tiles[cell] !== WALL) {
         c.strokeStyle = '#8dcdaa';

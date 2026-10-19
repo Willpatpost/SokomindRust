@@ -3,13 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#111c22" />
+    <!-- theme.ts owns this meta after load; this default matches tokens.css's no-script light theme. -->
+    <meta name="theme-color" content="#eee8da" />
     <title>Sokomind · Rust</title>
+    <!-- Applies the stored theme before first paint, so the page never flashes the
+         default: the same storage key and option lists theme.ts reads, and the same
+         html attributes its apply writes (checked by scripts/mirrors.test.mjs). It
+         runs before modules load, so it cannot import them and duplicates those few
+         strings; theme.ts also owns the theme-color meta once it has loaded. -->
+    <script>
+      (() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('sokomind-rust.v1.experience') || 'null');
+          const pick = (list, value, fallback) => (list.includes(value) ? value : fallback);
+          const family = pick(['cozy-study', 'midnight-neon', 'minimal-ink'], saved?.themeFamily, 'cozy-study');
+          const look = pick(['system', 'light', 'dark'], saved?.appearance, 'system');
+          const motion = pick(['system', 'full', 'reduced'], saved?.motion, 'system');
+          const root = document.documentElement;
+          root.dataset.themeFamily = family;
+          root.dataset.theme = look === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : look;
+          root.dataset.motion =
+            motion === 'system' ? (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'full') : motion;
+        } catch {
+          /* No readable theme; tokens.css's defaults apply. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <header>
       <a href="./" class="brand">SOKOMIND <span>RUST</span></a>
       <span class="tagline">Small moves. Deep puzzles.</span>
+      <details class="theme-menu">
+        <summary>Theme</summary>
+        <div class="theme-fields">
+          <label for="theme-family">Family</label>
+          <select id="theme-family"></select>
+          <label for="appearance">Appearance</label>
+          <select id="appearance"></select>
+          <label for="motion">Motion</label>
+          <select id="motion"></select>
+        </div>
+      </details>
       <span id="connection">Browser mode</span>
     </header>
     <main>
