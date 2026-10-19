@@ -39,18 +39,18 @@ export function keyAction(key: string): number | 'undo' | undefined {
 export function ignoresKey({ ctrlKey, metaKey, altKey }: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, editable: boolean) {
   return ctrlKey || metaKey || altKey || editable;
 }
-/** Binds the on-screen direction buttons, swipes on the board canvas and the
- * keyboard (arrow keys, WASD, Z) to the handlers. */
-export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: InputHandlers) {
+/** Binds the on-screen direction buttons, swipes on the board and the keyboard
+ * (arrow keys, WASD, Z) to the handlers. */
+export function bindInput(target: HTMLElement, { move, undo, swipeable }: InputHandlers) {
   for (const control of document.querySelectorAll<HTMLButtonElement>('[data-direction]'))
     control.onclick = () => move(Number(control.dataset.direction));
   // Swipe on the board moves the robot; taps stay with the on-screen buttons.
   // Only a clean one-finger swipe counts: a second finger (pinch), a cancelled
   // touch, or any scroll during the gesture discards it, and an oversized
   // board that must pan takes no swipes at all.
-  const scrollOffsets = () => `${scrollX},${scrollY},${canvas.parentElement!.scrollLeft},${canvas.parentElement!.scrollTop}`;
+  const scrollOffsets = () => `${scrollX},${scrollY},${target.parentElement!.scrollLeft},${target.parentElement!.scrollTop}`;
   let swipe: { id: number; x: number; y: number; scroll: string } | undefined;
-  canvas.addEventListener(
+  target.addEventListener(
     'touchstart',
     event => {
       const touch = event.changedTouches[0];
@@ -69,14 +69,14 @@ export function bindInput(canvas: HTMLCanvasElement, { move, undo, swipeable }: 
     },
     { passive: true },
   );
-  canvas.addEventListener(
+  target.addEventListener(
     'touchcancel',
     () => {
       swipe = undefined;
     },
     { passive: true },
   );
-  canvas.addEventListener(
+  target.addEventListener(
     'touchend',
     event => {
       const gesture = swipe;

@@ -1,0 +1,269 @@
+/*
+ * The board's own sheet: the piece visuals the token sheet's --game-* channels
+ * describe, and the move language board.ts drives — slides, the pushed crate's
+ * squash, the blocked robot's shake, the trail, the goal ripple and the solved
+ * glow. Layout comes from the grid areas board.ts assigns; every color comes
+ * from a token, so the board follows the theme.
+ */
+
+.board {
+  position: relative;
+  flex: none;
+  margin: auto;
+  border-radius: 4px;
+  background: var(--game-board-bg);
+  box-shadow: var(--game-board-shadow);
+  width: calc(var(--columns) * var(--tile));
+  height: calc(var(--rows) * var(--tile));
+  /* Swipes move the robot, so touch may only pinch-zoom. Browsers without the
+     pinch-zoom value drop that declaration and keep manipulation. */
+  touch-action: manipulation;
+  touch-action: pinch-zoom;
+}
+
+.board[data-solved] {
+  box-shadow: var(--game-board-solved-shadow);
+}
+
+.board .layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--columns), var(--tile));
+  grid-template-rows: repeat(var(--rows), var(--tile));
+}
+
+/* The fixed grid: floor, walls and each goal's circular marker. */
+.board .cell {
+  position: relative;
+}
+
+.board .floor {
+  background: repeating-linear-gradient(45deg, transparent 0 6px, var(--game-floor-grain) 6px 7px), var(--game-floor-base);
+  box-shadow: var(--game-floor-inset);
+}
+
+.board .wall {
+  background: linear-gradient(155deg, var(--game-wall-highlight), transparent 62%), var(--game-wall-base);
+  border: 1px solid var(--game-wall-border);
+  box-shadow: inset 0 -3px 0 var(--game-wall-ledge);
+}
+
+.board .goal {
+  position: absolute;
+  inset: 16%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid hsl(var(--piece-hue) var(--game-goal-border-tone));
+  background: hsl(var(--piece-hue) var(--game-goal-fill-tone));
+  box-shadow: inset 0 0 0 2px hsl(var(--piece-hue) var(--game-goal-ring-tone));
+  color: hsl(var(--piece-hue) var(--game-goal-color-tone));
+  font-size: calc(var(--tile) * 0.34);
+  font-weight: 650;
+}
+
+.board .goal::after {
+  content: '';
+  position: absolute;
+  inset: 14%;
+  border-radius: 50%;
+  border: 1px dashed hsl(var(--piece-hue) var(--game-goal-ring-tone));
+}
+
+/* The pieces: crates and the robot, seated by grid area and slid by transform. */
+.board .crate,
+.board .robot {
+  position: relative;
+  z-index: 2;
+}
+
+.board .settling {
+  transition: transform 200ms ease;
+}
+
+.board .crate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 4%;
+  width: 92%;
+  height: 92%;
+  border-radius: 14%;
+  border: 2px solid hsl(var(--piece-hue) var(--game-crate-border-tone));
+  background: linear-gradient(
+    var(--game-crate-gradient-angle),
+    hsl(var(--piece-hue) var(--game-crate-start-tone)),
+    hsl(var(--piece-hue) var(--game-crate-end-tone))
+  );
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.25);
+  color: hsl(var(--piece-hue) var(--game-crate-color-tone));
+  font-size: calc(var(--tile) * 0.38);
+  font-weight: 750;
+}
+
+/* The cross bracing, rotated as the ported design draws it. */
+.board .crate::before {
+  content: '';
+  position: absolute;
+  inset: 6%;
+  border-radius: 10%;
+  border: 2px solid hsl(var(--piece-hue) var(--game-crate-cross-tone));
+  transform: rotate(38deg);
+}
+
+/* The inner face plate the sigil sits on. */
+.board .crate::after {
+  content: '';
+  position: absolute;
+  inset: 24%;
+  border-radius: 8%;
+  border: 1px solid hsl(var(--piece-hue) var(--game-crate-face-border-tone));
+  background: hsl(var(--piece-hue) var(--game-crate-face-bg-tone));
+}
+
+.board .crate span {
+  position: relative;
+  z-index: 1;
+}
+
+.board .crate[data-home] {
+  box-shadow: var(--game-crate-home-shadow);
+}
+
+.board .robot {
+  z-index: 3;
+  margin: 12%;
+  width: 76%;
+  height: 76%;
+  border-radius: 50%;
+  border: 2px solid var(--game-robot-border);
+  background: var(--game-robot-bg);
+  box-shadow: var(--game-robot-shadow);
+  animation: keeper-breathe 3.4s ease-in-out infinite;
+}
+
+.board .robot::before {
+  content: '';
+  position: absolute;
+  top: -16%;
+  left: 50%;
+  width: 7%;
+  height: 22%;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: var(--game-robot-antenna);
+  box-shadow: 0 -5px 5px 1px var(--game-robot-antenna);
+}
+
+.board .robot::after {
+  content: '';
+  position: absolute;
+  inset: 24%;
+  border-radius: 50%;
+  background: var(--game-robot-face);
+}
+
+/* The trail behind the keeper, fading with age; reduced motion hides it. */
+.board .trail-dot {
+  position: relative;
+  margin: auto;
+  width: 22%;
+  height: 22%;
+  border-radius: 50%;
+  background: var(--blue-500);
+  opacity: 0.45;
+}
+
+.board .trail-dot:nth-child(n + 4) {
+  opacity: 0.24;
+}
+
+.board .trail-dot:nth-child(n + 6) {
+  opacity: 0.1;
+}
+
+html[data-motion='reduced'] .board .trail {
+  visibility: hidden;
+}
+
+/* A box landing on its goal rings it. */
+.board .ripple {
+  position: relative;
+  margin: auto;
+  width: 44%;
+  height: 44%;
+  border-radius: 50%;
+  border: 2px solid var(--game-goal-ripple);
+  animation: goal-ripple 600ms ease-out forwards;
+}
+
+@keyframes goal-ripple {
+  from {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+
+  to {
+    transform: scale(2.3);
+    opacity: 0;
+  }
+}
+
+/* A pushed crate lands with a squash; a blocked robot shakes against its
+   direction. The shake uses the translate property so it never fights the
+   slide's transform. */
+.board .crate.pushed {
+  animation: crate-arrive 220ms ease;
+}
+
+@keyframes crate-arrive {
+  45% {
+    scale: 1.12 0.92;
+  }
+}
+
+.board .robot.blocked-up,
+.board .robot.blocked-down {
+  animation: keeper-shake-y 180ms ease;
+}
+
+.board .robot.blocked-down {
+  animation-direction: reverse;
+}
+
+.board .robot.blocked-left,
+.board .robot.blocked-right {
+  animation: keeper-shake-x 180ms ease;
+}
+
+.board .robot.blocked-right {
+  animation-direction: reverse;
+}
+
+@keyframes keeper-shake-x {
+  35% {
+    translate: -12% 0;
+  }
+
+  70% {
+    translate: 8% 0;
+  }
+}
+
+@keyframes keeper-shake-y {
+  35% {
+    translate: 0 -12%;
+  }
+
+  70% {
+    translate: 0 8%;
+  }
+}
+
+@keyframes keeper-breathe {
+  50% {
+    scale: 1.04;
+  }
+}

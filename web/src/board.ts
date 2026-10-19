@@ -1,4 +1,6 @@
+import './styles/board.css';
 import type { Snapshot } from './protocol.ts';
+
 // Tile encoding, as WasmGame.tiles returns it: one byte per cell in row-major
 // order, 0 for floor, WALL for a wall or row padding, and otherwise the ASCII
 // code of a goal's label (PLAIN for an S goal). Boxes and the robot come from
@@ -6,106 +8,215 @@ import type { Snapshot } from './protocol.ts';
 const WALL = 255; // sokomind_core::WALL
 const PLAIN = 88; // 'X': the label of unlettered boxes and their goals
 /** The largest tile, in CSS pixels: a small board is drawn at this size. */
-const MAX_TILE_PX = 48;
+const MAX_TILE_PX = 44;
 /** The most height a board may take, in CSS pixels: a taller one gets smaller tiles, down to MIN_TILE_PX. */
 const MAX_BOARD_HEIGHT_PX = 540;
 /** The smallest tile, in CSS pixels. A board that would need smaller tiles to fit keeps this size
  * and scrolls instead. */
 const MIN_TILE_PX = 4;
-/** The longest side of the canvas backing store, in device pixels. It stays well under the
- * 32,767 px browser limit, so an oversized board renders at a lower pixel ratio, never blank. */
-const MAX_BACKING_PX = 14_000;
-/** The highest device-pixel ratio the board is drawn at. */
-const MAX_PIXEL_RATIO = 2;
-/** Draws the board on a canvas sized to its container, and keeps the canvas's aria-label current. */
+/** How many keeper positions the walking trail keeps behind the robot. */
+const TRAIL_LENGTH = 6;
+
+/** The hue a label paints its box and goal: unlettered pieces share the design's
+ * neutral crate hue, and every typed label gets its own deterministic hue, so a
+ * box and its matching goal always paint the same color. */
+function hue(label: number): number {
+  return label === PLAIN ? 32 : (label * 47) % 360;
+}
+
+/** The CSS grid area of a cell, as 'row / column', both 1-based. */
+function area(cell: number, width: number): string {
+  return `${Math.floor(cell / width) + 1} / ${(cell % width) + 1}`;
+}
+
+/** One overlaying grid layer, positioned by board.css. */
+function layer(name: string): HTMLElement {
+  const element = document.createElement('div');
+  element.className = `layer ${name}`;
+  return element;
+}
+
+/** Re-applies a piece's animation class, so a repeat event replays it. */
+function restart(piece: HTMLElement, name: string) {
+  piece.classList.remove(name);
+  // Read a layout property so the browser sees the classless state first.
+  void piece.offsetWidth;
+  piece.classList.add(name);
+  setTimeout(() => piece.classList.remove(name), 260);
+}
+
+/** Draws the board as DOM pieces over a fixed cell grid, in the ported design's
+ * move language: pieces slide between cells, a pushed crate squashes, a blocked
+ * robot shakes against its direction, the keeper leaves a fading trail, and a box
+ * landing on its goal ripples. The cell grid and the pieces are rebuilt only when
+ * a new puzzle's tiles arrive; every draw after that moves pieces, so undo and
+ * replay animate too. */
 export class BoardView {
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  /** Live computed style of the board container. */
-  private wrap: CSSStyleDeclaration;
+  /** The board element, inside its scrolling wrap. */
+  private element: HTMLElement;
+  private wrap: HTMLElement;
+  /** Live computed style of the board's container. */
+  private wrapStyle: CSSStyleDeclaration;
   /** The whole board fits at MIN_TILE_PX tiles or larger, so it never scrolls and swipes can move the robot. */
   fits = true;
-  constructor(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) throw new Error('Canvas is unavailable');
-    this.ctx = ctx;
-    this.wrap = getComputedStyle(canvas.parentElement!);
+  /** The puzzle the elements were built for, identified by its tiles and labels,
+   * which a session holds by reference. */
+  private tiles: Uint8Array | undefined;
+  private labels: Uint8Array | undefined;
+  /** The grid layers, in paint order: cells, trail, feedback, pieces. */
+  private cells: HTMLElement;
+  private trail: HTMLElement;
+  private feedback: HTMLElement;
+  private pieces: HTMLElement;
+  /** The moving pieces: one crate per label, in label order, and the robot. */
+  private crates: HTMLElement[] = [];
+  private robot: HTMLElement;
+  /** The last snapshot drawn, whose positions a change animates from. */
+  private previous: Snapshot | undefined;
+  private homes: boolean[] = [];
+  /** The keeper positions behind the robot, oldest first. */
+  private path: number[] = [];
+
+  constructor(element: HTMLElement) {
+    this.element = element;
+    this.wrap = element.parentElement!;
+    this.wrapStyle = getComputedStyle(this.wrap);
+    this.cells = document.createElement('div');
+    this.cells.className = 'layer cells';
+    this.trail = layer('trail');
+    this.feedback = layer('feedback');
+    this.pieces = layer('pieces');
+    this.robot = document.createElement('div');
+    this.robot.className = 'robot';
+    element.append(this.cells, this.trail, this.feedback, this.pieces);
   }
-  /** Paints a `width` by `height` board: `tiles` and each box's label in `labels` as WasmGame
-   * returns them, the boxes and robot from `state`, and `onGoal` per box in label order. */
+
+  /** Paints the board for a snapshot of it: the puzzle's fixed grid once, then
+   * the pieces, each animated from the last snapshot's position when it moved. */
   draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Snapshot, onGoal: boolean[]) {
-    // clientWidth includes the padding but not the border, and is rounded to
-    // whole pixels: one pixel of slack keeps a fitted board from overflowing.
-    const available = this.canvas.parentElement!.clientWidth - parseFloat(this.wrap.paddingLeft) - parseFloat(this.wrap.paddingRight) - 1;
-    const fit = Math.min(MAX_TILE_PX, available / width, MAX_BOARD_HEIGHT_PX / height);
-    const tile = Math.max(MIN_TILE_PX, fit);
-    this.fits = fit >= MIN_TILE_PX;
-    // An oversized board scrolls, so touch pans it instead of swiping.
-    this.canvas.classList.toggle('pan', !this.fits);
-    const ratio = Math.min(devicePixelRatio || 1, MAX_PIXEL_RATIO, MAX_BACKING_PX / (Math.max(width, height) * tile));
-    const pixelWidth = Math.round(width * tile * ratio);
-    const pixelHeight = Math.round(height * tile * ratio);
-    // Assigning a size reallocates and clears the backing store, even an unchanged one.
-    if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth;
-    if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight;
-    this.canvas.style.width = `${width * tile}px`;
-    this.canvas.style.height = `${height * tile}px`;
-    const c = this.ctx;
-    c.setTransform(ratio, 0, 0, ratio, 0, 0);
-    // The token sheet owns the board's palette, so the canvas follows the theme;
-    // the DOM board of the port's next increment replaces this renderer.
-    const tokens = getComputedStyle(document.documentElement);
-    const token = (name: string, fallback: string) => tokens.getPropertyValue(name).trim() || fallback;
-    const boardColor = token('--game-board-bg', '#101b21');
-    const wallColor = token('--game-wall-base', '#344c59');
-    const floorColor = token('--game-floor-base', '#1c2e37');
-    // Cover the whole backing store: a kept one still holds the last frame.
-    c.fillStyle = boardColor;
-    c.fillRect(0, 0, pixelWidth / ratio, pixelHeight / ratio);
-    const xy = (cell: number) => [(cell % width) * tile, Math.floor(cell / width) * tile];
-    for (let cell = 0; cell < tiles.length; cell++) {
-      const [x, y] = xy(cell);
-      c.fillStyle = tiles[cell] === WALL ? wallColor : floorColor;
-      c.fillRect(x + 1, y + 1, tile - 2, tile - 2);
-      if (tiles[cell] !== 0 && tiles[cell] !== WALL) {
-        c.strokeStyle = '#8dcdaa';
-        c.lineWidth = Math.max(1, tile / 25);
-        c.beginPath();
-        c.arc(x + tile / 2, y + tile / 2, tile * 0.27, 0, Math.PI * 2);
-        c.stroke();
-        c.fillStyle = '#a7dbbc';
-        c.textAlign = 'center';
-        c.textBaseline = 'middle';
-        c.font = `600 ${tile * 0.36}px system-ui`;
-        c.fillText(tiles[cell] === PLAIN ? '·' : String.fromCharCode(tiles[cell]).toLowerCase(), x + tile / 2, y + tile / 2);
-      }
+    if (tiles !== this.tiles || labels !== this.labels) this.rebuild(width, tiles, labels);
+    this.size(width, height);
+    const previous = this.previous;
+    const pushed = previous !== undefined && state.pushes > previous.pushes;
+    for (let i = 0; i < this.crates.length; i++) {
+      const crate = this.crates[i];
+      const moved = previous !== undefined && previous.boxes[i] !== state.boxes[i];
+      this.place(crate, state.boxes[i], width, moved ? previous!.boxes[i] : undefined);
+      crate.toggleAttribute('data-home', onGoal[i]);
+      if (pushed && moved) restart(crate, 'pushed');
+      if (onGoal[i] && !this.homes[i]) this.ripple(state.boxes[i], width);
     }
-    for (let i = 0; i < labels.length; i++) {
-      const [x, y] = xy(state.boxes[i]);
-      c.fillStyle = onGoal[i] ? '#86cfa4' : '#ddb87c';
-      c.fillRect(x + tile * 0.13, y + tile * 0.13, tile * 0.74, tile * 0.74);
-      c.strokeStyle = '#15282b';
-      c.lineWidth = 1;
-      c.strokeRect(x + tile * 0.21, y + tile * 0.21, tile * 0.58, tile * 0.58);
-      c.fillStyle = '#273335';
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      c.font = `750 ${tile * 0.39}px system-ui`;
-      c.fillText(labels[i] === PLAIN ? '•' : String.fromCharCode(labels[i]), x + tile / 2, y + tile / 2);
+    if (previous !== undefined && previous.player !== state.player) {
+      if (this.path[this.path.length - 1] !== previous.player) this.path.push(previous.player);
+      while (this.path.length > TRAIL_LENGTH) this.path.shift();
+      this.trail.replaceChildren(
+        ...this.path.map(cell => {
+          const dot = document.createElement('div');
+          dot.className = 'trail-dot';
+          dot.style.gridArea = area(cell, width);
+          return dot;
+        }),
+      );
     }
-    const [x, y] = xy(state.player);
-    c.fillStyle = '#b9daf2';
-    c.beginPath();
-    c.arc(x + tile / 2, y + tile / 2, tile * 0.29, 0, Math.PI * 2);
-    c.fill();
-    c.fillStyle = '#274252';
-    c.beginPath();
-    c.arc(x + tile * 0.6, y + tile * 0.44, tile * 0.06, 0, Math.PI * 2);
-    c.fill();
+    const walked = previous !== undefined && previous.player !== state.player;
+    this.place(this.robot, state.player, width, walked ? previous!.player : undefined);
+    this.element.toggleAttribute('data-solved', state.solved);
     const label =
       `${width} by ${height} puzzle, ${labels.length} boxes. `
       + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD to move, Z to undo.`;
-    if (this.canvas.getAttribute('aria-label') !== label) this.canvas.setAttribute('aria-label', label);
+    if (this.element.getAttribute('aria-label') !== label) this.element.setAttribute('aria-label', label);
+    this.previous = state;
+    this.homes = onGoal;
+  }
+
+  /** Shakes the robot against the direction it could not move. */
+  blocked(direction: number) {
+    restart(this.robot, ['blocked-up', 'blocked-down', 'blocked-left', 'blocked-right'][direction]!);
+  }
+
+  /** Seats a piece at `cell`, sliding it from `from` when the two differ: the
+   * piece starts offset by the cells it traveled and transitions home, which also
+   * animates undo and replay, the travels those retrace. */
+  private place(piece: HTMLElement, cell: number, width: number, from: number | undefined) {
+    piece.style.gridArea = area(cell, width);
+    if (from === undefined || from === cell) return;
+    const columns = (from % width) - (cell % width);
+    const rows = Math.floor(from / width) - Math.floor(cell / width);
+    piece.style.transform = `translate(${columns * 100}%, ${rows * 100}%)`;
+    // Read a layout property so the browser applies the offset first.
+    void piece.offsetWidth;
+    piece.classList.add('settling');
+    piece.style.transform = '';
+    setTimeout(() => piece.classList.remove('settling'), 240);
+  }
+
+  /** Rings a box's goal when the box lands on it. */
+  private ripple(cell: number, width: number) {
+    const ripple = document.createElement('div');
+    ripple.className = 'ripple';
+    ripple.style.gridArea = area(cell, width);
+    this.feedback.append(ripple);
+    setTimeout(() => ripple.remove(), 700);
+  }
+
+  /** Builds the fixed cell grid and fresh pieces for a new puzzle. */
+  private rebuild(width: number, tiles: Uint8Array, labels: Uint8Array) {
+    this.tiles = tiles;
+    this.labels = labels;
+    this.previous = undefined;
+    this.homes = [];
+    this.path = [];
+    this.trail.replaceChildren();
+    this.feedback.replaceChildren();
+    this.cells.replaceChildren();
+    for (let cell = 0; cell < tiles.length; cell++) {
+      const element = document.createElement('div');
+      element.className = 'cell';
+      element.style.gridArea = area(cell, width);
+      const tile = tiles[cell];
+      if (tile === WALL) element.classList.add('wall');
+      else {
+        element.classList.add('floor');
+        if (tile !== 0) {
+          const goal = document.createElement('div');
+          goal.className = 'goal';
+          goal.style.setProperty('--piece-hue', String(hue(tile)));
+          const mark = document.createElement('span');
+          mark.textContent = tile === PLAIN ? '·' : String.fromCharCode(tile).toLowerCase();
+          goal.append(mark);
+          element.append(goal);
+        }
+      }
+      this.cells.append(element);
+    }
+    this.crates = [];
+    this.pieces.replaceChildren();
+    for (const label of labels) {
+      const crate = document.createElement('div');
+      crate.className = 'crate';
+      crate.style.setProperty('--piece-hue', String(hue(label)));
+      const mark = document.createElement('span');
+      mark.textContent = label === PLAIN ? '•' : String.fromCharCode(label);
+      crate.append(mark);
+      this.crates.push(crate);
+      this.pieces.append(crate);
+    }
+    this.pieces.append(this.robot);
+  }
+
+  /** Sizes the board's tiles to their container: at most MAX_TILE_PX, fitting
+   * the wrap's width and MAX_BOARD_HEIGHT_PX, and never below MIN_TILE_PX — an
+   * oversized board keeps that size and scrolls, and touch then pans the wrap
+   * instead of swiping the robot. */
+  private size(width: number, height: number) {
+    const available = this.wrap.clientWidth - parseFloat(this.wrapStyle.paddingLeft) - parseFloat(this.wrapStyle.paddingRight) - 1;
+    const fit = Math.min(MAX_TILE_PX, available / width, MAX_BOARD_HEIGHT_PX / height);
+    const tile = Math.max(MIN_TILE_PX, fit);
+    this.fits = fit >= MIN_TILE_PX;
+    this.wrap.classList.toggle('pan', !this.fits);
+    const style = this.element.style;
+    style.setProperty('--columns', String(width));
+    style.setProperty('--rows', String(height));
+    style.setProperty('--tile', `${tile}px`);
   }
 }

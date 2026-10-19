@@ -190,18 +190,8 @@ h2 {
   overflow: auto;
 }
 
-canvas {
-  display: block;
-  flex: none;
-  margin: auto;
-  /* Swipes move the robot, so touch may only pinch-zoom. Browsers without the
-     pinch-zoom value drop that declaration and keep manipulation. */
-  touch-action: manipulation;
-  touch-action: pinch-zoom;
-  border-radius: 4px;
-}
-
-canvas.pan {
+/* An oversized board scrolls its wrap, so touch pans it instead of swiping. */
+.board-wrap.pan {
   touch-action: manipulation;
 }
 

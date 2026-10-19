@@ -60,7 +60,7 @@ const customPuzzle = (text: string): Puzzle => ({
   difficulty: 'custom',
   rows: text.split('\n'),
 });
-const board = new BoardView($<HTMLCanvasElement>('board'));
+const board = new BoardView($('board'));
 /** Undefined until start() loads the first puzzle. */
 let session: Session | undefined;
 /** The session, for code that only runs once a puzzle is loaded: event
@@ -196,7 +196,10 @@ function move(direction: number) {
   const { game } = session;
   if (solver.busy || solver.route !== undefined || playback.active) invalidate();
   if (game.step(direction)) changed();
-  else if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
+  else {
+    board.blocked(direction);
+    if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
+  }
 }
 // Every transport route is replayed on a scratch Rust game before display.
 function applyUpdate(update: SearchUpdate, route: string | undefined) {
@@ -377,7 +380,7 @@ async function start() {
       message(errorMessage(error));
     }
   };
-  bindInput($<HTMLCanvasElement>('board'), {
+  bindInput($('board'), {
     move,
     // A click does nothing while the Undo button is disabled.
     undo: () => button('undo').click(),

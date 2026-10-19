@@ -200,3 +200,14 @@ test('the picker and the arrows navigate play routes', async ({ page }) => {
   await expect(page).toHaveURL(/#\/play\/huge/);
   await expect(page.locator('#title')).toHaveText('Grand Hall');
 });
+
+test('the DOM board renders pieces that move and celebrate', async ({ page }) => {
+  await loaded(page);
+  await expect(page.locator('#board .cell')).toHaveCount(25);
+  await expect(page.locator('#board .robot')).toHaveCount(1);
+  await expect(page.locator('#board .crate')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#board')).toHaveAttribute('data-solved', '');
+  await expect(page.locator('#board .crate[data-home]')).toHaveCount(1);
+  await expect(page.locator('#board .trail-dot')).toHaveCount(1);
+});
