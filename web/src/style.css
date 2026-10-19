@@ -164,19 +164,98 @@ h2 {
   align-items: center;
 }
 
-.counters {
-  display: flex;
-  gap: 18px;
-  color: var(--ink-muted);
-  font-size: 12px;
-  white-space: nowrap;
+/* The play sidebar's score card: the attempt's counts against its best. */
+.score-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 18px;
 }
 
-.counters strong {
-  display: block;
-  color: var(--ink-950);
-  font-size: 24px;
+.score-grid > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.score-grid strong {
+  font-size: 20px;
   font-variant-numeric: tabular-nums;
+  color: var(--ink-950);
+}
+
+.score-grid .delta {
+  font-style: normal;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.score-grid .delta.good {
+  color: var(--sage-600);
+}
+
+.score-grid .delta.bad {
+  color: var(--coral-500);
+}
+
+/* The recent-move strip and the walk/push split under the board. */
+.notation {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.notation span {
+  flex: 1;
+  min-height: 22px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: 15px;
+  letter-spacing: 3px;
+  text-align: center;
+  color: var(--ink-800);
+}
+
+.notation .copy {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.timeline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.timeline-bars {
+  flex: 1;
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--paper-200);
+}
+
+.timeline-bars > div {
+  height: 100%;
+}
+
+#walks {
+  background: var(--blue-500);
+}
+
+#pushes-bar {
+  background: var(--amber-400);
+}
+
+.timeline .muted {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .board-wrap {

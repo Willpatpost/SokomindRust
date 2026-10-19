@@ -229,3 +229,21 @@ test('a tap on a reachable cell walks the robot there', async ({ page }) => {
   await page.mouse.click(at(0, 2).x, at(0, 2).y);
   await expect(page.locator('#board')).toHaveAttribute('aria-label', /3 moves, 0 pushes\./);
 });
+
+test('the score card and move strips follow the attempt', async ({ page }) => {
+  await loaded(page);
+  await expect(page.locator('#timer')).toHaveText('0:00');
+  await expect(page.locator('#placed')).toHaveText('0 / 1');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#notation')).toHaveText('←→↓');
+  await expect(page.locator('#push-share')).toHaveText('33% pushes');
+  await expect(page.locator('#efficiency')).toHaveText('33%');
+  await expect(page.locator('#placed')).toHaveText('1 / 1');
+  await expect(page.locator('#undo-depth')).toHaveText('(3)');
+  await expect(page.locator('#undo-5')).toBeHidden();
+  await page.click('#undo');
+  await expect(page.locator('#notation')).toHaveText('←→');
+  await expect(page.locator('#undo-depth')).toHaveText('(2)');
+});

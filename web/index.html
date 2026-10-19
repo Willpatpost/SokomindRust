@@ -86,21 +86,29 @@
               <p id="difficulty" class="eyebrow"></p>
               <h1 id="title" tabindex="-1">Loading Rust engine…</h1>
             </div>
-            <div class="counters">
-              <span><strong id="moves">0</strong> moves</span>
-              <span><strong id="pushes">0</strong> pushes</span>
-            </div>
           </div>
           <div class="board-wrap">
             <!-- board.ts builds the DOM board's layers inside this element. -->
             <div id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, Z to undo."></div>
           </div>
+          <!-- The strip shows the attempt's recent moves; the bars split them into walks and pushes. -->
+          <div class="notation" aria-label="Recent moves">
+            <span id="notation"></span>
+            <button id="copy-moves" class="copy" title="Copy the whole move sequence">Copy</button>
+          </div>
+          <div class="timeline" aria-label="Move breakdown">
+            <div class="timeline-bars">
+              <div id="walks"></div>
+              <div id="pushes-bar"></div>
+            </div>
+            <span id="push-share" class="muted"></span>
+          </div>
           <p id="hint" class="muted"></p>
           <div class="game-controls">
-            <button id="undo">Undo <kbd>Z</kbd></button>
+            <button id="undo">Undo <span id="undo-depth"></span><kbd>Z</kbd></button>
+            <button id="undo-5" hidden>Undo 5</button>
             <button id="reset">Restart</button>
             <button id="best">Replay best</button>
-            <span id="best-score" class="muted"></span>
           </div>
           <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
           <div class="direction-pad" aria-label="Movement controls">
@@ -113,6 +121,17 @@
           </div>
           <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
           <aside>
+            <section class="card score">
+              <p class="eyebrow">THIS ATTEMPT</p>
+              <div class="score-grid">
+                <div><span>Time</span><strong id="timer">0:00</strong></div>
+                <div><span>Moves</span><strong id="moves">0</strong><em id="moves-delta" class="delta"></em></div>
+                <div><span>Pushes</span><strong id="pushes">0</strong><em id="pushes-delta" class="delta"></em></div>
+                <div><span>Efficiency</span><strong id="efficiency">—</strong></div>
+                <div><span>Placed</span><strong id="placed">0 / 0</strong></div>
+              </div>
+              <p id="best-score" class="fine"></p>
+            </section>
             <section class="card">
               <p class="eyebrow">SHARED RUST ENGINE</p>
               <h2>Find a route</h2>

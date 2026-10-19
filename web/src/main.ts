@@ -11,6 +11,7 @@ import { navigate, route, startRouter, subscribe, type Route } from './router.ts
 import { onPage, playHash, startShell } from './shell.ts';
 import { walkRoute } from './walk.ts';
 import { PinchZoom } from './zoom.ts';
+import { clock, Timer } from './timer.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
@@ -92,6 +93,9 @@ const playback = new Playback(
   },
 );
 const progress = new Progress({ verify, show: showBest, status: value => setText('storage', value) });
+const timer = new Timer({ show: ms => setText('timer', clock(ms)) });
+/** The best on show, for the score card's pace deltas. */
+let best: storage.Best | null = null;
 
 function updateButtons() {
   const busy = solver.busy;
@@ -120,24 +124,63 @@ function render() {
   paint(current);
 }
 function paint({ game, tiles, labels, state }: Session) {
-  board.draw(
-    game.width(),
-    game.height(),
-    tiles,
-    labels,
-    state,
-    Array.from(labels, (_, i) => game.on_goal(i)),
-  );
+  const onGoal = Array.from(labels, (_, i) => game.on_goal(i));
+  board.draw(game.width(), game.height(), tiles, labels, state, onGoal);
   setText('moves', String(state.moves));
   setText('pushes', String(state.pushes));
+  score(state, onGoal, game.actions());
   updateButtons();
 }
 function saveSession() {
   if (session) progress.session(session.game.actions());
 }
-function showBest(best: storage.Best | null) {
-  button('best').disabled = !best;
-  setText('best-score', best ? `Best: ${best.moves} moves · ${best.pushes} pushes` : '');
+/** The arrows the move notation shows for the route letters. */
+const GLYPHS: Record<string, string> = { U: '↑', D: '↓', L: '←', R: '→' };
+
+/** Paints the score card and the stage's move strips: the pace deltas against
+ * the best on show, the efficiency and placed counts, the recent moves, the
+ * walk/push split, and the undo depth. */
+function score(state: Snapshot, onGoal: boolean[], actions: string) {
+  const recent = actions.length > 24 ? `…${actions.slice(-24)}` : actions;
+  setText(
+    'notation',
+    recent.replace(/[UDLR]/g, letter => GLYPHS[letter]!),
+  );
+  const share = (count: number) => (state.moves === 0 ? '0%' : `${Math.round((count / state.moves) * 100)}%`);
+  $<HTMLElement>('walks').style.width = share(state.moves - state.pushes);
+  $<HTMLElement>('pushes-bar').style.width = share(state.pushes);
+  setText('push-share', state.moves === 0 ? '' : `${share(state.pushes)} pushes`);
+  setText('efficiency', state.moves === 0 ? '—' : share(state.pushes));
+  setText('placed', `${onGoal.filter(Boolean).length} / ${onGoal.length}`);
+  delta('moves-delta', state.moves, best?.moves);
+  delta('pushes-delta', state.pushes, best?.pushes);
+  setText('undo-depth', state.moves === 0 ? '' : `(${state.moves})`);
+  button('undo-5').hidden = state.moves < 5;
+}
+
+/** The signed difference from the best on show, colored by which way it reads. */
+function delta(id: string, value: number, against: number | undefined) {
+  if (against === undefined) {
+    setText(id, '');
+    return;
+  }
+  const sign = value === against ? '' : value > against ? '+' : '−';
+  setText(id, `${sign}${Math.abs(value - against)}`);
+  $(id).className = `delta ${value <= against ? 'good' : 'bad'}`;
+}
+
+function showBest(record: storage.Best | null) {
+  best = record;
+  button('best').disabled = !record;
+  setText('best-score', record ? `Best: ${record.moves} moves · ${record.pushes} pushes` : '');
+  // A local const narrows into the callback; the module's let cannot.
+  const current = session;
+  if (current)
+    score(
+      current.state,
+      Array.from(current.labels, (_, i) => current.game.on_goal(i)),
+      current.game.actions(),
+    );
 }
 // Stored routes are untrusted: replay one from the start on a scratch game.
 function verify(rows: string, route: string): Snapshot {
@@ -159,6 +202,7 @@ function changed() {
     progress.session(game.actions(), true);
     return;
   }
+  timer.pause();
   message(`Solved in ${state.moves} moves and ${state.pushes} pushes.`);
   const actions = game.actions();
   progress.session(actions);
@@ -191,6 +235,9 @@ function load(puzzle: Puzzle, actions = '') {
   $<HTMLTextAreaElement>('rows').value = text;
   paint(next);
   progress.select(next.puzzle.id, next.puzzle.text);
+  timer.select(next.puzzle.id);
+  // A restored solve holds its time; the clock only runs while playing.
+  if (next.state.solved) timer.pause();
   message(actions ? 'Session restored by replaying your moves.' : MOVE_HINT);
   saveSession();
 }
@@ -373,9 +420,25 @@ async function start() {
     invalidate();
     if (loaded().game.undo()) changed();
   };
+  button('undo-5').onclick = () => {
+    invalidate();
+    const { game } = loaded();
+    for (let i = 0; i < 5 && game.moves() > 0; i++) game.undo();
+    changed();
+  };
+  button('copy-moves').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(loaded().game.actions());
+      message('Move sequence copied as U/D/L/R.');
+    } catch {
+      message('Clipboard is unavailable in this browser.');
+    }
+  };
   button('reset').onclick = () => {
     invalidate();
     loaded().game.reset();
+    // A restart is a fresh attempt: its clock starts over.
+    timer.reset(loaded().puzzle.id);
     changed();
   };
   button('best').onclick = () => {
@@ -451,7 +514,10 @@ async function start() {
   addEventListener('pagehide', () => saveSession());
   // Mobile browsers often skip pagehide, so hiding the page flushes the pending save too.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveSession();
+    if (document.visibilityState === 'hidden') {
+      saveSession();
+      timer.pause();
+    } else if (!session?.state.solved) timer.run();
   });
   void probeServer();
 }

@@ -98,9 +98,8 @@ export async function withGlobalFetch<T>(stub: typeof fetch, body: () => Promise
   }
 }
 // Node has no usable localStorage; node --test runs each file in its own process.
-export function installMemoryStorage() {
-  const items = new Map<string, string>();
-  const value = {
+function memoryStorage(items: Map<string, string>) {
+  return {
     get length() {
       return items.size;
     },
@@ -114,6 +113,15 @@ export function installMemoryStorage() {
     },
     clear: () => items.clear(),
   };
-  Object.defineProperty(globalThis, 'localStorage', { value, configurable: true, writable: true });
+}
+export function installMemoryStorage() {
+  const items = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', { value: memoryStorage(items), configurable: true, writable: true });
+  return items;
+}
+/** The timer keeps its per-puzzle time in sessionStorage, which node also lacks. */
+export function installSessionStorage() {
+  const items = new Map<string, string>();
+  Object.defineProperty(globalThis, 'sessionStorage', { value: memoryStorage(items), configurable: true, writable: true });
   return items;
 }
