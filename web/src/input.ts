@@ -111,6 +111,9 @@ export function bindInput(target: HTMLElement, { move, undo, swipeable, tap }: I
     tap(event.clientX, event.clientY, false);
   });
   document.addEventListener('keydown', event => {
+    // A modal dialog owns the keyboard while it is open, as the page-level
+    // keys already assume (main.ts); movement must not act behind one.
+    if (document.querySelector('dialog[open]')) return;
     if (ignoresKey(event, event.target instanceof Element && event.target.matches('input,textarea,select'))) return;
     // Ctrl or Cmd+Z undoes; the plain Z belongs to the page, as zen mode.
     const action = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' ? 'undo' : keyAction(event.key);

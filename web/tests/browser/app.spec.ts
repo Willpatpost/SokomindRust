@@ -136,6 +136,23 @@ test('finds a route through the in-browser engine', async ({ page }) => {
   await expect(page.locator('#expanded')).not.toHaveText('—');
 });
 
+// A modal dialog owns the keyboard: movement and undo must not act behind it,
+// which the ported app's input gate ensured and this port's movement layer missed.
+test('movement keys stay with an open dialog', async ({ page }) => {
+  await loaded(page);
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('u');
+  await expect(page.locator('#moves')).toHaveText('0');
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', FIRST_BOARD);
+  await page.click('#solver-close');
+  await expect(page.locator('#solver')).not.toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#moves')).toHaveText('1');
+});
+
 // Quality shows no route on "Grand Hall" for about a second natively, and longer in
 // WASM, until its stage search finds one, far longer than the gap between the two
 // clicks, so Stop always lands while the search runs and no route is on show.
