@@ -1794,3 +1794,43 @@ details[open] summary {
 .rating-dot[data-rating='hard'] {
   background: var(--coral-500);
 }
+
+/* The improvement lab's shelf: one row per room, its best route and the
+ * replay that plays it. */
+.shelf-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.shelf-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.shelf-list li > div {
+  display: grid;
+  gap: 2px;
+}
+
+.shelf-list strong {
+  font-size: 13px;
+}
+
+.shelf-list span {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.shelf-list small {
+  font-size: 11px;
+  color: var(--ink-subtle);
+}

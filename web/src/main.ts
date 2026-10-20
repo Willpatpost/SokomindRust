@@ -40,6 +40,9 @@ import * as stats from './stats.ts';
 import * as achievements from './achievements.ts';
 import * as frames from './frames.ts';
 import * as journey from './journey.ts';
+import { idb } from './idb.ts';
+import * as optimal from './optimal.ts';
+import * as replays from './replays.ts';
 import { statusText } from './verdict.ts';
 
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
@@ -234,6 +237,16 @@ function verify(rows: string, route: string): Snapshot {
     check.free();
   }
 }
+/** The replay repository's verifier: the same scratch-game replay, answering
+ * the counts a stored route must confirm. */
+const verifyRoute: replays.Verify = (rows, actionLog) => {
+  try {
+    const snapshot = verify(rows, actionLog);
+    return { moves: snapshot.moves, pushes: snapshot.pushes };
+  } catch {
+    return null;
+  }
+};
 /** The completion dialog's rating buttons, in order. */
 const RATE_BUTTONS: [string, Rating][] = [
   ['rate-easy', 'easy'],
@@ -249,10 +262,12 @@ function markRating() {
 }
 
 /** Opens the completion dialog for a solve, against the best that stood before
- * it, bursts the celebration sized by the tier the solve earned, and lists any
- * achievements the solve unlocked. */
+ * it, bursts the celebration sized by the tier the solve earned, lists any
+ * achievements the solve unlocked, and stars a route the engine has certified
+ * as move-optimal. */
 function finish(state: Snapshot, before: storage.Best | null, earned: readonly achievements.Def[] = []) {
-  const shown = present({ moves: state.moves, pushes: state.pushes }, before);
+  const { puzzle } = loaded();
+  const shown = present({ moves: state.moves, pushes: state.pushes }, before, optimal.proven(puzzle.id, puzzle.text));
   setText('complete-eyebrow', shown.eyebrow);
   setText('complete-title', shown.title);
   setText('complete-summary', shown.summary);
@@ -325,6 +340,21 @@ function changed() {
     earned = achievements.newlyUnlocked(priorIds, achievements.unlockedIds(stats.aggregates(book), book));
     // A solve can earn the frame the board wears.
     frames.apply();
+    // The route joins the replay repository, replay-verified before it
+    // lands; only an improvement over the best before it stays.
+    void replays.promote(
+      idb,
+      puzzle.id,
+      puzzle.text,
+      {
+        actionLog: actions,
+        moves: state.moves,
+        pushes: state.pushes,
+        completedAt: new Date().toISOString(),
+        elapsedMs: timer.elapsed(),
+      },
+      verifyRoute,
+    );
   }
   finish(state, before, earned);
 }
@@ -376,6 +406,11 @@ function move(direction: number) {
     if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
   }
 }
+/** Whether the standing search started from the room's start: only such a
+ * search can certify the room's optimum — one from a mid-game position
+ * proves only the rest of its route. */
+let searchedFromStart = false;
+
 // Every transport route is replayed on a scratch Rust game before display.
 function applyUpdate(update: SearchUpdate, route: string | undefined) {
   const { expanded, generated, reservedBytes } = update.metrics;
@@ -383,11 +418,19 @@ function applyUpdate(update: SearchUpdate, route: string | undefined) {
   setText('generated', generated.toLocaleString());
   setText('reserved', `${(reservedBytes / 1048576).toFixed(1)} MiB`);
   setStatus(statusText(update.metrics, route));
+  // A start-to-finish search that finished with an optimal proof certifies
+  // the room's optimum: the cache the completion dialog's star reads.
+  if (update.type === 'done' && update.metrics.proof.kind === 'optimal' && route !== undefined && searchedFromStart) {
+    const { puzzle } = loaded();
+    optimal.record(puzzle.id, puzzle.text, update.metrics.proof.moves);
+  }
 }
 function solve() {
   if (solver.busy) return;
   invalidate();
   const { game, puzzle } = loaded();
+  // Only a search from the room's start can certify its optimum.
+  searchedFromStart = game.moves() === 0;
   const request: SolveRequest = {
     rows: puzzle.text,
     actions: game.actions(),
@@ -742,9 +785,14 @@ function backLink(href: string, text: string): HTMLElement {
   return link;
 }
 
+/** A route the replay shelf asked to play: its room loads fresh, and the
+ * route plays as a playback. */
+let pendingReplay: { id: string; route: string } | undefined;
+
 /** Loads the play route's puzzle: a shared log replays as given, and without one the
  * saved session continues when it was saved for this puzzle. A route that names no
- * catalog puzzle, or a log that does not replay, goes home. */
+ * catalog puzzle, or a log that does not replay, goes home. The shelf's replay
+ * takes precedence: a fresh board, the route as a playback. */
 function enterPlay(next: Route) {
   if (next.kind !== 'play') return;
   const puzzle = ENTRIES.find(p => p.id === next.puzzleId);
@@ -752,12 +800,20 @@ function enterPlay(next: Route) {
     navigate({ kind: 'home' });
     return;
   }
+  const replay = pendingReplay !== undefined && pendingReplay.id === puzzle.id ? pendingReplay : undefined;
+  pendingReplay = undefined;
   const saved = storage.session();
-  const actions = next.actionLog ?? (saved?.id === puzzle.id && saved.rows === puzzle.rows.join('\n') ? saved.actions : '');
+  const actions =
+    replay === undefined ? (next.actionLog ?? (saved?.id === puzzle.id && saved.rows === puzzle.rows.join('\n') ? saved.actions : '')) : '';
   try {
     load(puzzle, actions);
   } catch {
     navigate({ kind: 'home' });
+    return;
+  }
+  if (replay !== undefined) {
+    invalidate();
+    animate(replay.route);
   }
 }
 
@@ -1275,6 +1331,68 @@ function renderStats() {
   heatCard.append(heatLabel, heatGrid, heatLegend);
   grid.append(heatCard);
 
+  // The improvement lab: recent personal-best routes, replay-verified, each
+  // playable again from its fresh board.
+  const lab = document.createElement('div');
+  lab.className = 'card stat-card wide';
+  const labEyebrow = document.createElement('p');
+  labEyebrow.className = 'eyebrow';
+  labEyebrow.textContent = 'IMPROVEMENT LAB';
+  const labTitle = document.createElement('h3');
+  labTitle.textContent = 'Personal-best replays';
+  const labCount = document.createElement('span');
+  labCount.className = 'showcase-tally';
+  const labState = document.createElement('p');
+  labState.className = 'muted';
+  labState.textContent = 'Finding recent verified routes…';
+  lab.append(labEyebrow, labTitle, labCount, labState);
+  grid.append(lab);
+  void (async () => {
+    const found = await replays.index();
+    const items: { entry: Entry; routes: replays.Route[] }[] = [];
+    for (const id of found.ids) {
+      if (items.length >= 6) break;
+      const entry = ENTRIES.find(candidate => candidate.id === id);
+      if (entry === undefined) continue;
+      const read = await replays.read(idb, id, entry.rows.join('\n'), verifyRoute);
+      if (read.status === 'ready' && read.routes.length > 0) items.push({ entry, routes: read.routes });
+    }
+    if (!found.available) {
+      labState.textContent = 'Replay storage is unavailable. Your summary statistics still work normally.';
+      return;
+    }
+    if (items.length === 0) {
+      labState.textContent = 'No replay routes are available yet. Clear a room again to capture its route.';
+      return;
+    }
+    labCount.textContent = `${items.length} ready`;
+    labState.hidden = true;
+    const labList = document.createElement('ul');
+    labList.className = 'shelf-list';
+    for (const { entry, routes } of items) {
+      const best = routes[0];
+      if (best === undefined) continue;
+      const item = document.createElement('li');
+      const detail = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = entry.title;
+      const meta = document.createElement('span');
+      meta.textContent = `${best.moves} moves · ${best.pushes} pushes · ${routes.length} ${routes.length === 1 ? 'route' : 'routes'}`;
+      const saved = document.createElement('small');
+      saved.textContent = `Saved ${achievements.milestoneLabel(best.completedAt)}`;
+      detail.append(name, meta, saved);
+      const play = document.createElement('button');
+      play.textContent = 'Replay';
+      play.onclick = () => {
+        pendingReplay = { id: entry.id, route: best.actionLog };
+        navigate({ kind: 'play', puzzleId: entry.id });
+      };
+      item.append(detail, play);
+      labList.append(item);
+    }
+    lab.append(labList);
+  })();
+
   // The danger zone: the reset asks three times, the last by name.
   const danger = document.createElement('div');
   danger.className = 'card stat-card wide danger';
@@ -1326,6 +1444,9 @@ function renderStats() {
     go.onclick = () => {
       journal.reset();
       for (const name of storage.names()) if (name.startsWith('best.')) storage.remove(name);
+      // The replay shelf follows the solved record down; the optimal cache
+      // stays, being the engine's knowledge rather than progress.
+      void replays.clear();
       // The reset can unearn the frame the board wears.
       frames.apply();
       navigate({ kind: 'home' });

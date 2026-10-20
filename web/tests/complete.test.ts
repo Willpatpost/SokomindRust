@@ -37,3 +37,21 @@ test('a matching or worse solve is a plain room cleared', () => {
   assert.equal(worse.eyebrow, 'ROOM CLEARED');
   assert.deepEqual(worse.milestones, []);
 });
+
+test('a solve that matches the certified optimum earns the star', () => {
+  assert.deepEqual(present({ moves: 24, pushes: 12 }, null, { moves: 24 }), {
+    eyebrow: 'FIRST CLEAR',
+    title: 'Room cleared',
+    summary: 'Solved in 24 moves and 12 pushes — your first route here.',
+    milestones: ['First clear', '★ Proven move-optimal'],
+  });
+  const improved = present({ moves: 20, pushes: 11 }, best(24, 10), { moves: 20 });
+  assert.deepEqual(improved.milestones, ['Fewer moves than your best', '★ Proven move-optimal']);
+  const plain = present({ moves: 24, pushes: 10 }, best(24, 10), { moves: 24 });
+  assert.deepEqual(plain.milestones, ['★ Proven move-optimal']);
+});
+
+test('a solve short of the certified optimum earns no star', () => {
+  const near = present({ moves: 25, pushes: 12 }, null, { moves: 24 });
+  assert.deepEqual(near.milestones, ['First clear']);
+});

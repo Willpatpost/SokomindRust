@@ -1,6 +1,7 @@
 import type { Scheduler } from '../src/scheduler.ts';
 import type { WorkerPort } from '../src/solver-client.ts';
 import type { WorkerRequest } from '../src/protocol.ts';
+import type { KeyValue } from '../src/idb.ts';
 export class Clock implements Scheduler {
   time = 0;
   next = 1;
@@ -124,4 +125,18 @@ export function installSessionStorage() {
   const items = new Map<string, string>();
   Object.defineProperty(globalThis, 'sessionStorage', { value: memoryStorage(items), configurable: true, writable: true });
   return items;
+}
+
+/** The replay repository's in-memory store: node has no IndexedDB either. */
+export function memoryKeyValue(): KeyValue {
+  const items = new Map<string, unknown>();
+  return {
+    async get(key: string) {
+      return items.has(key) ? items.get(key) : undefined;
+    },
+    async update(key: string, change: (stored: unknown) => unknown) {
+      items.set(key, change(items.has(key) ? items.get(key) : undefined));
+      return true;
+    },
+  };
 }

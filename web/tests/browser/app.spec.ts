@@ -623,3 +623,30 @@ test('an earned frame wears on the board, and ratings mark their rows', async ({
   await expect(page.locator('.puzzle-row').first().locator('.rating-dot')).toHaveAttribute('data-rating', 'easy');
   await expect(page.locator('.puzzle-row').first().locator('.rating-dot')).toHaveAttribute('title', 'Felt easy');
 });
+
+test('a proven optimum earns its star', async ({ page }) => {
+  await loaded(page);
+  // An optimal search from the start certifies the room's optimum.
+  await page.selectOption('#mode', 'optimal');
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toHaveText('1 remaining moves · proven move-optimal from this position. Search complete.');
+  // Solving to exactly the certified count earns the star.
+  await page.click('#reset');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#complete-milestones li')).toHaveText(['First clear', '★ Proven move-optimal']);
+});
+
+test('the replay shelf lists and plays a best route', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowDown');
+  await page.click('#complete-close');
+  await page.goto('/#/stats');
+  await expect(page.locator('.shelf-list li')).toHaveCount(1);
+  await expect(page.locator('.shelf-list li')).toContainText('First Steps');
+  await expect(page.locator('.shelf-list li')).toContainText('1 moves · 1 pushes · 1 route');
+  // The replay loads the room fresh and plays the route as a playback.
+  await page.getByRole('button', { name: 'Replay' }).click();
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await expect(page.locator('#moves')).toHaveText('1');
+  await expect(page.locator('#message')).toHaveText(SOLVED);
+});
