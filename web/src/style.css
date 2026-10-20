@@ -579,3 +579,150 @@ details[open] summary {
   transform: translateY(0);
   pointer-events: auto;
 }
+
+/* Native dialogs: the token sheet's backdrop and surfaces dress them. */
+.dialog {
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 26px;
+  background: var(--surface-dialog);
+  box-shadow: var(--shadow-floating);
+  color: var(--ink-950);
+  width: min(440px, calc(100vw - 40px));
+}
+
+.dialog::backdrop {
+  background: var(--modal-backdrop);
+}
+
+.dialog .actions {
+  margin-top: 20px;
+}
+
+.dialog ul {
+  margin: 10px 0;
+  padding: 0 0 0 22px;
+}
+
+.dialog li {
+  font-size: 13px;
+  color: var(--ink-800);
+  margin: 5px 0;
+}
+
+.dialog .metrics {
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.shortcuts-list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.shortcuts-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 13px;
+}
+
+.shortcuts-list dt {
+  color: var(--ink-muted);
+  font-family: ui-monospace, monospace;
+}
+
+.shortcuts-list dd {
+  margin: 0;
+  color: var(--ink-950);
+}
+
+/* The celebration overlay: particles burst over the page and fall away. */
+.celebrate {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.celebrate .particle {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  width: 10px;
+  height: 10px;
+  opacity: 0;
+  animation: particle-fall 1.3s ease-out forwards;
+  animation-delay: var(--delay);
+}
+
+.celebrate .square {
+  background: hsl(var(--hue) 60% 60%);
+  border-radius: 2px;
+}
+
+.celebrate .leaf {
+  background: hsl(var(--hue) 45% 55%);
+  border-radius: 50% 0;
+}
+
+.celebrate .dot {
+  width: 8px;
+  height: 8px;
+  background: hsl(var(--hue) 70% 65%);
+  border-radius: 50%;
+}
+
+@keyframes particle-fall {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate(var(--x), var(--travel)) rotate(var(--spin));
+    opacity: 0;
+  }
+}
+
+/* Pause locks the page behind a wash. The hidden attribute must win over the
+   wash's display, or the overlay swallows every click while idle. */
+.pause {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--modal-backdrop);
+}
+
+.pause[hidden] {
+  display: none;
+}
+
+/* Zen: the chrome folds away; the board and its controls stay. */
+[data-page='play'].zen .puzzle-picker,
+[data-page='play'].zen .heading,
+[data-page='play'].zen .notation,
+[data-page='play'].zen .timeline,
+[data-page='play'].zen #hint,
+[data-page='play'].zen .game-controls,
+[data-page='play'].zen #message,
+[data-page='play'].zen aside {
+  display: none;
+}
+
+.zen-dock {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.zen-dock[hidden] {
+  display: none;
+}

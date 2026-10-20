@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
-const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys or WASD to move, Z to undo.';
+const MOVE_HINT = 'Arrow keys or WASD to move. U to undo.';
+const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys or WASD to move, U to undo.';
 // "First Steps": the robot stands directly above the box, whose goal is one
 // cell below it, so a single Down push solves the puzzle.
 const SOLVED = 'Solved in 1 moves and 1 pushes.';
@@ -33,7 +33,7 @@ test('solves the tutorial with one keyboard push', async ({ page }) => {
   await expect(page.locator('#pushes')).toHaveText('1');
   await expect(page.locator('#board')).toHaveAttribute(
     'aria-label',
-    '5 by 5 puzzle, 1 boxes. 1 moves, 1 pushes. Solved. Use arrow keys or WASD to move, Z to undo.',
+    '5 by 5 puzzle, 1 boxes. 1 moves, 1 pushes. Solved. Use arrow keys or WASD to move, U to undo.',
   );
   await expect(page.locator('#solve')).toBeDisabled();
   await expect(page.locator('#undo')).toBeEnabled();
@@ -43,6 +43,8 @@ test('undo restores the previous position', async ({ page }) => {
   await loaded(page);
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#moves')).toHaveText('1');
+  // The solve opened the completion dialog; the board's controls need it closed.
+  await page.click('#complete-close');
   await page.click('#undo');
   await expect(page.locator('#moves')).toHaveText('0');
   await expect(page.locator('#pushes')).toHaveText('0');
@@ -59,6 +61,7 @@ test('Restart returns a solved puzzle to its start', async ({ page }) => {
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#message')).toHaveText('Solved in 3 moves and 1 pushes.');
   await expect(page.locator('#moves')).toHaveText('3');
+  await page.click('#complete-close');
   await page.click('#reset');
   await expect(page.locator('#moves')).toHaveText('0');
   await expect(page.locator('#pushes')).toHaveText('0');
@@ -243,7 +246,64 @@ test('the score card and move strips follow the attempt', async ({ page }) => {
   await expect(page.locator('#placed')).toHaveText('1 / 1');
   await expect(page.locator('#undo-depth')).toHaveText('(3)');
   await expect(page.locator('#undo-5')).toBeHidden();
+  await page.click('#complete-close');
   await page.click('#undo');
   await expect(page.locator('#notation')).toHaveText('←→');
   await expect(page.locator('#undo-depth')).toHaveText('(2)');
+});
+
+test('a solve opens the completion dialog with its tier and celebration', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#complete')).toBeVisible();
+  await expect(page.locator('#complete-eyebrow')).toHaveText('FIRST CLEAR');
+  await expect(page.locator('#complete-title')).toHaveText('Room cleared');
+  await expect(page.locator('#complete-milestones li')).toHaveCount(1);
+  await expect(page.locator('#celebrate .particle')).toHaveCount(20);
+  await page.click('#complete-close');
+  await expect(page.locator('#complete')).not.toBeVisible();
+  // Solving again at the same count is a plain clear, with fewer particles.
+  await page.click('#reset');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#complete-eyebrow')).toHaveText('ROOM CLEARED');
+  await expect(page.locator('#celebrate .particle')).toHaveCount(8);
+  await page.click('#complete-close');
+});
+
+test('zen mode folds the chrome away and back', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('z');
+  await expect(page.locator('[data-page="play"]')).toHaveClass(/zen/);
+  await expect(page.locator('.play-grid > aside')).toBeHidden();
+  await expect(page.locator('#zen-dock')).toBeVisible();
+  // The board keeps taking input in zen.
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#moves')).toHaveText('1');
+  await page.click('#complete-close');
+  await page.click('#exit-zen');
+  await expect(page.locator('.play-grid > aside')).toBeVisible();
+});
+
+test('pause locks input and the clock until P resumes', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('p');
+  await expect(page.locator('#pause')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#moves')).toHaveText('0');
+  await page.keyboard.press('p');
+  await expect(page.locator('#pause')).toBeHidden();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#moves')).toHaveText('1');
+});
+
+test('the bracket keys walk puzzles and ? lists the shortcuts', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press(']');
+  await expect(page).toHaveURL(/#\/play\/tiny$/);
+  await page.keyboard.press('[');
+  await expect(page).toHaveURL(/#\/play\/ultra-tiny$/);
+  await page.keyboard.press('?');
+  await expect(page.locator('#shortcuts')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#shortcuts')).not.toBeVisible();
 });

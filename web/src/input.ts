@@ -20,7 +20,9 @@ export function swipeDirection(dx: number, dy: number): number | undefined {
   if (Math.max(ax, ay) < SWIPE_MIN_PX || Math.max(ax, ay) < 2 * Math.min(ax, ay)) return undefined;
   return ax > ay ? (dx > 0 ? 3 : 2) : dy > 0 ? 1 : 0;
 }
-/** Keyboard keys by their lowercased `key`: arrows and WASD move, Z undoes. */
+/** Keyboard keys by their lowercased `key`: arrows and WASD move, U undoes. The
+ * plain Z belongs to the page — zen mode — and Ctrl or Cmd+Z reaches undo as
+ * the one chord the handler below names. */
 const KEYS = new Map<string, number | 'undo'>([
   ['arrowup', 0],
   ['w', 0],
@@ -30,17 +32,22 @@ const KEYS = new Map<string, number | 'undo'>([
   ['a', 2],
   ['arrowright', 3],
   ['d', 3],
-  ['z', 'undo'],
+  ['u', 'undo'],
 ]);
 /** What a keydown's `key` does, in either case: a direction, 'undo', or undefined for any other key. */
 export function keyAction(key: string): number | 'undo' | undefined {
   return KEYS.get(key.toLowerCase());
 }
-/** Whether a keydown stays with the browser: one chorded with Ctrl, Meta or Alt (a shortcut such as
- * Ctrl+R or Cmd+W), or one typed into a form field, which `editable` reports. A Shift chord still
- * plays, since keyAction reads either case. */
-export function ignoresKey({ ctrlKey, metaKey, altKey }: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, editable: boolean) {
-  return ctrlKey || metaKey || altKey || editable;
+/** Whether a keydown stays with the browser: one chorded with Ctrl, Meta or Alt (a shortcut such
+ * as Ctrl+R or Cmd+W), or one typed into a form field, which `editable` reports. Ctrl or Cmd+Z is
+ * the one chord that is ours — it undoes — and a Shift chord still plays, since keyAction reads
+ * either case. */
+export function ignoresKey(
+  { ctrlKey, metaKey, altKey, key }: { ctrlKey: boolean; metaKey: boolean; altKey: boolean; key: string },
+  editable: boolean,
+) {
+  const ours = (ctrlKey || metaKey) && !altKey && key.toLowerCase() === 'z';
+  return ((ctrlKey || metaKey) && !ours) || altKey || editable;
 }
 /** Binds the on-screen direction buttons, swipes on the board and the keyboard
  * (arrow keys, WASD, Z) to the handlers. */
@@ -105,7 +112,8 @@ export function bindInput(target: HTMLElement, { move, undo, swipeable, tap }: I
   });
   document.addEventListener('keydown', event => {
     if (ignoresKey(event, event.target instanceof Element && event.target.matches('input,textarea,select'))) return;
-    const action = keyAction(event.key);
+    // Ctrl or Cmd+Z undoes; the plain Z belongs to the page, as zen mode.
+    const action = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' ? 'undo' : keyAction(event.key);
     if (action === undefined) return;
     event.preventDefault();
     if (action === 'undo') undo();

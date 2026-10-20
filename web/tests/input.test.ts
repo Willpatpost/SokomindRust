@@ -33,7 +33,7 @@ test('a swipe travels at least twice as far along one axis as the other', () => 
   ])
     assert.equal(swipeDirection(dx, dy), undefined);
 });
-test('arrow keys and WASD move in either case, and Z undoes', () => {
+test('arrow keys and WASD move in either case, and U undoes', () => {
   for (const [key, action] of [
     ['ArrowUp', 0],
     ['w', 0],
@@ -47,26 +47,28 @@ test('arrow keys and WASD move in either case, and Z undoes', () => {
     ['ArrowRight', 3],
     ['d', 3],
     ['D', 3],
-    ['z', 'undo'],
-    ['Z', 'undo'],
+    ['u', 'undo'],
+    ['U', 'undo'],
   ] as const)
     assert.equal(keyAction(key), action, key);
-  for (const key of ['q', 'Enter', ' ', '', 'Shift', 'constructor']) assert.equal(keyAction(key), undefined, key);
+  // The plain Z belongs to the page as zen mode; only its chord undoes.
+  for (const key of ['q', 'z', 'Z', 'Enter', ' ', '', 'Shift', 'constructor']) assert.equal(keyAction(key), undefined, key);
 });
-test('a Ctrl, Meta or Alt chord, or a key typed into a form field, stays with the browser', () => {
+test('a Ctrl, Meta or Alt chord stays with the browser, except Ctrl or Cmd+Z, which undoes', () => {
   const none = { ctrlKey: false, metaKey: false, altKey: false };
   const ctrl = { ...none, ctrlKey: true };
   const meta = { ...none, metaKey: true };
   const alt = { ...none, altKey: true };
-  for (const [modifiers, editable, ignored] of [
-    [none, false, false],
-    [none, true, true],
-    [ctrl, false, true],
-    [ctrl, true, true],
-    [meta, false, true],
-    [meta, true, true],
-    [alt, false, true],
-    [alt, true, true],
+  for (const [modifiers, key, ignored] of [
+    [none, 'r', false],
+    [ctrl, 'r', true],
+    [meta, 'r', true],
+    [alt, 'r', true],
+    [ctrl, 'z', false],
+    [meta, 'Z', false],
+    [alt, 'z', true],
   ] as const)
-    assert.equal(ignoresKey(modifiers, editable), ignored, JSON.stringify({ ...modifiers, editable }));
+    assert.equal(ignoresKey({ ...modifiers, key }, false), ignored, `${key} ${JSON.stringify(modifiers)}`);
+  // A key typed into a form field stays there.
+  assert.equal(ignoresKey({ ...none, key: 'r' }, true), true);
 });

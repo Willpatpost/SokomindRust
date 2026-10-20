@@ -89,7 +89,7 @@
           </div>
           <div class="board-wrap">
             <!-- board.ts builds the DOM board's layers inside this element. -->
-            <div id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, Z to undo."></div>
+            <div id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, U to undo."></div>
           </div>
           <!-- The strip shows the attempt's recent moves; the bars split them into walks and pushes. -->
           <div class="notation" aria-label="Recent moves">
@@ -105,7 +105,7 @@
           </div>
           <p id="hint" class="muted"></p>
           <div class="game-controls">
-            <button id="undo">Undo <span id="undo-depth"></span><kbd>Z</kbd></button>
+            <button id="undo">Undo <span id="undo-depth"></span><kbd>U</kbd></button>
             <button id="undo-5" hidden>Undo 5</button>
             <button id="reset">Restart</button>
             <button id="best">Replay best</button>
@@ -120,6 +120,14 @@
             </div>
           </div>
           <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
+          <!-- Pause locks input and the clock; zen folds the chrome away around the board. -->
+          <div id="pause" class="pause" hidden>
+            <p class="eyebrow">PAUSED</p>
+            <p class="muted">Press P to resume.</p>
+          </div>
+          <div id="zen-dock" class="zen-dock" hidden>
+            <button id="exit-zen">Exit zen <kbd>Z</kbd></button>
+          </div>
           <aside>
             <section class="card score">
               <p class="eyebrow">THIS ATTEMPT</p>
@@ -237,8 +245,8 @@
             <section class="rules">
               <h2>How to play</h2>
               <p>
-                Push every box onto its matching goal. You can push one box at a time, but you cannot pull. Use arrow keys or WASD (Z
-                undoes), swipe on the board, or the buttons.
+                Push every box onto its matching goal. You can push one box at a time, but you cannot pull. Use arrow keys or WASD (U
+                undoes), swipe or tap a cell to walk there, or the buttons.
               </p>
               <p id="storage" class="fine">Progress stays in this browser.</p>
             </section>
@@ -263,6 +271,70 @@
         <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
       </section>
     </main>
+    <!-- The completion dialog and the shortcuts list; dialog.ts opens them as native modals. -->
+    <dialog id="complete" class="dialog" aria-labelledby="complete-title">
+      <p id="complete-eyebrow" class="eyebrow"></p>
+      <h2 id="complete-title"></h2>
+      <p id="complete-summary" class="muted"></p>
+      <ul id="complete-milestones"></ul>
+      <dl class="metrics">
+        <div>
+          <dt>Moves</dt>
+          <dd id="complete-moves"></dd>
+        </div>
+        <div>
+          <dt>Pushes</dt>
+          <dd id="complete-pushes"></dd>
+        </div>
+        <div>
+          <dt>Time</dt>
+          <dd id="complete-time"></dd>
+        </div>
+      </dl>
+      <div class="actions">
+        <button id="complete-replay" class="primary">Replay</button>
+        <button id="complete-next">Next room</button>
+        <button id="complete-close">Study board</button>
+      </div>
+    </dialog>
+    <dialog id="shortcuts" class="dialog" aria-labelledby="shortcuts-title">
+      <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+      <dl class="shortcuts-list">
+        <div>
+          <dt>Arrows / WASD</dt>
+          <dd>Move</dd>
+        </div>
+        <div>
+          <dt>U or Ctrl+Z</dt>
+          <dd>Undo</dd>
+        </div>
+        <div>
+          <dt>R</dt>
+          <dd>Restart</dd>
+        </div>
+        <div>
+          <dt>P</dt>
+          <dd>Pause</dd>
+        </div>
+        <div>
+          <dt>Z</dt>
+          <dd>Zen mode</dd>
+        </div>
+        <div>
+          <dt>[ / ]</dt>
+          <dd>Previous / next puzzle</dd>
+        </div>
+        <div>
+          <dt>N</dt>
+          <dd>Next unsolved</dd>
+        </div>
+        <div>
+          <dt>?</dt>
+          <dd>This list</dd>
+        </div>
+      </dl>
+    </dialog>
+    <div id="celebrate" class="celebrate" aria-hidden="true"></div>
     <p id="announcer" class="sr-only" role="status" aria-live="polite"></p>
     <nav class="mobile-nav" aria-label="Main navigation">
       <a href="#/" data-nav="home">

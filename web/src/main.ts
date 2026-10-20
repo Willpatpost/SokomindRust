@@ -4,7 +4,7 @@ import init, { WasmGame } from '../wasm/sokomind';
 import wasmUrl from '../wasm/sokomind_bg.wasm?url';
 import catalog from '../../data/puzzles.json';
 import { BoardView } from './board.ts';
-import { bindInput } from './input.ts';
+import { bindInput, ignoresKey } from './input.ts';
 import * as storage from './storage.ts';
 import * as theme from './theme.ts';
 import { navigate, route, startRouter, subscribe, type Route } from './router.ts';
@@ -12,6 +12,9 @@ import { onPage, playHash, startShell } from './shell.ts';
 import { walkRoute } from './walk.ts';
 import { PinchZoom } from './zoom.ts';
 import { clock, Timer } from './timer.ts';
+import { present } from './complete.ts';
+import { celebrate } from './celebrate.ts';
+import { closeDialog, openDialog } from './dialog.ts';
 import { MAX_ROUTE, MAX_STATES, MODES, errorMessage, type SearchUpdate, type Snapshot, type SolveRequest } from './protocol.ts';
 import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
@@ -53,7 +56,7 @@ function setText(id: string, value: string) {
 const message = (value: string) => setText('message', value);
 const setStatus = (value: string) => setText('search-status', value);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
-const MOVE_HINT = 'Arrow keys or WASD to move. Z to undo.';
+const MOVE_HINT = 'Arrow keys or WASD to move. U to undo.';
 /** The id of a puzzle loaded from pasted rows. Its best is stored with those rows, so it shows
  * only while the same rows are loaded again. */
 const CUSTOM_PUZZLE_ID = 'custom';
@@ -194,6 +197,46 @@ function verify(rows: string, route: string): Snapshot {
     check.free();
   }
 }
+/** Opens the completion dialog for a solve, against the best that stood before
+ * it, and bursts the celebration sized by the tier the solve earned. */
+function finish(state: Snapshot, before: storage.Best | null) {
+  const shown = present({ moves: state.moves, pushes: state.pushes }, before);
+  setText('complete-eyebrow', shown.eyebrow);
+  setText('complete-title', shown.title);
+  setText('complete-summary', shown.summary);
+  document.getElementById('complete-milestones')!.replaceChildren(
+    ...shown.milestones.map(text => {
+      const item = document.createElement('li');
+      item.textContent = text;
+      return item;
+    }),
+  );
+  const signed = (value: number, against: number | undefined) =>
+    against === undefined
+      ? String(value)
+      : `${value} (${value === against ? '=' : value < against ? '−' : '+'}${Math.abs(value - against)})`;
+  setText('complete-moves', signed(state.moves, before?.moves));
+  setText('complete-pushes', signed(state.pushes, before?.pushes));
+  setText('complete-time', clock(timer.elapsed()));
+  openDialog('complete');
+  celebrate(before === null ? 'first' : shown.eyebrow === 'PERSONAL MILESTONE' ? 'best' : 'clear');
+}
+
+/** Toggles zen mode: the board and its controls alone, the chrome folded away. */
+function toggleZen() {
+  zen = !zen;
+  document.querySelector('[data-page="play"]')?.classList.toggle('zen', zen);
+  $('zen-dock').hidden = !zen;
+}
+
+/** Pauses the attempt: input and the clock stop until P resumes them. */
+function togglePause() {
+  paused = !paused;
+  $('pause').hidden = !paused;
+  if (paused) timer.pause();
+  else if (!session?.state.solved) timer.run();
+}
+
 function changed() {
   render();
   const { game, state } = loaded();
@@ -203,10 +246,12 @@ function changed() {
     return;
   }
   timer.pause();
+  const before = best;
   message(`Solved in ${state.moves} moves and ${state.pushes} pushes.`);
   const actions = game.actions();
   progress.session(actions);
   progress.keep(actions, state.moves, state.pushes);
+  finish(state, before);
 }
 function load(puzzle: Puzzle, actions = '') {
   const text = puzzle.rows.join('\n');
@@ -241,8 +286,13 @@ function load(puzzle: Puzzle, actions = '') {
   message(actions ? 'Session restored by replaying your moves.' : MOVE_HINT);
   saveSession();
 }
+/** Pause and zen are page-level modes: pause locks input and the clock, zen
+ * folds the chrome away around the board. */
+let paused = false;
+let zen = false;
+
 function move(direction: number) {
-  if (!session) return;
+  if (!session || paused) return;
   const { game } = session;
   if (solver.busy || solver.route !== undefined || playback.active) invalidate();
   if (game.step(direction)) changed();
@@ -298,7 +348,7 @@ function tap(x: number, y: number, touch: boolean) {
     pendingWalk = undefined;
     const current = session;
     const cell = current === undefined ? undefined : board.cellAt(x, y);
-    if (current === undefined || cell === undefined) return;
+    if (current === undefined || cell === undefined || paused) return;
     if (solver.busy || solver.route !== undefined || playback.active) invalidate();
     const route = walkRoute(current.game.width(), current.tiles, current.state.boxes, current.state.player, cell);
     if (route !== undefined) animate(route);
@@ -483,6 +533,59 @@ async function start() {
     undo: () => button('undo').click(),
     swipeable: () => board.fits && !zoom.zoomed,
     tap,
+  });
+  button('exit-zen').onclick = () => toggleZen();
+  button('complete-replay').onclick = () => {
+    closeDialog('complete');
+    button('best').click();
+  };
+  button('complete-next').onclick = () => {
+    closeDialog('complete');
+    step(1);
+  };
+  button('complete-close').onclick = () => closeDialog('complete');
+  /** Walks to the next puzzle with no stored best, wrapping the catalog. */
+  const stepToUnsolved = () => {
+    const from = session?.puzzle.id ?? catalog[0].id;
+    const index = catalog.findIndex(p => p.id === from);
+    for (let ahead = 1; ahead <= catalog.length; ahead++) {
+      const candidate = catalog[(index + ahead) % catalog.length]!;
+      if (storage.best(candidate.id, candidate.rows.join('\n')) === null) {
+        navigate({ kind: 'play', puzzleId: candidate.id });
+        return;
+      }
+    }
+    navigate({ kind: 'play', puzzleId: catalog[(index + 1) % catalog.length]!.id });
+  };
+  // The page-level keys the movement layer does not own. While a dialog is up,
+  // its keys are the dialog's.
+  document.addEventListener('keydown', event => {
+    if (document.querySelector('dialog[open]')) return;
+    if (ignoresKey(event, event.target instanceof Element && event.target.matches('input,textarea,select'))) return;
+    switch (event.key.toLowerCase()) {
+      // The plain Z is zen; its chord undoes in the movement layer.
+      case 'z':
+        if (!event.ctrlKey && !event.metaKey) toggleZen();
+        break;
+      case 'r':
+        if (!paused) button('reset').click();
+        break;
+      case 'p':
+        togglePause();
+        break;
+      case '[':
+        step(-1);
+        break;
+      case ']':
+        step(1);
+        break;
+      case 'n':
+        stepToUnsolved();
+        break;
+      case '?':
+        openDialog('shortcuts');
+        break;
+    }
   });
   button('solve').onclick = solve;
   button('cancel').onclick = () => {

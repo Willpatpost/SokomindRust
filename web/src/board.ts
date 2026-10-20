@@ -125,7 +125,7 @@ export class BoardView {
     this.element.toggleAttribute('data-solved', state.solved);
     const label =
       `${width} by ${height} puzzle, ${labels.length} boxes. `
-      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD to move, Z to undo.`;
+      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD to move, U to undo.`;
     if (this.element.getAttribute('aria-label') !== label) this.element.setAttribute('aria-label', label);
     this.previous = state;
     this.homes = onGoal;
