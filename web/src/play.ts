@@ -404,6 +404,11 @@ function load(puzzle: Entry, actions = '') {
   setText('difficulty', puzzle.difficulty);
   setText('note', puzzle.hint || 'Match every box to its goal.');
   $<HTMLTextAreaElement>('rows').value = text;
+  // A load never opens the deadlock dialog: the counters start from the
+  // position as loaded, so only a push within the session that strands a new
+  // box opens it, never the position a restore lands on.
+  deadCount = next.game.deadlocked_boxes().length;
+  lastPushes = next.state.pushes;
   paint(next);
   progress.select(next.puzzle.id, next.puzzle.text);
   timer.select(next.puzzle.id);
