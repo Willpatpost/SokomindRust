@@ -2698,3 +2698,52 @@ button.danger:hover:enabled {
 #editor-import textarea {
   width: 100%;
 }
+
+/* The generator's dialog: its parameter fields, the run's progress line, and
+ * the result the engine certified. */
+.generator-labels {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.generator-labels input {
+  width: auto;
+  margin: 0;
+}
+
+.generator-labels span {
+  font-size: 12px;
+}
+
+#generator-status {
+  margin: 12px 0 0;
+  min-height: 16px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+#generator-progress {
+  width: 100%;
+  margin: 10px 0 0;
+}
+
+#generator-result {
+  margin-top: 12px;
+}
+
+#generator-result h3 {
+  margin: 0 0 4px;
+}
+
+#generator-result .muted {
+  margin: 0 0 8px;
+}
+
+/* The metrics carry a display rule, which would otherwise beat the hidden
+ * attribute a failed run hides them with. */
+#generator-metrics[hidden] {
+  display: none;
+}

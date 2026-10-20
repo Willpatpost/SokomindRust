@@ -885,3 +885,37 @@ test('the play page shares a pasted puzzle as an editor link', async ({ page }) 
   await expect(page.locator('#editor-title')).toHaveValue('Your puzzle');
   await expect(page.locator('.editor-cell[data-row="2"][data-column="2"]')).toHaveAttribute('data-symbol', 'X');
 });
+
+test('the generator grows a room and loads it into the editor', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-generate');
+  await expect(page.locator('#generator')).toBeVisible();
+  // The dialog's fields carry the default room.
+  await expect(page.locator('#generator-difficulty')).toHaveValue('beginner');
+  await expect(page.locator('#generator-width')).toHaveValue('7');
+  await page.click('#generator-run');
+  // The run reports its progress, then the result the engine certified.
+  await expect(page.locator('#generator-result')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('#generator-result-title')).toHaveText('Puzzle generated');
+  // Loading folds the room into the grid, engine-verified and valid.
+  await page.click('#generator-accept');
+  await expect(page.locator('#generator')).not.toBeVisible();
+  await expect(page.locator('#editor-validation')).toHaveText('Puzzle is valid');
+  await expect(page.locator('.editor-cell[data-symbol="R"]')).toHaveCount(1);
+  await expect(page.locator('#editor-notice')).toContainText('Generated room loaded');
+});
+
+test('the difficulty preset shapes the room the generator grows', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-generate');
+  await page.selectOption('#generator-difficulty', 'advanced');
+  await expect(page.locator('#generator-width')).toHaveValue('9');
+  await expect(page.locator('#generator-height')).toHaveValue('9');
+  await expect(page.locator('#generator-boxes')).toHaveValue('5');
+  // A one-box room cannot carry typed pairs.
+  await page.selectOption('#generator-difficulty', 'tutorial');
+  await expect(page.locator('#generator-boxes')).toHaveValue('1');
+  await expect(page.locator('#generator-labels')).toBeDisabled();
+});

@@ -335,6 +335,7 @@
               <div class="actions">
                 <button id="editor-test" class="primary" disabled title="Test puzzle (Ctrl+Enter)">Test puzzle</button>
                 <button id="editor-share" disabled>Share (copy URL)</button>
+                <button id="editor-generate">Generate puzzle</button>
                 <button id="editor-import-open">Import from text</button>
                 <button id="editor-clear" class="danger">Clear board</button>
               </div>
@@ -755,6 +756,53 @@
       <div class="actions">
         <button id="editor-import-cancel">Cancel</button>
         <button id="editor-import-confirm" class="primary">Import</button>
+      </div>
+    </dialog>
+    <!-- The generator: a room grown to order. Every room it accepts is one the engine itself solved. -->
+    <dialog id="generator" class="dialog" aria-labelledby="generator-title">
+      <p class="eyebrow">WORKSHOP</p>
+      <h2 id="generator-title">Generate a puzzle</h2>
+      <p class="muted">Configure parameters and grow a new puzzle procedurally.</p>
+      <div class="fields generator-fields">
+        <label
+          ><span>Difficulty</span
+          ><select id="generator-difficulty"></select
+        ></label>
+        <label><span>Max attempts</span><input id="generator-attempts" type="number" min="1" max="500" value="50" /></label>
+        <label><span>Width</span><input id="generator-width" type="number" min="5" max="20" value="7" /></label>
+        <label><span>Height</span><input id="generator-height" type="number" min="5" max="20" value="7" /></label>
+        <label><span>Boxes</span><input id="generator-boxes" type="number" min="1" max="10" value="2" /></label>
+        <label class="generator-labels"
+          ><input id="generator-labels" type="checkbox" /><span>Labeled boxes (A/a matching pairs)</span></label
+        >
+      </div>
+      <div class="actions">
+        <button id="generator-run" class="primary">Generate puzzle</button>
+        <button id="generator-cancel" disabled>Cancel</button>
+        <button id="generator-close">Close</button>
+      </div>
+      <p id="generator-status" role="status">Configure a room and generate.</p>
+      <progress id="generator-progress" max="1" value="0" aria-label="Generation progress" hidden></progress>
+      <div id="generator-result" hidden>
+        <h3 id="generator-result-title"></h3>
+        <p id="generator-result-summary" class="muted"></p>
+        <dl id="generator-metrics" class="metrics">
+          <div>
+            <dt>Moves</dt>
+            <dd id="generator-moves"></dd>
+          </div>
+          <div>
+            <dt>Pushes</dt>
+            <dd id="generator-pushes"></dd>
+          </div>
+          <div>
+            <dt>Attempts</dt>
+            <dd id="generator-attempts-taken"></dd>
+          </div>
+        </dl>
+        <div class="actions">
+          <button id="generator-accept" class="primary">Load into editor</button>
+        </div>
       </div>
     </dialog>
     <div id="celebrate" class="celebrate" aria-hidden="true"></div>
