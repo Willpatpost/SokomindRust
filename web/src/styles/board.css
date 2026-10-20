@@ -182,6 +182,23 @@
   background: var(--game-robot-face);
 }
 
+/* The replay study's comparison ghost: a translucent keeper marking where
+ * the reference route stands at the watched step. */
+.board .ghost-piece {
+  position: relative;
+  z-index: 2;
+  margin: 12%;
+  width: 76%;
+  height: 76%;
+  border-radius: 50%;
+  border: 2px dashed var(--game-robot-border);
+  opacity: 0.55;
+}
+
+.board .ghost-piece[hidden] {
+  display: none;
+}
+
 /* The trail behind the keeper, fading with age; reduced motion hides it. */
 .board .trail-dot {
   position: relative;

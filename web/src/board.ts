@@ -78,6 +78,9 @@ export class BoardView {
   private homes: boolean[] = [];
   /** The keeper positions behind the robot, oldest first. */
   private path: number[] = [];
+  /** The comparison ghost's layer and piece: where a reference route stands. */
+  private ghostLayer: HTMLElement;
+  private ghostPiece: HTMLElement;
 
   constructor(element: HTMLElement) {
     this.element = element;
@@ -88,14 +91,30 @@ export class BoardView {
     this.trail = layer('trail');
     this.feedback = layer('feedback');
     this.pieces = layer('pieces');
+    this.ghostLayer = layer('ghost');
+    this.ghostPiece = document.createElement('div');
+    this.ghostPiece.className = 'ghost-piece';
+    this.ghostPiece.hidden = true;
+    this.ghostLayer.append(this.ghostPiece);
     this.robot = document.createElement('div');
     this.robot.className = 'robot';
-    element.append(this.cells, this.trail, this.feedback, this.pieces);
+    element.append(this.cells, this.trail, this.feedback, this.ghostLayer, this.pieces);
+  }
+
+  /** The comparison ghost: a translucent keeper marking where the reference
+   * route stands at the watched step, or none. */
+  ghost(cell: number | undefined, width: number): void {
+    if (cell === undefined) {
+      this.ghostPiece.hidden = true;
+      return;
+    }
+    this.ghostPiece.hidden = false;
+    this.ghostPiece.style.gridArea = area(cell, width);
   }
 
   /** Paints the board for a snapshot of it: the puzzle's fixed grid once, then
    * the pieces, each animated from the last snapshot's position when it moved. */
-  draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Snapshot, onGoal: boolean[]) {
+  draw(width: number, height: number, tiles: Uint8Array, labels: Uint8Array, state: Snapshot, onGoal: boolean[], interactive = true) {
     if (tiles !== this.tiles || labels !== this.labels) this.rebuild(width, tiles, labels);
     this.size(width, height);
     const previous = this.previous;
@@ -125,7 +144,7 @@ export class BoardView {
     this.element.toggleAttribute('data-solved', state.solved);
     const label =
       `${width} by ${height} puzzle, ${labels.length} boxes. `
-      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''} Use arrow keys or WASD to move, U to undo.`;
+      + `${state.moves} moves, ${state.pushes} pushes.${state.solved ? ' Solved.' : ''}${interactive ? ' Use arrow keys or WASD to move, U to undo.' : ''}`;
     if (this.element.getAttribute('aria-label') !== label) this.element.setAttribute('aria-label', label);
     this.previous = state;
     this.homes = onGoal;

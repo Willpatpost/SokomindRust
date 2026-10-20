@@ -650,3 +650,34 @@ test('the replay shelf lists and plays a best route', async ({ page }) => {
   await expect(page.locator('#moves')).toHaveText('1');
   await expect(page.locator('#message')).toHaveText(SOLVED);
 });
+
+test('the replay study compares two routes', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await loaded(page);
+  // A first three-move solve, then the one-move improvement: two routes kept.
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  await page.click('#complete-close');
+  await page.click('#reset');
+  await page.keyboard.press('ArrowDown');
+  await page.click('#complete-close');
+  await page.goto('/#/stats');
+  await expect(page.locator('.shelf-list li')).toHaveCount(1);
+  await expect(page.locator('.shelf-list li')).toContainText('2 routes');
+  await page.getByRole('button', { name: 'Study', exact: true }).click();
+  await expect(page.locator('#replay')).toBeVisible();
+  await expect(page.locator('#replay-title')).toHaveText('First Steps');
+  await expect(page.locator('#replay-watch')).toHaveValue('0');
+  await expect(page.locator('#replay-position')).toHaveText('Move 0 / 1');
+  // The comparison names where the two routes separate.
+  await expect(page.locator('#replay-summary')).toContainText('match for 0 moves');
+  await expect(page.locator('.replay-marker')).toHaveCount(2);
+  await expect(page.locator('.replay-marker').first()).toHaveAttribute('data-kind', 'direction');
+  // Seeking the end solves the board; the close button folds the study.
+  await page.click('#replay-last');
+  await expect(page.locator('#replay-position')).toHaveText('Move 1 / 1');
+  await expect(page.locator('#replay-board')).toHaveAttribute('data-solved', '');
+  await page.click('#replay-close');
+  await expect(page.locator('#replay')).not.toBeVisible();
+});

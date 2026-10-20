@@ -359,6 +359,62 @@
         <button id="deadlock-keep">Keep playing</button>
       </div>
     </dialog>
+    <!-- The replay study: the improvement lab's route comparison. main.ts loads the room's verified
+         routes, draws each step on the board, and marks where two routes diverge. -->
+    <dialog id="replay" class="dialog replay-study" aria-labelledby="replay-title">
+      <header class="replay-head">
+        <div>
+          <p class="eyebrow">REPLAY STUDY</p>
+          <h2 id="replay-title"></h2>
+          <p class="muted">Watch a verified route, seek to any move, and compare where two attempts separate.</p>
+        </div>
+        <button id="replay-close" aria-label="Close replay study">×</button>
+      </header>
+      <div class="replay-selectors">
+        <label
+          ><span>Watch</span
+          ><select id="replay-watch"></select
+        ></label>
+        <label
+          ><span>Compare with</span
+          ><select id="replay-compare"></select
+        ></label>
+      </div>
+      <div class="board-wrap replay-wrap">
+        <div id="replay-board" role="img"></div>
+      </div>
+      <div class="replay-timeline">
+        <div class="replay-heading">
+          <strong id="replay-position"></strong>
+          <span id="replay-meta"></span>
+        </div>
+        <div class="replay-range">
+          <input id="replay-seek" type="range" min="0" max="0" value="0" aria-label="Replay position" />
+          <div id="replay-markers" class="replay-markers"></div>
+        </div>
+        <div class="replay-controls" role="toolbar" aria-label="Replay controls">
+          <button id="replay-first" aria-label="Go to replay start">|←</button>
+          <button id="replay-back" aria-label="Previous replay move">←</button>
+          <button id="replay-play">Play</button>
+          <button id="replay-forward" aria-label="Next replay move">→</button>
+          <button id="replay-last" aria-label="Go to replay end">→|</button>
+          <label class="replay-speed"
+            ><span>Speed</span
+            ><select id="replay-speed"></select
+          ></label>
+        </div>
+      </div>
+      <div class="replay-panel">
+        <div class="replay-panel-head">
+          <h3>Route comparison</h3>
+          <label class="ghost-toggle"><input id="replay-ghost" type="checkbox" /><span>Show comparison ghost</span></label>
+        </div>
+        <p id="replay-summary" class="muted"></p>
+        <p id="replay-reference" class="muted"></p>
+        <ul id="replay-legend" class="replay-legend"></ul>
+        <p id="replay-description" role="status" aria-live="polite"></p>
+      </div>
+    </dialog>
     <div id="celebrate" class="celebrate" aria-hidden="true"></div>
     <p id="announcer" class="sr-only" role="status" aria-live="polite"></p>
     <nav class="mobile-nav" aria-label="Main navigation">
