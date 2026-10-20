@@ -942,3 +942,26 @@ test('the sound choices persist and M mutes', async ({ page }) => {
   await expect(page.locator('#sound-enabled')).toBeChecked();
   await expect(page.locator('#audio-note')).toHaveText('Audio restored.');
 });
+
+test('the app installs as an offline-capable PWA', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await loaded(page);
+  // The document links the manifest and the icons.
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', /manifest\.webmanifest$/);
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /favicon\.svg$/);
+  // The service worker takes control of the page. ready resolves as soon as
+  // an active worker exists — including its activating phase, while the
+  // cache cleanup still runs — so poll for the settled state.
+  await expect
+    .poll(async () => page.evaluate(() => navigator.serviceWorker.ready.then(registration => registration.active?.state ?? 'none')))
+    .toBe('activated');
+  // The shell the worker installed is cached for offline play.
+  const cached = await page.evaluate(async () => {
+    const names = await caches.keys();
+    const shell = names.find(name => name.startsWith('sokomind-shell'));
+    if (shell === undefined) return false;
+    const cache = await caches.open(shell);
+    return (await cache.match('./')) !== undefined;
+  });
+  expect(cached).toBe(true);
+});

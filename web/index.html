@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- theme.ts owns this meta after load; this default matches tokens.css's no-script light theme. -->
     <meta name="theme-color" content="#eee8da" />
+    <!-- The PWA's installable face: the brand assets and the manifest web/public/ holds. -->
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <title>Sokomind · Rust</title>
     <!-- Applies the stored theme before first paint, so the page never flashes the
          default: the same storage key and option lists theme.ts reads, and the same
@@ -33,6 +37,14 @@
   <body>
     <!-- A focus-moving button, not a hash link: the router owns the hash namespace. -->
     <button id="skip" class="skip-to-content">Skip to content</button>
+    <!-- A new build waiting behind the active service worker: main.ts shows this. -->
+    <aside id="update-banner" role="status" aria-live="polite" hidden>
+      <span>A new version of Sokomind is available.</span>
+      <div class="actions">
+        <button id="update-reload" class="primary">Reload</button>
+        <button id="update-dismiss" aria-label="Dismiss update notification">×</button>
+      </div>
+    </aside>
     <header>
       <a href="#/" class="brand">SOKOMIND <span>RUST</span></a>
       <nav class="site-nav" aria-label="Site">

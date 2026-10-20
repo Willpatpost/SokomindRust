@@ -639,3 +639,17 @@ test("the home page's start link goes to the catalog's first puzzle", () => {
   const first = JSON.parse(source('data/puzzles.json'))[0];
   assert.equal(text('web/index.html', /id="start"[^>]*href="#\/play\/([^"]+)"/), first.id);
 });
+
+test('the service worker requires the shell the asset manifest writes', () => {
+  const required = items('web/public/sw.js', /const REQUIRED_SHELL_PATHS = \[([\s\S]*?)\];/, /'([^']+)'/g);
+  const written = items('scripts/asset-manifest.mjs', /export const SHELL_PATHS = \[([\s\S]*?)\];/, /'([^']+)'/g);
+  assert.deepEqual(required, written);
+  // Every shell file beside the document exists in the public folder.
+  for (const entry of required.filter(path => path !== './')) source(`web/public/${entry.slice(2)}`);
+});
+
+test('the asset manifest stamps the revision the worker ships with', () => {
+  const revision = text('web/public/sw.js', /const CACHE_REVISION = '([^']+)';/);
+  const placeholder = text('scripts/asset-manifest.mjs', /export const REVISION_PLACEHOLDER = '([^']+)';/);
+  assert.equal(revision, placeholder);
+});

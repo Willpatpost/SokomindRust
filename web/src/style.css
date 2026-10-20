@@ -150,6 +150,34 @@ header {
   color: var(--ink-muted);
 }
 
+/* The update banner: a new build waiting behind the active service worker. */
+#update-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: var(--surface-dialog);
+  box-shadow: var(--shadow-floating);
+  font-size: 13px;
+}
+
+/* The banner carries a display rule, which would otherwise beat the hidden
+ * attribute the page toggles it with. */
+#update-banner[hidden] {
+  display: none;
+}
+
+#update-banner .actions {
+  margin: 0;
+}
+
 main {
   max-width: 1240px;
   margin: auto;
