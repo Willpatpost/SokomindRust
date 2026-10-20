@@ -7,14 +7,18 @@ import { bindInput, ignoresKey } from './input.ts';
 import {
   DIFFICULTIES,
   ENTRIES,
+  daily,
   favorites,
   filter as filterEntries,
   minimap,
   paginate,
   PER_PAGE,
+  rate,
+  rating,
   solved,
   toggleFavorite,
   type Entry,
+  type Rating,
 } from './catalog.ts';
 import * as storage from './storage.ts';
 import * as theme from './theme.ts';
@@ -225,6 +229,20 @@ function verify(rows: string, route: string): Snapshot {
     check.free();
   }
 }
+/** The completion dialog's rating buttons, in order. */
+const RATE_BUTTONS: [string, Rating][] = [
+  ['rate-easy', 'easy'],
+  ['rate-right', 'right'],
+  ['rate-hard', 'hard'],
+];
+
+/** Marks the completion dialog's rating buttons for the puzzle on show. */
+function markRating() {
+  if (!session) return;
+  const current = rating(session.puzzle.id);
+  for (const [id, value] of RATE_BUTTONS) button(id).classList.toggle('on', current === value);
+}
+
 /** Opens the completion dialog for a solve, against the best that stood before
  * it, and bursts the celebration sized by the tier the solve earned. */
 function finish(state: Snapshot, before: storage.Best | null) {
@@ -246,6 +264,7 @@ function finish(state: Snapshot, before: storage.Best | null) {
   setText('complete-moves', signed(state.moves, before?.moves));
   setText('complete-pushes', signed(state.pushes, before?.pushes));
   setText('complete-time', clock(timer.elapsed()));
+  markRating();
   openDialog('complete');
   celebrate(before === null ? 'first' : shown.eyebrow === 'PERSONAL MILESTONE' ? 'best' : 'clear');
 }
@@ -705,14 +724,52 @@ function enterPlay(next: Route) {
   }
 }
 
-/** Aims the home page's primary action at the saved session's puzzle when one waits
- * there, or at the catalog's first. */
+/** Renders the home dashboard and aims its primary action: the cleared
+ * progress with its bar, the tier row, today's daily challenge, and the
+ * saved session's puzzle as the way back in. */
 function syncHome() {
   const saved = storage.session();
-  const id = saved && ENTRIES.some(p => p.id === saved.id) ? saved.id : ENTRIES[0].id;
+  const id = saved && ENTRIES.some(p => p.id === saved.id) ? saved.id : ENTRIES[0]!.id;
   const start = $<HTMLAnchorElement>('start');
   start.href = playHash(id);
   start.textContent = saved ? 'Resume playing' : 'Start playing';
+  const cleared = ENTRIES.filter(solved).length;
+  const summary = document.createElement('p');
+  summary.className = 'muted';
+  summary.textContent = `${cleared} of ${ENTRIES.length} rooms cleared`;
+  const bar = document.createElement('div');
+  bar.className = 'progress-track';
+  const fill = document.createElement('div');
+  fill.className = 'progress-fill';
+  fill.style.width = `${Math.round((cleared / ENTRIES.length) * 100)}%`;
+  bar.append(fill);
+  const tiers = document.createElement('div');
+  tiers.className = 'tier-row';
+  for (const difficulty of DIFFICULTIES) {
+    const tier = filterEntries(ENTRIES, { difficulty });
+    const link = document.createElement('a');
+    link.href = `#/puzzles/${encodeURIComponent(difficulty)}`;
+    const name = document.createElement('strong');
+    name.textContent = difficulty;
+    const count = document.createElement('span');
+    count.textContent = `${tier.filter(solved).length}/${tier.length}`;
+    link.append(name, count);
+    tiers.append(link);
+  }
+  const challenge = daily();
+  const card = document.createElement('div');
+  card.className = 'card daily';
+  const eyebrow = document.createElement('p');
+  eyebrow.className = 'eyebrow';
+  eyebrow.textContent = solved(challenge) ? 'DAILY CHALLENGE · CLEARED' : 'DAILY CHALLENGE';
+  const title = document.createElement('h2');
+  title.textContent = challenge.title;
+  const play = document.createElement('a');
+  play.className = 'button';
+  play.href = playHash(challenge.id);
+  play.textContent = solved(challenge) ? 'Replay today’s room' : 'Play today’s room';
+  card.append(eyebrow, title, play);
+  $('home-dash').replaceChildren(summary, bar, tiers, card);
 }
 
 /** The theme menu's labels; the values are theme.ts's lists. */
@@ -885,6 +942,18 @@ async function start() {
   button('deadlock-keep').onclick = () => closeDialog('deadlock');
   button('hint').onclick = askHint;
   button('share').onclick = () => void share();
+  button('random').onclick = () => {
+    const pool = filterEntries(ENTRIES, { status: 'open' });
+    const from = pool.length === 0 ? ENTRIES : pool;
+    navigate({ kind: 'play', puzzleId: from[Math.floor(Math.random() * from.length)]!.id });
+  };
+  for (const [id, value] of RATE_BUTTONS) {
+    button(id).onclick = () => {
+      rate(loaded().puzzle.id, value);
+      markRating();
+      message('Rating saved.');
+    };
+  }
   /** Walks to the next puzzle with no stored best, wrapping the ENTRIES. */
   const stepToUnsolved = () => {
     const from = session?.puzzle.id ?? ENTRIES[0].id;

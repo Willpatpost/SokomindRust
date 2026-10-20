@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as storage from '../src/storage.ts';
-import { DIFFICULTIES, ENTRIES, favorites, filter, paginate, solved, toggleFavorite } from '../src/catalog.ts';
+import { DIFFICULTIES, ENTRIES, daily, favorites, filter, paginate, rate, rating, solved, toggleFavorite } from '../src/catalog.ts';
 import { installMemoryStorage } from './fakes.ts';
 installMemoryStorage();
 
@@ -83,4 +83,25 @@ test('pagination clamps past-the-end pages to the last', () => {
   assert.equal(empty.page, 1);
   assert.equal(empty.pages, 1);
   assert.deepEqual(empty.slice, []);
+});
+
+test('the daily challenge is the UTC day’s pick, stable through the day', () => {
+  const midnight = Math.floor(Date.now() / 86_400_000) * 86_400_000;
+  assert.equal(daily(midnight).id, daily(midnight + 86_400_000 - 1).id);
+  assert.ok(daily(midnight + 86_400_000 - 1).id !== daily(midnight + 86_400_000).id, 'the next UTC day picks a different puzzle');
+});
+
+test('ratings store and replace per puzzle, reading malformed stores as none', () => {
+  assert.equal(rating('ultra-tiny'), undefined);
+  rate('ultra-tiny', 'right');
+  assert.equal(rating('ultra-tiny'), 'right');
+  rate('ultra-tiny', 'hard');
+  assert.equal(rating('ultra-tiny'), 'hard');
+  assert.equal(rating('tiny'), undefined);
+  storage.write('ratings', 'garbage');
+  assert.equal(rating('ultra-tiny'), undefined);
+  storage.write('ratings', ['x']);
+  assert.equal(rating('ultra-tiny'), undefined);
+  rate('tiny', 'easy');
+  assert.equal(rating('tiny'), 'easy');
 });

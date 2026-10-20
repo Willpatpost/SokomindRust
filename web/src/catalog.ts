@@ -85,6 +85,34 @@ export function paginate(list: Entry[], page: number): { page: number; pages: nu
   return { page: at, pages, slice: list.slice((at - 1) * PER_PAGE, at * PER_PAGE) };
 }
 
+/** Today's daily challenge: the puzzle the UTC day itself picks, the same one
+ * for every visitor, changing at UTC midnight. */
+export function daily(now: number = Date.now()): Entry {
+  return ENTRIES[Math.floor(now / 86_400_000) % ENTRIES.length]!;
+}
+
+/** The difficulty a player rated a puzzle. */
+export type Rating = 'easy' | 'right' | 'hard';
+
+/** The whole ratings record, or an empty one when the store holds anything
+ * but an object. */
+function ratings(): Record<string, Rating> {
+  const read = storage.read('ratings');
+  return read !== null && typeof read === 'object' && !Array.isArray(read) ? (read as Record<string, Rating>) : {};
+}
+
+/** The rating stored for `id`, if any. */
+export function rating(id: string): Rating | undefined {
+  return ratings()[id];
+}
+
+/** Stores `id`'s rating, replacing whatever it had. */
+export function rate(id: string, value: Rating): void {
+  const all = ratings();
+  all[id] = value;
+  storage.write('ratings', all);
+}
+
 /** A tiny board thumbnail, one cell per div — the real rows, not a stand-in.
  * Ragged rows pad with walls, as the game's own board does. */
 export function minimap(entry: Entry): HTMLElement {

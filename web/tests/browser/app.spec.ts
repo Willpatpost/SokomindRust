@@ -376,3 +376,32 @@ test('the collection grid leads to its list, and favorites shape it', async ({ p
   await expect(page.locator('.puzzle-row')).toHaveCount(1);
   await expect(page.locator('.puzzle-row .heart')).toHaveClass(/on/);
 });
+
+test('the home dashboard shows progress, tiers and the daily challenge', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/');
+  await expect(page.locator('#home-dash .muted')).toHaveText('0 of 57 rooms cleared');
+  await expect(page.locator('.progress-fill')).toHaveCSS('width', '0px');
+  await expect(page.locator('.tier-row a')).toHaveCount(6);
+  await expect(page.locator('.tier-row a').first()).toContainText('tutorial');
+  await expect(page.locator('.tier-row a').first()).toContainText('0/4');
+  // The daily card names a catalog puzzle and plays it.
+  await expect(page.locator('.daily h2')).not.toHaveText('');
+  await expect(page.locator('.daily .button')).toHaveText('Play today’s room');
+  const href = await page.locator('.daily .button').getAttribute('href');
+  expect(href).toMatch(/^#\/play\//);
+});
+
+test('a solve can be rated from the completion dialog', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#complete')).toBeVisible();
+  await page.click('#rate-right');
+  await expect(page.locator('#rate-right')).toHaveClass(/on/);
+  await expect(page.locator('#message')).toHaveText('Rating saved.');
+  await page.click('#complete-close');
+  // The rating persists into the next solve's dialog.
+  await page.click('#reset');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#rate-right')).toHaveClass(/on/);
+});

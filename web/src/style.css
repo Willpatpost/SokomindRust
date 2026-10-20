@@ -934,3 +934,76 @@ details[open] summary {
 .minimap .mini.robot {
   background: var(--blue-500);
 }
+
+/* The home dashboard: the cleared progress, the tier row, the daily card. */
+#home-dash {
+  display: grid;
+  gap: 16px;
+  margin: 18px 0;
+}
+
+#home-dash .muted {
+  margin: 0;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--paper-200);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--sage-500);
+  border-radius: 4px;
+  transition: width 600ms ease;
+}
+
+.tier-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tier-row a {
+  display: grid;
+  gap: 2px;
+  padding: 9px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-decoration: none;
+  color: var(--ink-950);
+  font-size: 13px;
+}
+
+.tier-row a:hover {
+  border-color: var(--sage-500);
+}
+
+.tier-row span {
+  font-size: 11px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.daily {
+  padding: 18px 20px;
+}
+
+.daily .eyebrow {
+  margin-bottom: 6px;
+}
+
+.daily h2 {
+  margin: 0 0 14px;
+}
+
+/* The completion dialog's rating row. */
+#rate-row .on {
+  background: var(--sage-600);
+  border-color: var(--sage-600);
+  color: var(--paper-50);
+  font-weight: 700;
+}

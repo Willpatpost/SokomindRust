@@ -60,10 +60,13 @@
       <section data-page="home" hidden>
         <h1 tabindex="-1">Sokomind</h1>
         <p class="muted">Small moves. Deep puzzles. Every route a Rust engine found, verified, and can prove optimal.</p>
+        <!-- main.ts renders the dashboard: the cleared progress, the tier row, and today's daily challenge. -->
+        <div id="home-dash"></div>
         <div class="actions">
           <!-- main.ts aims this at the saved session's puzzle; data/puzzles.json's first is the fallback (checked by scripts/mirrors.test.mjs). -->
           <a id="start" class="button primary" href="#/play/ultra-tiny">Start playing</a>
           <a class="button" href="#/puzzles">Browse puzzles</a>
+          <button id="random">Random puzzle</button>
         </div>
         <p class="fine">Your progress and best routes stay in this browser.</p>
       </section>
@@ -293,6 +296,12 @@
           <dd id="complete-time"></dd>
         </div>
       </dl>
+      <p class="fine">How did the room feel?</p>
+      <div class="actions" id="rate-row">
+        <button id="rate-easy">Easy</button>
+        <button id="rate-right">Just right</button>
+        <button id="rate-hard">Hard</button>
+      </div>
       <div class="actions">
         <button id="complete-replay" class="primary">Replay</button>
         <button id="complete-next">Next room</button>
