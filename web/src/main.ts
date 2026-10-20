@@ -184,13 +184,33 @@ async function start() {
       message('Clipboard is unavailable in this browser.');
     }
   };
-  button('reset').onclick = () => {
+  const performReset = () => {
     invalidate();
     loaded().game.reset();
     // A restart is a fresh attempt: its clock starts over on the next move.
     timer.reset(loaded().puzzle.id);
     void sound.playCue('reset');
     changed();
+  };
+  // The ported guard: a restart with moves on the board asks first, since it
+  // throws the attempt away; an empty board restarts at once.
+  const requestReset = () => {
+    const state = session?.state;
+    if (!state || state.moves === 0) {
+      performReset();
+      return;
+    }
+    setText(
+      'reset-message',
+      `Restarting removes ${state.moves} ${state.moves === 1 ? 'move' : 'moves'} in this attempt. Your best route is not affected.`,
+    );
+    openDialog('reset-confirm');
+  };
+  button('reset').onclick = requestReset;
+  button('reset-keep').onclick = () => closeDialog('reset-confirm');
+  button('reset-now').onclick = () => {
+    closeDialog('reset-confirm');
+    performReset();
   };
   button('best').onclick = () => {
     const best = progress.best();
@@ -259,7 +279,8 @@ async function start() {
   };
   button('deadlock-restart').onclick = () => {
     closeDialog('deadlock');
-    button('reset').click();
+    // The deadlock dialog already asked; no second confirmation.
+    performReset();
   };
   button('deadlock-keep').onclick = () => closeDialog('deadlock');
   // The search laboratory: the play page's solver dialog, and its door to the lab.

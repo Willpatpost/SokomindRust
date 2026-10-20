@@ -575,6 +575,16 @@
         <button id="deadlock-keep">Keep playing</button>
       </div>
     </dialog>
+    <!-- A restart's guard, ported with the app: it asks before throwing a made attempt away. -->
+    <dialog id="reset-confirm" class="dialog" aria-labelledby="reset-confirm-title">
+      <p class="eyebrow">BEFORE YOU RESTART</p>
+      <h2 id="reset-confirm-title">Restart this room?</h2>
+      <p id="reset-message" class="muted"></p>
+      <div class="actions">
+        <button id="reset-keep" class="primary">Keep playing</button>
+        <button id="reset-now" class="danger">Restart room</button>
+      </div>
+    </dialog>
     <!-- The replay study: the improvement lab's route comparison. main.ts loads the room's verified
          routes, draws each step on the board, and marks where two routes diverge. -->
     <dialog id="replay" class="dialog replay-study" aria-labelledby="replay-title">

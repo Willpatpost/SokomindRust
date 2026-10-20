@@ -63,6 +63,8 @@ test('Restart returns a solved puzzle to its start', async ({ page }) => {
   await expect(page.locator('#moves')).toHaveText('3');
   await page.click('#complete-close');
   await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await page.click('#reset-now');
   await expect(page.locator('#moves')).toHaveText('0');
   await expect(page.locator('#pushes')).toHaveText('0');
   await expect(page.locator('#message')).toHaveText(MOVE_HINT);
@@ -270,6 +272,8 @@ test('a solve opens the completion dialog with its tier and celebration', async 
   await expect(page.locator('#complete')).not.toBeVisible();
   // Solving again at the same count is a plain clear, with fewer particles.
   await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await page.click('#reset-now');
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#complete-eyebrow')).toHaveText('ROOM CLEARED');
   await expect(page.locator('#celebrate .particle')).toHaveCount(8);
@@ -312,11 +316,33 @@ test('the clock starts on the first move and starts over after a restart', async
   await page.keyboard.press('ArrowLeft');
   await expect.poll(() => page.locator('#timer').textContent(), { timeout: 4000 }).not.toBe('0:00');
   await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await page.click('#reset-now');
   await expect(page.locator('#timer')).toHaveText('0:00');
   await page.waitForTimeout(1500);
   await expect(page.locator('#timer')).toHaveText('0:00');
   await page.keyboard.press('ArrowLeft');
   await expect.poll(() => page.locator('#timer').textContent(), { timeout: 4000 }).not.toBe('0:00');
+});
+
+// A restart with moves on the board asks before it throws the attempt away,
+// as the ported app's guard did; an empty board restarts at once.
+test('Restart asks before discarding an attempt', async ({ page }) => {
+  await loaded(page);
+  await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).not.toBeVisible();
+  await expect(page.locator('#moves')).toHaveText('0');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await expect(page.locator('#reset-message')).toHaveText('Restarting removes 2 moves in this attempt. Your best route is not affected.');
+  await page.click('#reset-keep');
+  await expect(page.locator('#reset-confirm')).not.toBeVisible();
+  await expect(page.locator('#moves')).toHaveText('2');
+  await page.click('#reset');
+  await page.click('#reset-now');
+  await expect(page.locator('#moves')).toHaveText('0');
 });
 
 test('the bracket keys walk puzzles and ? lists the shortcuts', async ({ page }) => {
@@ -470,6 +496,8 @@ test('a solve can be rated from the completion dialog', async ({ page }) => {
   await page.click('#complete-close');
   // The rating persists into the next solve's dialog.
   await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await page.click('#reset-now');
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#rate-right')).toHaveClass(/on/);
 });
@@ -688,6 +716,8 @@ test('the replay study compares two routes', async ({ page }) => {
   await page.keyboard.press('ArrowDown');
   await page.click('#complete-close');
   await page.click('#reset');
+  await expect(page.locator('#reset-confirm')).toBeVisible();
+  await page.click('#reset-now');
   await page.keyboard.press('ArrowDown');
   await page.click('#complete-close');
   await page.goto('/#/stats');
