@@ -160,9 +160,9 @@ fn pairs(board: &Board, start: &State, route: &[u8]) -> Vec<[usize; 2]> {
 }
 
 /// How many threads the polish's kick round races on, from
-/// `SOKOMIND_POLISH_WORKERS`. Unset, or on wasm, means 1: the
-/// sequential path exactly. Native only: wasm has no environment to
-/// read and stays single-threaded.
+/// `SOKOMIND_POLISH_WORKERS`. Unset means 1: the sequential path
+/// exactly. Native only: wasm has no environment to read and stays
+/// single-threaded.
 #[cfg(not(target_arch = "wasm32"))]
 fn workers() -> usize {
     std::env::var("SOKOMIND_POLISH_WORKERS")
@@ -170,12 +170,6 @@ fn workers() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|&workers| workers > 1)
         .unwrap_or(1)
-}
-
-/// [`workers()`] on wasm: no environment, so no pool.
-#[cfg(target_arch = "wasm32")]
-fn workers() -> usize {
-    1
 }
 
 /// A fixed pool of worker threads for the polish's kick rounds,
@@ -290,6 +284,7 @@ struct Round {
 /// found, cut at its first solved state, with the units it ran, or no
 /// route with the units a failed or unreplayable job spent. A task's
 /// whole job, where [`Polish::step`] slices one unit per call.
+#[cfg(not(target_arch = "wasm32"))]
 fn run_job(
     board: &Board,
     heuristic: &Heuristic,
@@ -324,6 +319,7 @@ fn run_job(
 /// shorter route that replays can replace the working one. Returns the
 /// converged route and the units the descent ran, gains and failures
 /// alike.
+#[cfg(not(target_arch = "wasm32"))]
 fn descend(
     board: &Board,
     heuristic: &Heuristic,
@@ -392,6 +388,7 @@ fn descend(
 /// finds no route to descend; otherwise the descended route and the
 /// trial's units — an improvement only when the descent ends shorter
 /// than `best`, which the round's merge decides.
+#[cfg(not(target_arch = "wasm32"))]
 fn kick_trial(
     board: &Board,
     heuristic: &Heuristic,
