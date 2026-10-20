@@ -2239,3 +2239,107 @@ details[open] summary {
 .lab-method {
   margin-top: 16px;
 }
+
+/* The search laboratory: the play page's solver dialog — the setup column,
+ * the metrics and status log beside it, the result panel beneath. */
+.solver-dialog {
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.solver-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.solver-head h2 {
+  margin: 0 0 4px;
+}
+
+.solver-head .muted {
+  margin: 0;
+}
+
+.solver-body {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+  align-items: start;
+}
+
+@media (max-width: 800px) {
+  .solver-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.solver-setup {
+  display: grid;
+  gap: 10px;
+}
+
+.solver-setup .fields {
+  display: grid;
+  gap: 10px;
+}
+
+.solver-side {
+  display: grid;
+  gap: 12px;
+}
+
+.solver-log-wrap h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.solver-log {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.solver-log li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.solver-log time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-subtle);
+  flex-shrink: 0;
+}
+
+.solver-result {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--sage-500);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.solver-result[hidden] {
+  display: none;
+}
+
+.solver-result h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.solver-result .muted {
+  margin: 0;
+  font-size: 12px;
+}

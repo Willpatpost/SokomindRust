@@ -124,6 +124,8 @@ test('a route that does not replay reports why and keeps the position', async ({
 
 test('finds a route through the in-browser engine', async ({ page }) => {
   await loaded(page);
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
   await page.click('#solve');
   await expect(page.locator('#search-status')).toContainText('1 remaining moves');
   await expect(page.locator('#search-status')).toContainText('Search complete.');
@@ -139,6 +141,8 @@ test('Stop ends a browser search and frees the controls', async ({ page }) => {
   await loaded(page);
   await page.goto('/#/play/huge');
   await expect(page.locator('#title')).toHaveText('Grand Hall');
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
   await page.selectOption('#mode', 'quality');
   await page.selectOption('#seconds', '30');
   await page.click('#solve');
@@ -154,6 +158,8 @@ test('Optimal mode proves the route move-optimal in the browser', async ({ page 
   await loaded(page);
   await page.goto('/#/play/beginner-detour');
   await expect(page.locator('#title')).toHaveText('The Detour');
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
   await page.selectOption('#mode', 'optimal');
   await page.click('#solve');
   await expect(page.locator('#search-status')).toHaveText('24 remaining moves · proven move-optimal from this position. Search complete.');
@@ -627,9 +633,14 @@ test('an earned frame wears on the board, and ratings mark their rows', async ({
 test('a proven optimum earns its star', async ({ page }) => {
   await loaded(page);
   // An optimal search from the start certifies the room's optimum.
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
   await page.selectOption('#mode', 'optimal');
   await page.click('#solve');
   await expect(page.locator('#search-status')).toHaveText('1 remaining moves · proven move-optimal from this position. Search complete.');
+  // The laboratory folds before the board's own controls answer.
+  await page.click('#solver-close');
+  await expect(page.locator('#solver')).not.toBeVisible();
   // Solving to exactly the certified count earns the star.
   await page.click('#reset');
   await page.keyboard.press('ArrowDown');
@@ -703,4 +714,24 @@ test('the solver lab runs and compares two searches', async ({ page }) => {
   await expect(page.locator('.lab-delta strong')).toHaveText('Same puzzle and starting state');
   await expect(page.locator('.lab-delta span')).toHaveText('Limits or mode differ');
   await expect(page.locator('.lab-compare-grid article')).toHaveCount(2);
+});
+
+test('the search laboratory logs its search and links the lab', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await loaded(page);
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toContainText('Search complete.');
+  // The status log lists what the solver said, newest first.
+  await expect(page.locator('#solver-log li')).not.toHaveCount(0);
+  await expect(page.locator('#solver-log li').first()).toContainText('Search complete.');
+  // The result panel names the route and its guarantee.
+  await expect(page.locator('#solver-result-title')).toHaveText('Route found');
+  await expect(page.locator('#solver-result-moves')).toHaveText('1');
+  await expect(page.locator('#solver-result-guarantee')).toHaveText('First route found');
+  // The laboratory's door to the lab carries the room and its position.
+  await page.click('#solver-lab-link');
+  await expect(page).toHaveURL(/#\/solver-lab\/ultra-tiny$/);
+  await expect(page.locator('#lab-note')).toHaveText('Initial position');
 });

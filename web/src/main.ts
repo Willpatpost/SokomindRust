@@ -104,12 +104,46 @@ function loaded(): Session {
   if (!session) throw new Error('No puzzle is loaded');
   return session;
 }
+/** The search laboratory's status log: what the solver said, and when —
+ * newest first, at most thirty entries. */
+interface LogEntry {
+  elapsedMs: number;
+  message: string;
+}
+const searchLog: LogEntry[] = [];
+/** The search's live elapsed time, as the log stamps its entries. */
+let searchElapsed = 0;
+
+function logSearch(message: string) {
+  // A running search repeats its status; the log records each change once.
+  if (searchLog[0]?.message === message) return;
+  searchLog.unshift({ elapsedMs: searchElapsed, message });
+  if (searchLog.length > 30) searchLog.pop();
+  $('solver-log').replaceChildren(
+    ...searchLog.map(entry => {
+      const item = document.createElement('li');
+      const time = document.createElement('time');
+      time.textContent = seconds(entry.elapsedMs);
+      const text = document.createElement('span');
+      text.textContent = entry.message;
+      item.append(time, text);
+      return item;
+    }),
+  );
+}
+
 const solver = new SolverClient({
   worker: () => new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' }),
   changed: updateButtons,
-  elapsed: ms => setText('elapsed', seconds(ms)),
+  elapsed: ms => {
+    searchElapsed = ms;
+    setText('elapsed', seconds(ms));
+  },
   update: applyUpdate,
-  status: setStatus,
+  status: value => {
+    setStatus(value);
+    logSearch(value);
+  },
   verify: (prefix, route) => {
     verify(loaded().puzzle.text, prefix + route);
   },
@@ -415,17 +449,52 @@ let searchedFromStart = false;
 
 // Every transport route is replayed on a scratch Rust game before display.
 function applyUpdate(update: SearchUpdate, route: string | undefined) {
-  const { expanded, generated, reservedBytes } = update.metrics;
+  const { expanded, generated, reservedBytes, best, proof } = update.metrics;
   setText('expanded', expanded.toLocaleString());
   setText('generated', generated.toLocaleString());
   setText('reserved', `${(reservedBytes / 1048576).toFixed(1)} MiB`);
-  setStatus(statusText(update.metrics, route));
+  setText('solver-best', best !== undefined ? `${best} moves` : '—');
+  const claim = statusText(update.metrics, route);
+  setStatus(claim);
+  logSearch(claim);
   // A start-to-finish search that finished with an optimal proof certifies
   // the room's optimum: the cache the completion dialog's star reads.
-  if (update.type === 'done' && update.metrics.proof.kind === 'optimal' && route !== undefined && searchedFromStart) {
+  if (update.type === 'done' && proof.kind === 'optimal' && route !== undefined && searchedFromStart) {
     const { puzzle } = loaded();
-    optimal.record(puzzle.id, puzzle.text, update.metrics.proof.moves);
+    optimal.record(puzzle.id, puzzle.text, proof.moves);
   }
+  if (update.type === 'done') showResult(update, route);
+}
+
+/** The laboratory's result panel: what the finished search returned, its
+ * guarantee, and — when the engine certified the room from its start — the
+ * star noting the optimum was saved. */
+function showResult(update: SearchUpdate, route: string | undefined) {
+  setText(
+    'solver-result-title',
+    update.metrics.status === 'solved' ? 'Route found' : update.metrics.status === 'cancelled' ? 'Search stopped' : 'No route returned',
+  );
+  setText('solver-result-summary', statusText(update.metrics, route));
+  setText('solver-result-guarantee', guarantee(update.metrics));
+  $('solver-optimal').hidden = !(update.metrics.proof.kind === 'optimal' && route !== undefined && searchedFromStart);
+  $('solver-result').hidden = false;
+  if (update.metrics.status !== 'solved' || route === undefined) {
+    setText('solver-result-moves', '—');
+    setText('solver-result-pushes', '—');
+    return;
+  }
+  const snapshot = verify(loaded().puzzle.text, solver.prefix + route);
+  setText('solver-result-moves', snapshot.moves.toLocaleString());
+  setText('solver-result-pushes', snapshot.pushes.toLocaleString());
+}
+
+/** What a finished search guarantees about its route, in the engine's own
+ * words. */
+function guarantee(metrics: SearchUpdate['metrics']): string {
+  if (metrics.proof.kind === 'optimal') return 'Proven optimal';
+  if (metrics.proof.kind === 'unsolvable') return 'Proven unsolvable';
+  if (metrics.proof.kind === 'bounded') return `Best found — within ${metrics.proof.upper - metrics.proof.lower} of optimal`;
+  return metrics.status === 'solved' ? 'First route found' : 'Best found before stopping';
 }
 function solve() {
   if (solver.busy) return;
@@ -441,8 +510,12 @@ function solve() {
     memoryMiB: Number(select('memory').value),
     maxStates: MAX_STATES,
   };
-  for (const metric of ['expanded', 'generated', 'reserved', 'elapsed']) setText(metric, '—');
+  for (const metric of ['expanded', 'generated', 'reserved', 'elapsed', 'solver-best']) setText(metric, '—');
+  searchLog.length = 0;
+  $('solver-log').replaceChildren();
+  $('solver-result').hidden = true;
   setStatus('Preparing search…');
+  logSearch('Preparing search…');
   void solver.solve(choice('engine', ENGINES), request);
 }
 
@@ -2469,6 +2542,18 @@ async function start() {
       button('replay-forward').click();
     }
   });
+  // The search laboratory: the play page's solver dialog, and its door to the lab.
+  button('open-solver').onclick = () => openDialog('solver');
+  button('solver-close').onclick = () => closeDialog('solver');
+  button('solver-lab-link').onclick = () => {
+    closeDialog('solver');
+    const actions = session?.game.actions() ?? '';
+    navigate(
+      actions === ''
+        ? { kind: 'solver-lab', puzzleId: loaded().puzzle.id }
+        : { kind: 'solver-lab', puzzleId: loaded().puzzle.id, actionLog: actions },
+    );
+  };
   button('hint').onclick = askHint;
   button('share').onclick = () => void share();
   button('random').onclick = () => {

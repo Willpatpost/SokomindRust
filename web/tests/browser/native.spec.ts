@@ -30,6 +30,8 @@ async function connected(page: import('@playwright/test').Page) {
 
 test('native engine solves through the server API', async ({ page }) => {
   await connected(page);
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
   await page.selectOption('#mode', 'optimal');
   await page.selectOption('#engine', 'native');
   const [request] = await Promise.all([page.waitForRequest('**/api/solve'), page.click('#solve')]);
