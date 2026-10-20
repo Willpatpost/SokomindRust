@@ -57,6 +57,38 @@ behavior for experiments; each is documented with its measurement in `docs/`:
   native thread pool: never a longer route, and shorter ones where
   the polish's budget dies mid-chain (docs/parallel-polish.md).
 
+## The web app
+
+The app is the ported face of the original SokomindSolver app: six hash-routed
+pages over the engine.
+
+- **Home** — the daily challenge with its run and seven-day history, the
+  solving streak, the guided journey, the recently cleared, and the way back
+  into the saved session;
+- **Puzzles** — the catalog by tier and collection, with search, favorites,
+  felt-difficulty marks and pagination;
+- **Play** — the board with hints, deadlock warnings, zen mode, the move
+  notation and timeline, the completion dialog, and share links that carry the
+  attempt;
+- **Editor** — local drafts, the paintable grid, the private playtest,
+  share-by-URL, and the procedural generator whose rooms the engine itself
+  certifies;
+- **Stats** — the aggregates, the activity heat map, achievements and
+  keepsakes, import/export, and the replay repository;
+- **Solver Lab** — A/B search experiments over one room and position, watched
+  step by step and compared side by side.
+
+The theme menu mixes the procedural sound — a master switch, the quiet
+soundscape, two volume sliders with previews — and `M` mutes or restores from
+anywhere. The app installs as a PWA: the service worker keeps the shell
+offline, and a new build offers itself through the update banner.
+
+The shipped footprint is 192.7 kB JS (57.4 kB gzip) + 52.7 kB CSS + 422.5 kB
+WASM ≈ 680 kB, all precached by the offline shell. The app adds no runtime
+dependencies beyond the pre-port set: no framework, no state library, no audio
+package — the synthesizer, the router and the IndexedDB layer are local
+modules.
+
 ## Full stack with Docker
 
 Run `docker compose up --build`. Open `http://127.0.0.1:8080`. To change a
@@ -123,19 +155,56 @@ Node image that `ARG NODE_VERSION` names, whose default must equal
 | `crates/search/examples/catalog.rs` | Reproducible native corpus: searches catalog puzzles and prints one JSON line per run, for the benchmarks and the parity check |
 | `crates/wasm` | Thin wasm-bindgen wrappers; scalar commands and typed-array snapshots |
 | `crates/server` | Axum/Tokio HTTP API behind NGINX: bounded and rate-limited native CPU jobs |
-| `web/src/main.ts` | Entry: loads the catalog and the WASM game, then wires input, board, solver, playback, and progress |
-| `web/src/board.ts` | `BoardView` canvas renderer |
+| `web/src/main.ts` | The entry: theme boot, the `onPage` registrations, the `bind*` wiring, `start()` |
+| `web/src/dom.ts` | The element getters and text setters every module shares |
+| `web/src/play.ts` | The play core: the session over the WASM game, the solver, playback, progress and timer clients, board and zoom, paint, score, finish, zen and pause, the laboratory's log and result panels, the hint, tap, share, and the engine-shared sound wrapper every move's cue rides |
+| `web/src/puzzles-pages.ts` | The puzzles route family: the tier grid, the collections, the filterable paginated list |
+| `web/src/home-page.ts` | The home dashboard: the saved session, progress, streaks, the daily, the journey, the recently cleared |
+| `web/src/stats-page.ts` | The stats route: aggregates, heat map, progress tools, and the progression showcase |
+| `web/src/replay-study.ts` | The replay study dialog, its playback, and its bindings |
+| `web/src/lab-page.ts` | The Solver Lab's UI over `lab.ts`'s model |
+| `web/src/editor-page.ts` | The editor page: drafts, the paintable grid, the playtest, share-by-URL |
+| `web/src/generator-page.ts` | The generator dialog: the room-forger over `generator.ts`'s model |
+| `web/src/audio-page.ts` | The sound menu the theme dialog mixes |
+| `web/src/offline-shell.ts` | The service worker registration and the update banner |
+| `web/src/achievements.ts` | The achievement definitions and their unlock checks over the journal |
+| `web/src/audio.ts` | The dependency-free Web Audio synthesizer and the move-cue translation |
+| `web/src/board.ts` | `BoardView` DOM-grid renderer: tiles, labels, dead marks, the ghost keeper, the blocked ripple |
+| `web/src/catalog.ts` | The catalog snapshot: entries, filtering, pagination, ratings, favorites, the daily pick |
+| `web/src/celebrate.ts` | The solve celebration, sized by the tier the solve earned |
+| `web/src/complete.ts` | The completion dialog's presentation: verdict, milestones, signed counts |
+| `web/src/dialog.ts` | The dialog helpers over `<dialog>` |
+| `web/src/editor.ts` | The editor's grid model: paint, flood fill, resize, drafts, the share codec |
+| `web/src/frames.ts` | The board-frame cosmetics an achievement unlocks |
+| `web/src/generator.ts` | The seeded room generator model: floor growth, scramble, tier reading |
+| `web/src/idb.ts` | The small IndexedDB wrapper |
 | `web/src/input.ts` | On-screen buttons, board swipes, and keyboard bindings |
+| `web/src/journal.ts` | The solve journal: dates, streaks, the daily run, import/export |
+| `web/src/journey.ts` | The guided journey's chapters and recommendations |
+| `web/src/lab.ts` | The lab's run records and comparisons |
+| `web/src/optimal.ts` | The certified-optimum cache the completion star reads |
 | `web/src/playback.ts` | Route replay state machine: idle, playing, paused |
+| `web/src/progress.ts` | `Progress`: the selected puzzle's session and replay-verified best route |
+| `web/src/protocol.ts` | Constants and message types that mirror the Rust side |
+| `web/src/replays.ts` | The replay repository and its replay-verified routes |
+| `web/src/router.ts` | The hash router: parsing, navigation, subscriptions |
+| `web/src/scheduler.ts` | Injectable clock, so tests can drive time |
+| `web/src/shell.ts` | The page shell: `onPage` registration and the play-hash helpers |
 | `web/src/solver-client.ts` | `SolverClient`: one search in the browser worker or on `/api/solve`, with a watchdog and cancellation; replays every route it receives and checks the proof against it |
 | `web/src/solver.worker.ts` | Module worker that runs `WasmSearch` in short slices and posts throttled progress and routes |
-| `web/src/verdict.ts` | The search status line: what is proven about the route on show, then how the search ended |
-| `web/src/progress.ts` | `Progress`: the selected puzzle's session and replay-verified best route |
+| `web/src/stats.ts` | The journal's aggregates and their formatting |
 | `web/src/storage.ts` | `localStorage` session and best routes |
+| `web/src/theme.ts` | The stored preferences: theme family, appearance, motion, sound |
+| `web/src/timer.ts` | The attempt clock: elapsed, pause, per-puzzle select |
+| `web/src/traces.ts` | Route traces: frame-by-frame states for study and playback |
 | `web/src/transport.ts` | Validating decoders for worker replies, `/api` replies, and the WASM snapshot and metrics ABI; the `/api/solve` request encoder |
-| `web/src/protocol.ts` | Constants and message types that mirror the Rust side |
-| `web/src/scheduler.ts` | Injectable clock, so tests can drive time |
-| `web/index.html`, `web/src/style.css` | Page markup and styles |
+| `web/src/verdict.ts` | The search status line: what is proven about the route on show, then how the search ended |
+| `web/src/walk.ts` | The shortest-walk builder behind taps and playtests |
+| `web/src/zoom.ts` | Pinch-zoom over the board, with clamped panning |
+| `web/index.html`, `web/src/style.css`, `web/src/styles/` | Page markup, styles, and the theme token sheets |
+| `web/public/` | The PWA face: the manifest, the brand icons, and `sw.js`, the revision-keyed service worker |
+| `web/tests/` | The three test layers: Node unit tests over the modules, the Playwright browser specs, the type-check project |
+| `scripts/asset-manifest.mjs` | The post-build digester: hashes the shell, lists the hashed assets, and stamps the worker's revision |
 | `data/puzzles.json` | Reference catalog snapshot, shared by frontend, tests, and benchmark corpus |
 | `deploy` | NGINX configuration |
 | `scripts` | npm helpers: toolchain lookup, WASM build, benchmark runner and gate, parity check, one-command validation |

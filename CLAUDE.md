@@ -605,27 +605,24 @@ Do not make the solver depend on frontend details.
 
 # Solver-first scope
 
-Current development emphasis is the solver.
+The solver is the product; the app is its surface.
 
-Do not spend significant effort redesigning:
+The 2026-10-19 order ported the original app's full UI/UX onto this engine —
+six pages, the editor and its generator, the replay study, the Solver Lab,
+procedural sound, and the offline install — touching neither solver. The app
+now stands at full strength as a directed product surface: app work happens
+on the user's direction, never as unsolicited polish.
 
-- visual styling;
-- animations;
-- layout;
-- cosmetic controls;
-- general UX polish;
-- frontend framework architecture;
+The solver remains the first priority for algorithmic work — search, proofs,
+pruning, heuristics, memory, and the measurements that justify them. A solver
+improvement is generally more valuable than any app change.
 
-unless the change is necessary to:
+Work on the app that serves the solver is good at any time:
 
-- expose a solver capability;
-- debug the solver;
-- test the solver;
-- benchmark the solver;
-- correctly represent solver state;
-- improve development or validation infrastructure.
-
-A solver improvement is generally more valuable than cosmetic polish at this stage.
+- exposing a solver capability;
+- debugging, testing, or benchmarking the solver;
+- correctly representing solver state or proof status;
+- improving development or validation infrastructure.
 
 ---
 
@@ -1058,9 +1055,13 @@ Do not rely solely on comments saying "change these together."
 
 # UI changes
 
-Keep UI changes functional and minimal unless explicitly asked to work on UX.
+The app's UI/UX is a directed surface, ported from the original app on the
+user's 2026-10-19 order and standing at full strength: the six pages, the
+editor with its generator and playtest, the replay study, the Solver Lab, the
+theme and sound menu, and the offline install.
 
-Good UI work at this stage includes:
+Changes to it happen on the user's direction. Good UI work remains what
+serves the solver:
 
 - exposing a new solver option;
 - showing useful solver diagnostics;
@@ -1068,8 +1069,6 @@ Good UI work at this stage includes:
 - enabling benchmarking/debugging;
 - preventing invalid configuration;
 - improving testability.
-
-Avoid spending solver-development time on cosmetic redesign.
 
 ---
 
