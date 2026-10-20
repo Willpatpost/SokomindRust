@@ -1,8 +1,9 @@
 /** The app's pages, as hash URLs: `#/`, `#/puzzles` with `/:difficulty` and
  * `/:difficulty/:collection` drill-downs whose lists carry `?page=N`,
- * `#/play/:id[?play=UDLR]`, `#/editor`, `#/stats` and `#/solver-lab`. The
- * editor, the statistics page and the lab are placeholders until their port
- * phases land; the rest carry behavior. */
+ * `#/play/:id[?play=UDLR]`, `#/editor`, `#/stats` and `#/solver-lab` with an
+ * optional `/:puzzleId[?play=UDLR]` — a bare lab route names no room, and the
+ * lab renders its default. The editor is a placeholder until its port phase
+ * lands; the rest carry behavior. */
 export type Route =
   | { kind: 'home' }
   | { kind: 'puzzles' }
@@ -11,11 +12,11 @@ export type Route =
   | { kind: 'play'; puzzleId: string; actionLog?: string }
   | { kind: 'editor' }
   | { kind: 'stats' }
-  | { kind: 'solver-lab' };
+  | { kind: 'solver-lab'; puzzleId: string; actionLog?: string };
 
 /** The `?play=` parameter's value, or undefined without one. Only U/D/L/R logs
- * can replay, but the route passes whatever was shared: the play page replays it
- * through the Rust game, which rejects a bad log. */
+ * can replay, but the route passes whatever was shared: the receiving page
+ * replays it through the Rust game, which rejects a bad log. */
 function logParameter(query: string): string | undefined {
   const value = new URLSearchParams(query).get('play');
   return value === null ? undefined : value;
@@ -38,7 +39,7 @@ export function parseHash(hash: string): Route {
     if (page === 'puzzles') return { kind: 'puzzles' };
     if (page === 'editor') return { kind: 'editor' };
     if (page === 'stats') return { kind: 'stats' };
-    if (page === 'solver-lab') return { kind: 'solver-lab' };
+    if (page === 'solver-lab') return { kind: 'solver-lab', puzzleId: '' };
   }
   if (page === 'puzzles' && (segments.length === 2 || segments.length === 3)) {
     const difficulty = decodeURIComponent(segments[1]!);
@@ -54,6 +55,11 @@ export function parseHash(hash: string): Route {
     const puzzleId = decodeURIComponent(segments[1]);
     const actionLog = logParameter(query);
     return actionLog === undefined ? { kind: 'play', puzzleId } : { kind: 'play', puzzleId, actionLog };
+  }
+  if (page === 'solver-lab' && segments.length === 2 && segments[1] !== '') {
+    const puzzleId = decodeURIComponent(segments[1]);
+    const actionLog = logParameter(query);
+    return actionLog === undefined ? { kind: 'solver-lab', puzzleId } : { kind: 'solver-lab', puzzleId, actionLog };
   }
   return { kind: 'home' };
 }
@@ -78,7 +84,7 @@ export function formatHash(next: Route): string {
     case 'stats':
       return '#/stats';
     case 'solver-lab':
-      return '#/solver-lab';
+      return `#/solver-lab${next.puzzleId === '' ? '' : `/${encodeURIComponent(next.puzzleId)}`}${next.actionLog === undefined ? '' : `?play=${next.actionLog}`}`;
     case 'play':
       return `#/play/${encodeURIComponent(next.puzzleId)}${next.actionLog === undefined ? '' : `?play=${next.actionLog}`}`;
   }
@@ -88,6 +94,7 @@ export function formatHash(next: Route): string {
 function sameRoute(a: Route, b: Route): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'play' && b.kind === 'play') return a.puzzleId === b.puzzleId && a.actionLog === b.actionLog;
+  if (a.kind === 'solver-lab' && b.kind === 'solver-lab') return a.puzzleId === b.puzzleId && a.actionLog === b.actionLog;
   if (a.kind === 'puzzles-difficulty' && b.kind === 'puzzles-difficulty') return a.difficulty === b.difficulty && a.page === b.page;
   if (a.kind === 'puzzles-collection' && b.kind === 'puzzles-collection')
     return a.difficulty === b.difficulty && a.collection === b.collection && a.page === b.page;
@@ -112,8 +119,8 @@ export function subscribe(listener: Listener): () => void {
   };
 }
 
-/** Navigates to `next` by writing the hash; the hashchange reports it. Setting the
- * hash a route already shows changes nothing, so re-navigating is safe. */
+/** Navigates to `next` by writing the hash; the hashchange reports it. Setting
+ * the hash a route already shows changes nothing, so re-navigating is safe. */
 export function navigate(next: Route): void {
   const hash = formatHash(next);
   if (location.hash !== hash) location.hash = hash;

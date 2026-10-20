@@ -11,7 +11,9 @@ test('every route formats to a hash that parses back to it', () => {
     { kind: 'puzzles-collection', difficulty: 'beginner', collection: 'Sokomind Generated', page: 2 },
     { kind: 'editor' },
     { kind: 'stats' },
-    { kind: 'solver-lab' },
+    { kind: 'solver-lab', puzzleId: '' },
+    { kind: 'solver-lab', puzzleId: 'huge' },
+    { kind: 'solver-lab', puzzleId: 'huge', actionLog: 'DDL' },
     { kind: 'play', puzzleId: 'ultra-tiny' },
     { kind: 'play', puzzleId: 'huge', actionLog: 'UDLR' },
     { kind: 'play', puzzleId: 'a puzzle id with spaces', actionLog: 'DD' },
@@ -20,7 +22,7 @@ test('every route formats to a hash that parses back to it', () => {
 });
 
 test('hashes without a known page are the home route', () => {
-  for (const hash of ['', '#', '#/', '#/garbage', '#/play', '#/play/', '#/play/a/b', '#/puzzles/a/b/c', '#/Puzzles']) {
+  for (const hash of ['', '#', '#/', '#/garbage', '#/play', '#/play/', '#/play/a/b', '#/puzzles/a/b/c', '#/solver-lab/a/b', '#/Puzzles']) {
     assert.deepEqual(parseHash(hash), { kind: 'home' }, hash);
   }
 });
@@ -47,4 +49,13 @@ test('a play hash carries its puzzle id and optional action log', () => {
   assert.deepEqual(parseHash('#/play/ultra-tiny?other=x'), { kind: 'play', puzzleId: 'ultra-tiny' });
   // The log passes through unvalidated; the play page replays it through Rust.
   assert.deepEqual(parseHash('#/play/x?play=whatever!'), { kind: 'play', puzzleId: 'x', actionLog: 'whatever!' });
+});
+
+test('a lab hash carries its room and optional action log, bare naming none', () => {
+  assert.deepEqual(parseHash('#/solver-lab'), { kind: 'solver-lab', puzzleId: '' });
+  assert.deepEqual(parseHash('#/solver-lab/huge'), { kind: 'solver-lab', puzzleId: 'huge' });
+  assert.deepEqual(parseHash('#/solver-lab/huge?play=DDL'), { kind: 'solver-lab', puzzleId: 'huge', actionLog: 'DDL' });
+  assert.deepEqual(parseHash('#/solver-lab/a%20puzzle'), { kind: 'solver-lab', puzzleId: 'a puzzle' });
+  // The log passes through unvalidated; the lab replays it through Rust.
+  assert.deepEqual(parseHash('#/solver-lab/x?play=whatever!'), { kind: 'solver-lab', puzzleId: 'x', actionLog: 'whatever!' });
 });

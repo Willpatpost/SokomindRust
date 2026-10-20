@@ -2018,3 +2018,224 @@ details[open] summary {
   font-size: 12px;
   color: var(--ink-subtle);
 }
+
+/* The Solver Lab: the workspace's layout — the setup and telemetry column,
+ * the playback panel with its path strip, and the run comparison. */
+.lab-intro {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.lab-intro label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  min-width: 260px;
+}
+
+.lab-intro .muted {
+  margin: 0;
+  font-size: 12px;
+}
+
+.lab-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .lab-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lab-column {
+  display: grid;
+  gap: 16px;
+}
+
+.lab-column .card {
+  margin-bottom: 0;
+}
+
+.lab-column .fields {
+  display: grid;
+  gap: 10px;
+}
+
+.lab-population {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.lab-population-row {
+  display: grid;
+  gap: 4px;
+}
+
+.lab-population-row > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.lab-population-row small {
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+
+.lab-population-row .bar-track {
+  height: 8px;
+}
+
+.lab-population-row .bar-fill {
+  background: var(--blue-500);
+}
+
+.lab-playback {
+  display: grid;
+  gap: 10px;
+}
+
+.lab-playback h2 {
+  margin: 0;
+}
+
+.lab-watch {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-800);
+}
+
+.lab-wrap {
+  max-height: 420px;
+}
+
+.lab-path {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.lab-path span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--paper-100);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.lab-path span[data-past] {
+  background: var(--sage-400);
+  border-color: var(--sage-400);
+  color: var(--paper-50);
+}
+
+.lab-path span[data-current] {
+  background: var(--blue-500);
+  border-color: var(--blue-500);
+  color: var(--paper-50);
+}
+
+.lab-playback .muted {
+  margin: 0;
+  font-size: 12px;
+}
+
+.lab-compare {
+  display: grid;
+  gap: 12px;
+}
+
+.lab-compare-selectors {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.lab-compare-selectors label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.lab-compare-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.lab-compare-grid article {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.lab-compare-grid p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.lab-compare-grid h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.lab-delta {
+  display: grid;
+  gap: 6px;
+}
+
+.lab-delta > strong {
+  font-size: 13px;
+}
+
+.lab-delta > span {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.lab-delta dl {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin: 0;
+}
+
+.lab-delta dl div {
+  display: grid;
+  gap: 2px;
+}
+
+.lab-delta dt {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.lab-delta dd {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lab-method {
+  margin-top: 16px;
+}

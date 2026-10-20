@@ -271,9 +271,115 @@
       <section data-page="solver-lab" hidden>
         <h1 tabindex="-1">Solver Lab</h1>
         <p class="muted">
-          The solver workspace arrives with the solver phase of the port. The play page's route card already searches every mode.
+          Compare how the engine's search modes explore the same legal position. Regular play keeps its compact Solve controls.
         </p>
-        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+        <div class="lab-intro">
+          <label
+            ><span>Puzzle</span
+            ><select id="lab-puzzle"></select
+          ></label>
+          <a id="lab-play" class="button" href="#/play/ultra-tiny">Play this position</a>
+          <span id="lab-note" class="muted"></span>
+        </div>
+        <div class="lab-workspace">
+          <div class="lab-column">
+            <section class="card">
+              <p class="eyebrow">EXPERIMENT</p>
+              <h2>Search setup</h2>
+              <div class="fields">
+                <label
+                  ><span>Mode</span
+                  ><select id="lab-mode"></select
+                ></label>
+                <label
+                  ><span>Time limit</span
+                  ><select id="lab-seconds"></select
+                ></label>
+                <label
+                  ><span>Memory limit</span
+                  ><select id="lab-memory"></select
+                ></label>
+                <label
+                  ><span>Run on</span
+                  ><select id="lab-engine"></select
+                ></label>
+              </div>
+              <p id="lab-mode-help" class="muted"></p>
+              <div class="actions">
+                <button id="lab-run" class="primary">Run search</button>
+                <button id="lab-cancel" disabled>Cancel search</button>
+              </div>
+              <p id="lab-status" role="status">Run a search to begin.</p>
+            </section>
+            <section class="card">
+              <p class="eyebrow">LIVE TELEMETRY</p>
+              <h2>State-space population</h2>
+              <div id="lab-population" class="lab-population"></div>
+              <dl class="metrics">
+                <div>
+                  <dt>Elapsed</dt>
+                  <dd id="lab-elapsed">—</dd>
+                </div>
+                <div>
+                  <dt>Expansion rate</dt>
+                  <dd id="lab-rate">—</dd>
+                </div>
+                <div>
+                  <dt>Memory ceiling</dt>
+                  <dd id="lab-reserved">—</dd>
+                </div>
+                <div>
+                  <dt>Lower bound</dt>
+                  <dd id="lab-lower">—</dd>
+                </div>
+                <div>
+                  <dt>Best so far</dt>
+                  <dd id="lab-best">—</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+          <section class="card lab-playback">
+            <p class="eyebrow">REPLAY-VERIFIED OUTPUT</p>
+            <h2>Solution path</h2>
+            <span id="lab-watched-label" class="showcase-tally">No run selected</span>
+            <label class="lab-watch"
+              ><span>Watch result</span
+              ><select id="lab-watch"></select
+            ></label>
+            <div class="board-wrap lab-wrap">
+              <div id="lab-board" role="img"></div>
+            </div>
+            <div id="lab-path" class="lab-path" role="img" aria-label="Solution directions"></div>
+            <input id="lab-seek" type="range" min="0" max="0" value="0" aria-label="Solution playback position" />
+            <div class="replay-controls" role="toolbar" aria-label="Playback controls">
+              <button id="lab-first" aria-label="Go to playback start">|←</button>
+              <button id="lab-back" aria-label="Previous playback move">←</button>
+              <button id="lab-play-route">Play route</button>
+              <button id="lab-forward" aria-label="Next playback move">→</button>
+              <button id="lab-last" aria-label="Go to playback end">→|</button>
+              <label class="replay-speed"
+                ><span>Speed</span
+                ><select id="lab-speed"></select
+              ></label>
+            </div>
+            <p id="lab-position" class="muted" role="status"></p>
+          </section>
+        </div>
+        <section class="card">
+          <p class="eyebrow">RETAINED IN THIS WORKSPACE</p>
+          <h2>Side-by-side run comparison</h2>
+          <span id="lab-runs" class="showcase-tally">0 of 6 runs</span>
+          <div id="lab-compare" class="lab-compare"></div>
+        </section>
+        <section class="rules lab-method">
+          <h2>How to read the Lab</h2>
+          <p>
+            Expanded is a state removed from the frontier for successor generation. Generated counts produced successors before
+            deduplication. The memory ceiling is the search's accounted reservation, not browser process memory. Pushes describe a returned
+            route; every search minimizes or prioritizes total moves according to its stated guarantee.
+          </p>
+        </section>
       </section>
     </main>
     <!-- The completion dialog and the shortcuts list; dialog.ts opens them as native modals. -->

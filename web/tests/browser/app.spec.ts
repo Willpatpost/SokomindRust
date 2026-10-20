@@ -681,3 +681,26 @@ test('the replay study compares two routes', async ({ page }) => {
   await page.click('#replay-close');
   await expect(page.locator('#replay')).not.toBeVisible();
 });
+
+test('the solver lab runs and compares two searches', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/solver-lab/ultra-tiny');
+  await expect(page.locator('#lab-note')).toHaveText('Initial position');
+  await expect(page.locator('#lab-puzzle')).toHaveValue('ultra-tiny');
+  await expect(page.locator('#lab-play')).toHaveAttribute('href', '#/play/ultra-tiny');
+  // A fast search returns a route the lab can watch and step through.
+  await page.click('#lab-run');
+  await expect(page.locator('#lab-watch option')).toHaveCount(1);
+  await expect(page.locator('#lab-watched-label')).toContainText('fast · browser');
+  await expect(page.locator('#lab-position')).toContainText('Move 0 of ');
+  await page.click('#lab-forward');
+  await expect(page.locator('#lab-position')).toContainText('Move 1 of ');
+  // A second run under another mode gives the comparison its two sides.
+  await page.selectOption('#lab-mode', 'optimal');
+  await page.click('#lab-run');
+  await expect(page.locator('#lab-watch option')).toHaveCount(2);
+  await expect(page.locator('#lab-runs')).toHaveText('2 of 6 runs');
+  await expect(page.locator('.lab-delta strong')).toHaveText('Same puzzle and starting state');
+  await expect(page.locator('.lab-delta span')).toHaveText('Limits or mode differ');
+  await expect(page.locator('.lab-compare-grid article')).toHaveCount(2);
+});
