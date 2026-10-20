@@ -313,13 +313,17 @@ function togglePause() {
   paused = !paused;
   $('pause').hidden = !paused;
   if (paused) timer.pause();
-  else if (!session?.state.solved) timer.run();
+  else if (session !== undefined && !session.state.solved && session.state.moves > 0) timer.run();
 }
 
 function changed() {
   render();
   const { game, state } = loaded();
   if (!state.solved) {
+    // The clock runs only while attempting: the first move starts it, a
+    // replayed route or a return to the start holds it, and a solve ends it.
+    if (playback.active || state.moves === 0) timer.pause();
+    else timer.run();
     message(MOVE_HINT);
     progress.session(game.actions(), true);
     return;
@@ -392,8 +396,10 @@ function load(puzzle: Entry, actions = '') {
   paint(next);
   progress.select(next.puzzle.id, next.puzzle.text);
   timer.select(next.puzzle.id);
-  // A restored solve holds its time; the clock only runs while playing.
-  if (next.state.solved) timer.pause();
+  // The clock runs only while attempting: a fresh board holds it until its
+  // first move, a restored session runs from its restored moves, and a
+  // restored solve holds its time.
+  if (next.state.solved || next.state.moves === 0) timer.pause();
   message(actions ? 'Session restored by replaying your moves.' : MOVE_HINT);
   saveSession();
 }

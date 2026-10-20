@@ -11,9 +11,10 @@ export function clock(ms: number): string {
   return hours === 0 ? `${minutes}:${two(seconds)}` : `${hours}:${two(minutes)}:${two(seconds)}`;
 }
 
-/** A puzzle's accumulated play time. The clock runs while its puzzle is loaded,
- * pauses while the puzzle is solved or the tab is hidden, and keeps what it
- * accumulated in sessionStorage under the puzzle, so a reload resumes it. */
+/** A puzzle's accumulated play time. The page starts and holds the clock by
+ * its attempt policy — first move to solve, replays held, tab hidden — and
+ * keeps what it accumulated in sessionStorage under the puzzle, so a reload
+ * resumes it. */
 export class Timer {
   private scheduler: Scheduler;
   private show: (ms: number) => void;

@@ -187,7 +187,7 @@ async function start() {
   button('reset').onclick = () => {
     invalidate();
     loaded().game.reset();
-    // A restart is a fresh attempt: its clock starts over.
+    // A restart is a fresh attempt: its clock starts over on the next move.
     timer.reset(loaded().puzzle.id);
     void sound.playCue('reset');
     changed();
@@ -371,7 +371,7 @@ async function start() {
     if (document.visibilityState === 'hidden') {
       saveSession();
       timer.pause();
-    } else if (!session?.state.solved) timer.run();
+    } else if (session !== undefined && !session.state.solved && session.state.moves > 0) timer.run();
   });
   void probeServer();
 }

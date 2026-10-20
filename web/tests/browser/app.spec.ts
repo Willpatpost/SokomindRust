@@ -302,6 +302,23 @@ test('pause locks input and the clock until P resumes', async ({ page }) => {
   await expect(page.locator('#moves')).toHaveText('1');
 });
 
+// The clock runs only while attempting: a fresh board holds it, the first
+// move starts it, and a restart's fresh clock waits for that attempt's first
+// move too, so it can never freeze on a restart again.
+test('the clock starts on the first move and starts over after a restart', async ({ page }) => {
+  await loaded(page);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#timer')).toHaveText('0:00');
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => page.locator('#timer').textContent(), { timeout: 4000 }).not.toBe('0:00');
+  await page.click('#reset');
+  await expect(page.locator('#timer')).toHaveText('0:00');
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#timer')).toHaveText('0:00');
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => page.locator('#timer').textContent(), { timeout: 4000 }).not.toBe('0:00');
+});
+
 test('the bracket keys walk puzzles and ? lists the shortcuts', async ({ page }) => {
   await loaded(page);
   await page.keyboard.press(']');
