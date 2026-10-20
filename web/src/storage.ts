@@ -33,6 +33,25 @@ export function write(key: string, value: unknown): boolean {
     return false;
   }
 }
+/** Every name the app stores something under, for the resets that clear a
+ * family of values without knowing its ids. */
+export function names(): string[] {
+  try {
+    return Object.keys(localStorage)
+      .filter(key => key.startsWith(prefix))
+      .map(key => key.slice(prefix.length));
+  } catch {
+    return [];
+  }
+}
+/** Removes the value stored under `name`; a blocked store keeps it. */
+export function remove(name: string): void {
+  try {
+    localStorage.removeItem(prefix + name);
+  } catch {
+    /* A blocked store keeps the value; the reset still clears what it can. */
+  }
+}
 /** The saved session, or null when none is stored or it is malformed. */
 export function session(): SavedSession | null {
   const v = read('session') as Partial<SavedSession> | null;

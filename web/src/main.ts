@@ -36,6 +36,7 @@ import { decodeHealth, decodeSnapshot } from './transport.ts';
 import { Playback } from './playback.ts';
 import { Progress } from './progress.ts';
 import * as journal from './journal.ts';
+import * as stats from './stats.ts';
 import { statusText } from './verdict.ts';
 
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
@@ -861,6 +862,320 @@ function syncHome() {
   $('home-dash').replaceChildren(...parts);
 }
 
+/** Renders the stats route: the aggregates over the journal and the stored
+ * bests, the activity heat map, and the progress tools — copy, export,
+ * import with its merge summary, and the reset behind three steps. */
+function renderStats() {
+  const body = $('stats-body');
+  const book = journal.load();
+  const a = stats.aggregates(book);
+  const note = (text: string) => {
+    const live = document.getElementById('stats-status');
+    if (live) live.textContent = text;
+  };
+
+  const tools = document.createElement('div');
+  tools.className = 'stats-tools';
+  const copy = document.createElement('button');
+  copy.id = 'stats-copy';
+  copy.textContent = 'Copy stats';
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(stats.statsText(a));
+      copy.textContent = 'Copied!';
+      setTimeout(() => {
+        copy.textContent = 'Copy stats';
+      }, 2000);
+    } catch {
+      note('Clipboard is unavailable in this browser.');
+    }
+  };
+  const exportProgress = document.createElement('button');
+  exportProgress.id = 'stats-export';
+  exportProgress.textContent = 'Export progress';
+  exportProgress.onclick = () => {
+    const blob = new Blob([JSON.stringify(book, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sokomind-progress-${journal.dayKey(new Date())}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const importLabel = document.createElement('button');
+  importLabel.id = 'stats-import';
+  importLabel.textContent = 'Import progress';
+  const file = document.createElement('input');
+  file.id = 'stats-file';
+  file.type = 'file';
+  file.accept = '.json,application/json';
+  file.hidden = true;
+  importLabel.onclick = () => file.click();
+  file.onchange = async () => {
+    const chosen = file.files?.[0];
+    file.value = '';
+    if (!chosen) return;
+    const result = journal.imported(await chosen.text());
+    if (!result.ok) {
+      note(result.error);
+      return;
+    }
+    const current = journal.load();
+    const summary = journal.summarizeMerge(current, result.journal);
+    storage.write('journal', journal.merge(current, result.journal));
+    renderStats();
+    note(
+      `Imported: ${summary.added} added, ${summary.improved} improved, ${summary.unchanged} unchanged, `
+        + `${summary.rejected + result.rejected} rejected, ${result.invalid} invalid.`,
+    );
+  };
+  const status = document.createElement('p');
+  status.id = 'stats-status';
+  status.setAttribute('role', 'status');
+  tools.append(copy, exportProgress, importLabel, file, status);
+
+  if (a.solved === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'Solve some rooms to fill in your statistics. An import still works.';
+    body.replaceChildren(tools, empty);
+    return;
+  }
+
+  const card = (label: string, big: string, sub?: string, bigId?: string): HTMLElement => {
+    const cardEl = document.createElement('div');
+    cardEl.className = 'card stat-card';
+    const eyebrow = document.createElement('p');
+    eyebrow.className = 'eyebrow';
+    eyebrow.textContent = label;
+    const value = document.createElement('span');
+    value.className = 'stat-big';
+    if (bigId !== undefined) value.id = bigId;
+    value.textContent = big;
+    cardEl.append(eyebrow, value);
+    if (sub !== undefined) {
+      const line = document.createElement('span');
+      line.className = 'stat-sub';
+      line.textContent = sub;
+      cardEl.append(line);
+    }
+    return cardEl;
+  };
+  const grid = document.createElement('div');
+  grid.className = 'stats-grid';
+  grid.append(
+    card('Rooms solved', String(a.solved), `of ${a.total} (${Math.round(a.completion)}%)`, 'stats-solved'),
+    card('Total moves', a.moves.toLocaleString(), `${a.pushes.toLocaleString()} pushes`),
+    card('Avg pushes per room', a.averagePushes.toFixed(1)),
+    card(
+      'Streak',
+      String(a.streak.current),
+      `${a.streak.current === 1 ? 'day' : 'days'} current${a.streak.longest > 0 ? ` · ${a.streak.longest} best` : ''}`,
+    ),
+    a.elapsedMs > 0
+      ? card('Time played', stats.formatDuration(a.elapsedMs))
+      : card('Estimated time played', stats.formatDuration(a.recorded * 90_000), '~90s per room average'),
+  );
+  if (a.efficiency)
+    grid.append(card('Best efficiency', `${a.efficiency.pushes}/${a.efficiency.boxes}`, `pushes/boxes on ${a.efficiency.title}`));
+
+  // The donut: one arc per solved tier, the count at its center, a legend beside it.
+  const donutCard = document.createElement('div');
+  donutCard.className = 'card stat-card wide';
+  const donutLabel = document.createElement('p');
+  donutLabel.className = 'eyebrow';
+  donutLabel.textContent = 'Solved by difficulty';
+  const donutRow = document.createElement('div');
+  donutRow.className = 'donut-row';
+  const donut = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  donut.setAttribute('viewBox', '0 0 100 100');
+  donut.classList.add('donut');
+  const circumference = 2 * Math.PI * 40;
+  const solvedTiers = a.byDifficulty.filter(tier => tier.solved > 0);
+  let offset = 0;
+  for (const tier of solvedTiers) {
+    const dash = (tier.solved / a.solved) * circumference;
+    const segment = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    segment.setAttribute('cx', '50');
+    segment.setAttribute('cy', '50');
+    segment.setAttribute('r', '40');
+    segment.setAttribute('fill', 'none');
+    segment.setAttribute('stroke', stats.TIER_COLORS[tier.difficulty] ?? 'var(--ink-700)');
+    segment.setAttribute('stroke-width', '16');
+    segment.setAttribute('stroke-dasharray', `${dash} ${circumference - dash}`);
+    segment.setAttribute('stroke-dashoffset', String(-offset));
+    segment.setAttribute('transform', 'rotate(-90 50 50)');
+    offset += dash;
+    donut.append(segment);
+  }
+  const count = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  count.setAttribute('x', '50');
+  count.setAttribute('y', '47');
+  count.setAttribute('text-anchor', 'middle');
+  count.setAttribute('class', 'donut-center');
+  count.textContent = String(a.solved);
+  const word = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  word.setAttribute('x', '50');
+  word.setAttribute('y', '59');
+  word.setAttribute('text-anchor', 'middle');
+  word.setAttribute('class', 'donut-label');
+  word.textContent = 'solved';
+  donut.append(count, word);
+  const legend = document.createElement('div');
+  legend.className = 'donut-legend';
+  for (const tier of solvedTiers) {
+    const row = document.createElement('div');
+    row.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'legend-dot';
+    dot.style.background = stats.TIER_COLORS[tier.difficulty] ?? 'var(--ink-700)';
+    const name = document.createElement('span');
+    name.textContent = tier.difficulty;
+    const value = document.createElement('span');
+    value.className = 'legend-value';
+    value.textContent = String(tier.solved);
+    row.append(dot, name, value);
+    legend.append(row);
+  }
+  donutRow.append(donut, legend);
+  donutCard.append(donutLabel, donutRow);
+  grid.append(donutCard);
+
+  // The bars: each tier's completion, the track sized by the tier's room count.
+  const barsCard = document.createElement('div');
+  barsCard.className = 'card stat-card wide';
+  const barsLabel = document.createElement('p');
+  barsLabel.className = 'eyebrow';
+  barsLabel.textContent = 'Completion by difficulty';
+  const bars = document.createElement('div');
+  bars.className = 'bar-chart';
+  const maxTotal = Math.max(...a.byDifficulty.map(tier => tier.total), 1);
+  for (const tier of a.byDifficulty) {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const name = document.createElement('span');
+    name.className = 'bar-label';
+    name.textContent = tier.difficulty;
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+    track.style.width = `${Math.round((tier.total / maxTotal) * 100)}%`;
+    const fill = document.createElement('span');
+    fill.className = 'bar-fill';
+    fill.style.width = `${tier.total === 0 ? 0 : Math.round((tier.solved / tier.total) * 100)}%`;
+    fill.style.background = stats.TIER_COLORS[tier.difficulty] ?? 'var(--ink-700)';
+    track.append(fill);
+    const value = document.createElement('span');
+    value.className = 'bar-value';
+    value.textContent = `${tier.solved}/${tier.total}`;
+    row.append(name, track, value);
+    bars.append(row);
+  }
+  barsCard.append(barsLabel, bars);
+  grid.append(barsCard);
+
+  // The heat map: the last 90 days, one cell per day, five levels deep.
+  const heatCard = document.createElement('div');
+  heatCard.className = 'card stat-card wide';
+  const heatLabel = document.createElement('p');
+  heatLabel.className = 'eyebrow';
+  heatLabel.textContent = 'Activity — last 90 days';
+  const cells = journal.heat(book);
+  const heatGrid = document.createElement('div');
+  heatGrid.className = 'heat-grid';
+  heatGrid.setAttribute('role', 'img');
+  heatGrid.setAttribute('aria-label', `Activity over the last 90 days: ${cells.reduce((sum, cell) => sum + cell.count, 0)} rooms cleared`);
+  for (const cell of cells) {
+    const day = document.createElement('span');
+    day.className = 'heat-cell';
+    const level = stats.heatLevel(cell.count);
+    if (level > 0) day.dataset.level = String(level);
+    day.title = `${cell.key}: ${cell.count} cleared`;
+    heatGrid.append(day);
+  }
+  const heatLegend = document.createElement('div');
+  heatLegend.className = 'heat-legend';
+  const less = document.createElement('span');
+  less.className = 'heat-word';
+  less.textContent = 'Less';
+  heatLegend.append(less);
+  for (let level = 0; level <= 4; level++) {
+    const step = document.createElement('span');
+    step.className = 'heat-cell';
+    if (level > 0) step.dataset.level = String(level);
+    heatLegend.append(step);
+  }
+  const more = document.createElement('span');
+  more.className = 'heat-word';
+  more.textContent = 'More';
+  heatLegend.append(more);
+  heatCard.append(heatLabel, heatGrid, heatLegend);
+  grid.append(heatCard);
+
+  // The danger zone: the reset asks three times, the last by name.
+  const danger = document.createElement('div');
+  danger.className = 'card stat-card wide danger';
+  const dangerLabel = document.createElement('p');
+  dangerLabel.className = 'eyebrow';
+  dangerLabel.textContent = 'Danger zone';
+  const zone = document.createElement('div');
+  zone.className = 'danger-zone';
+  const draw = (step: 'idle' | 'confirm' | 'typing') => {
+    zone.replaceChildren();
+    if (step === 'idle') {
+      const start = document.createElement('button');
+      start.id = 'stats-reset';
+      start.textContent = 'Reset all progress';
+      start.onclick = () => draw('confirm');
+      zone.append(start);
+      return;
+    }
+    if (step === 'confirm') {
+      const warning = document.createElement('p');
+      warning.className = 'muted';
+      warning.textContent =
+        'This permanently deletes your solved rooms, statistics and daily history from this browser. Your theme, favorites and ratings stay.';
+      const go = document.createElement('button');
+      go.textContent = 'I understand, continue';
+      go.onclick = () => draw('typing');
+      const cancel = document.createElement('button');
+      cancel.textContent = 'Cancel';
+      cancel.onclick = () => draw('idle');
+      zone.append(warning, go, cancel);
+      return;
+    }
+    const ask = document.createElement('p');
+    ask.className = 'muted';
+    const strong = document.createElement('strong');
+    strong.textContent = 'RESET';
+    ask.append('Type ', strong, ' to confirm:');
+    const input = document.createElement('input');
+    input.id = 'stats-reset-input';
+    input.type = 'text';
+    input.spellcheck = false;
+    const go = document.createElement('button');
+    go.id = 'stats-reset';
+    go.textContent = 'Permanently reset progress';
+    go.disabled = true;
+    input.oninput = () => {
+      go.disabled = input.value !== 'RESET';
+    };
+    go.onclick = () => {
+      journal.reset();
+      for (const name of storage.names()) if (name.startsWith('best.')) storage.remove(name);
+      navigate({ kind: 'home' });
+    };
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.onclick = () => draw('idle');
+    zone.append(ask, input, go, cancel);
+  };
+  draw('idle');
+  danger.append(dangerLabel, zone);
+  grid.append(danger);
+
+  body.replaceChildren(tools, grid);
+}
+
 /** The theme menu's labels; the values are theme.ts's lists. */
 const FAMILY_LABELS: Record<theme.ThemeFamily, string> = {
   'cozy-study': 'Cozy study',
@@ -912,6 +1227,7 @@ async function start() {
   });
   onPage('home', syncHome);
   onPage('puzzles', renderPuzzles);
+  onPage('stats', renderStats);
   // Leaving the play page stops its search and playback; the session keeps saving.
   subscribe(next => {
     if (next.kind !== 'play') invalidate();

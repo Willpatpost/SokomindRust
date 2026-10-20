@@ -1,5 +1,5 @@
 import * as storage from './storage.ts';
-import { daily } from './catalog.ts';
+import { daily, ENTRIES } from './catalog.ts';
 
 /** The completion journal: every room's best clear with its date, each day's
  * daily run, and the rooms cleared on each day — the record the streaks, the
@@ -97,18 +97,24 @@ function normalizeActivity(value: unknown): Record<string, string[]> {
   return activity;
 }
 
-/** The journal in browser storage, or an empty one when nothing valid is
- * stored: a malformed field reads as absent, never as a crash. */
-export function load(): Journal {
-  const value = storage.read('journal') as Partial<Journal> | null;
+/** The journal `value` names, or an empty one: a malformed field reads as
+ * absent, never as a crash. */
+function fromValue(value: unknown): Journal {
   if (!value || typeof value !== 'object') return { cleared: {}, daily: {}, activity: {} };
+  const source = value as Partial<Journal>;
   const cleared: Record<string, Clear> = {};
-  if (value.cleared && typeof value.cleared === 'object')
-    for (const [id, record] of Object.entries(value.cleared)) if (isClear(record)) cleared[id] = record;
+  if (source.cleared && typeof source.cleared === 'object')
+    for (const [id, record] of Object.entries(source.cleared)) if (isClear(record)) cleared[id] = record;
   const dailyRuns: Record<string, DailyClear> = {};
-  if (value.daily && typeof value.daily === 'object')
-    for (const [key, record] of Object.entries(value.daily)) if (isDayKey(key) && isDailyClear(record)) dailyRuns[key] = record;
-  return { cleared, daily: dailyRuns, activity: normalizeActivity(value.activity) };
+  if (source.daily && typeof source.daily === 'object')
+    for (const [key, record] of Object.entries(source.daily)) if (isDayKey(key) && isDailyClear(record)) dailyRuns[key] = record;
+  return { cleared, daily: dailyRuns, activity: normalizeActivity(source.activity) };
+}
+
+/** The journal in browser storage, or an empty one when nothing valid is
+ * stored. */
+export function load(): Journal {
+  return fromValue(storage.read('journal'));
 }
 
 /** Adds `id` to its day's activity, then bounds the whole activity record. */
@@ -157,6 +163,120 @@ export function keepDaily(id: string, now: Date = new Date()): Journal {
   const next = recordDaily(load(), id, now);
   storage.write('journal', next);
   return next;
+}
+
+/** A progress file's read: the journal it holds, with the records it lost on
+ * the way, or why it cannot be one. */
+export type ImportResult = { ok: true; journal: Journal; invalid: number; rejected: number } | { ok: false; error: string };
+
+/** How many bytes a progress file may carry, and how many records it may
+ * hold, so a stray file cannot balloon the store. */
+const MAX_IMPORT_BYTES = 1_000_000;
+const MAX_IMPORT_RECORDS = MAX_ACTIVITY_ENTRIES + MAX_ACTIVITY_DAYS + 10_000;
+
+/** Reads a progress file's text: its records keep only the catalog's rooms,
+ * and what the file loses — malformed fields, unknown rooms — is counted, so
+ * the import can say what it took in. */
+export function imported(text: string): ImportResult {
+  if (new TextEncoder().encode(text).byteLength > MAX_IMPORT_BYTES)
+    return { ok: false, error: 'That file is too large to be a progress file.' };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'That file does not hold valid progress.' };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'That file does not hold valid progress.' };
+  const source = raw as Partial<Journal>;
+  if (!source.cleared || typeof source.cleared !== 'object' || Array.isArray(source.cleared))
+    return { ok: false, error: 'That file does not hold valid progress.' };
+  const rawCleared = Object.keys(source.cleared).length;
+  const rawDaily = source.daily && typeof source.daily === 'object' ? Object.keys(source.daily).length : 0;
+  const rawActivity =
+    source.activity && typeof source.activity === 'object' && !Array.isArray(source.activity)
+      ? Object.values(source.activity).reduce((count, rooms) => count + (Array.isArray(rooms) ? rooms.length : 1), 0)
+      : 0;
+  if (rawCleared + rawDaily + rawActivity > MAX_IMPORT_RECORDS) return { ok: false, error: 'That progress file holds too many records.' };
+  const parsed = fromValue(raw);
+  const validCleared = Object.keys(parsed.cleared).length;
+  const validDaily = Object.keys(parsed.daily).length;
+  const validActivity = Object.values(parsed.activity).reduce((count, rooms) => count + rooms.length, 0);
+  if (validCleared + validDaily + validActivity === 0) return { ok: false, error: 'That file holds no valid progress records.' };
+  const rooms = new Set(ENTRIES.map(entry => entry.id));
+  const cleared: Record<string, Clear> = {};
+  for (const [id, clear] of Object.entries(parsed.cleared)) if (rooms.has(id)) cleared[id] = clear;
+  const dailyRuns: Record<string, DailyClear> = {};
+  for (const [key, entry] of Object.entries(parsed.daily)) if (rooms.has(entry.id)) dailyRuns[key] = entry;
+  const activity: Record<string, string[]> = {};
+  for (const [key, ids] of Object.entries(parsed.activity)) {
+    const kept = ids.filter(id => rooms.has(id));
+    if (kept.length > 0) activity[key] = kept;
+  }
+  const keptCount =
+    Object.keys(cleared).length + Object.keys(dailyRuns).length + Object.values(activity).reduce((count, ids) => count + ids.length, 0);
+  if (keptCount === 0) return { ok: false, error: 'No matching rooms found in that file.' };
+  return {
+    ok: true,
+    journal: { cleared, daily: dailyRuns, activity: normalizeActivity(activity) },
+    invalid: Math.max(0, rawCleared + rawDaily + rawActivity - validCleared - validDaily - validActivity),
+    rejected: validCleared + validDaily + validActivity - keptCount,
+  };
+}
+
+/** Merges an imported journal into the current one: a better clear takes the
+ * room's record, a day's standing daily clear stays, and the activity unions. */
+export function merge(current: Journal, incoming: Journal): Journal {
+  const cleared: Record<string, Clear> = { ...current.cleared };
+  for (const [id, clear] of Object.entries(incoming.cleared)) {
+    const old = cleared[id];
+    if (!old || clear.moves < old.moves || (clear.moves === old.moves && clear.pushes < old.pushes)) cleared[id] = clear;
+  }
+  const dailyRuns: Record<string, DailyClear> = { ...current.daily };
+  for (const [key, entry] of Object.entries(incoming.daily)) if (dailyRuns[key] === undefined) dailyRuns[key] = entry;
+  const activity: Record<string, string[]> = { ...current.activity };
+  for (const [key, rooms] of Object.entries(incoming.activity)) activity[key] = [...new Set([...(activity[key] ?? []), ...rooms])];
+  return { cleared, daily: dailyRuns, activity: normalizeActivity(activity) };
+}
+
+/** The tally an import reports over the journal it merges into: what it
+ * adds, improves, leaves as it stands and turns away. */
+export interface MergeSummary {
+  added: number;
+  improved: number;
+  unchanged: number;
+  rejected: number;
+}
+
+export function summarizeMerge(current: Journal, incoming: Journal): MergeSummary {
+  let added = 0;
+  let improved = 0;
+  let unchanged = 0;
+  let rejected = 0;
+  for (const [id, clear] of Object.entries(incoming.cleared)) {
+    const old = current.cleared[id];
+    if (!old) added++;
+    else if (clear.moves < old.moves || (clear.moves === old.moves && clear.pushes < old.pushes)) improved++;
+    else if (
+      clear.moves === old.moves
+      && clear.pushes === old.pushes
+      && clear.clearedAt === old.clearedAt
+      && clear.elapsedMs === old.elapsedMs
+    )
+      unchanged++;
+    else rejected++;
+  }
+  for (const [key, entry] of Object.entries(incoming.daily)) {
+    const old = current.daily[key];
+    if (!old) added++;
+    else if (old.id === entry.id && old.at === entry.at) unchanged++;
+    else rejected++;
+  }
+  return { added, improved, unchanged, rejected };
+}
+
+/** Clears the journal in browser storage: the reset's progress side. */
+export function reset(): void {
+  storage.write('journal', { cleared: {}, daily: {}, activity: {} });
 }
 
 /** The daily run: consecutive UTC days, ending today, whose daily room was

@@ -10,12 +10,14 @@ const DAY = 86_400_000;
 /** A fixed present: noon UTC, so every day arithmetic stays inside its day. */
 const NOW = new Date('2026-10-20T12:00:00.000Z');
 const at = (back: number) => new Date(NOW.getTime() - back * DAY);
+/** The ISO stamp `back` days ago, as the journal stores its dates. */
+const stamp = (back: number) => at(back).toISOString();
 const keyAt = (back: number) => journal.dayKey(at(back));
 /** The room the daily assigns to `back`'s day, as the journal's streaks read it. */
 const pick = (back: number) => daily(at(back).getTime()).id;
 const runs = (backs: number[]): journal.Journal => {
   const dailyRuns: Record<string, journal.DailyClear> = {};
-  for (const back of backs) dailyRuns[keyAt(back)] = { id: pick(back), at: at(back).toISOString() };
+  for (const back of backs) dailyRuns[keyAt(back)] = { id: pick(back), at: stamp(back) };
   return { cleared: {}, daily: dailyRuns, activity: {} };
 };
 const active = (...backs: number[]): journal.Journal => {
@@ -181,4 +183,113 @@ test('timeAgo reads in minutes, hours and days', () => {
   assert.equal(journal.timeAgo('2026-10-20T11:55:00.000Z', now), '5m ago');
   assert.equal(journal.timeAgo('2026-10-20T09:00:00.000Z', now), '3h ago');
   assert.equal(journal.timeAgo('2026-10-18T12:00:00.000Z', now), '2d ago');
+});
+
+test('an import keeps the catalog’s rooms and names what it loses', () => {
+  const room = pick(0);
+  const text = JSON.stringify({
+    cleared: {
+      [room]: { moves: 5, pushes: 2, clearedAt: stamp(0) },
+      'ghost-room': { moves: 5, pushes: 2, clearedAt: stamp(0) },
+      broken: { moves: -1, pushes: 0, clearedAt: stamp(0) },
+    },
+    daily: { [keyAt(0)]: { id: room, at: stamp(0) }, [keyAt(1)]: { id: 'ghost-room', at: stamp(1) } },
+    activity: { [keyAt(0)]: [room, 'ghost-room', 'junk'] },
+  });
+  const result = journal.imported(text);
+  if (!result.ok) assert.fail('the import should have parsed');
+  assert.deepEqual(Object.keys(result.journal.cleared), [room]);
+  assert.equal(result.journal.cleared[room]?.moves, 5);
+  assert.deepEqual(result.journal.daily, { [keyAt(0)]: { id: room, at: stamp(0) } });
+  assert.deepEqual(result.journal.activity, { [keyAt(0)]: [room] });
+  assert.equal(result.invalid, 1);
+  assert.equal(result.rejected, 4);
+});
+
+test('an import refuses what it is not', () => {
+  for (const [text, error] of [
+    ['garbage', 'That file does not hold valid progress.'],
+    ['[]', 'That file does not hold valid progress.'],
+    ['{}', 'That file does not hold valid progress.'],
+    [
+      JSON.stringify({ cleared: { broken: { moves: -1, pushes: 0, clearedAt: stamp(0) } }, daily: {}, activity: {} }),
+      'That file holds no valid progress records.',
+    ],
+    [
+      JSON.stringify({ cleared: { 'ghost-room': { moves: 5, pushes: 2, clearedAt: stamp(0) } }, daily: {}, activity: {} }),
+      'No matching rooms found in that file.',
+    ],
+  ] as const) {
+    const result = journal.imported(text);
+    if (result.ok) assert.fail(`the import should have refused: ${text}`);
+    assert.equal(result.error, error);
+  }
+});
+
+test('an import’s bytes and records stay bounded', () => {
+  const tooBig = journal.imported('x'.repeat(1_000_001));
+  if (tooBig.ok) assert.fail('the oversized file should have been refused');
+  assert.equal(tooBig.error, 'That file is too large to be a progress file.');
+  const ids = Array.from({ length: 20_400 }, (_, index) => `r${index}`);
+  const tooMany = journal.imported(JSON.stringify({ cleared: {}, daily: {}, activity: { [keyAt(0)]: ids } }));
+  if (tooMany.ok) assert.fail('the over-recorded file should have been refused');
+  assert.equal(tooMany.error, 'That progress file holds too many records.');
+});
+
+test('a merge takes better clears, keeps standing dailies, and unions activity', () => {
+  const current: journal.Journal = {
+    cleared: { tiny: { moves: 8, pushes: 3, clearedAt: stamp(2) }, huge: { moves: 400, pushes: 200, clearedAt: stamp(2) } },
+    daily: { [keyAt(0)]: { id: 'tiny', at: stamp(0) }, [keyAt(1)]: { id: 'huge', at: stamp(1) } },
+    activity: { [keyAt(0)]: ['tiny'], [keyAt(1)]: ['huge'] },
+  };
+  const incoming: journal.Journal = {
+    cleared: {
+      tiny: { moves: 6, pushes: 4, clearedAt: stamp(0) },
+      huge: { moves: 401, pushes: 150, clearedAt: stamp(0) },
+      grand: { moves: 50, pushes: 25, clearedAt: stamp(0) },
+    },
+    daily: { [keyAt(0)]: { id: 'other', at: stamp(0) }, [keyAt(2)]: { id: 'grand', at: stamp(2) } },
+    activity: { [keyAt(0)]: ['tiny', 'grand'], [keyAt(1)]: ['huge', 'tiny'] },
+  };
+  const merged = journal.merge(current, incoming);
+  assert.equal(merged.cleared.tiny?.moves, 6);
+  assert.equal(merged.cleared.tiny?.pushes, 4);
+  assert.equal(merged.cleared.huge?.moves, 400);
+  assert.deepEqual(Object.keys(merged.cleared).sort(), ['grand', 'huge', 'tiny']);
+  assert.equal(merged.daily[keyAt(0)]?.id, 'tiny');
+  assert.deepEqual(merged.daily[keyAt(2)], { id: 'grand', at: stamp(2) });
+  assert.deepEqual(merged.activity[keyAt(0)], ['grand', 'tiny']);
+  assert.deepEqual(merged.activity[keyAt(1)], ['huge', 'tiny']);
+});
+
+test('the merge summary counts added, improved, unchanged and rejected', () => {
+  const current: journal.Journal = {
+    cleared: {
+      a: { moves: 8, pushes: 3, clearedAt: stamp(3) },
+      b: { moves: 10, pushes: 5, clearedAt: stamp(3) },
+      e: { moves: 10, pushes: 5, clearedAt: stamp(3) },
+      f: { moves: 7, pushes: 2, clearedAt: stamp(3) },
+    },
+    daily: { [keyAt(0)]: { id: 'a', at: stamp(0) }, [keyAt(3)]: { id: 'y', at: stamp(3) } },
+    activity: {},
+  };
+  const incoming: journal.Journal = {
+    cleared: {
+      a: { moves: 6, pushes: 4, clearedAt: stamp(2) },
+      b: { moves: 10, pushes: 5, clearedAt: stamp(3) },
+      c: { moves: 5, pushes: 2, clearedAt: stamp(2) },
+      e: { moves: 12, pushes: 4, clearedAt: stamp(2) },
+      f: { moves: 7, pushes: 2, clearedAt: stamp(2) },
+    },
+    daily: { [keyAt(0)]: { id: 'a', at: stamp(0) }, [keyAt(1)]: { id: 'c', at: stamp(1) }, [keyAt(3)]: { id: 'x', at: stamp(3) } },
+    activity: {},
+  };
+  assert.deepEqual(journal.summarizeMerge(current, incoming), { added: 2, improved: 1, unchanged: 2, rejected: 3 });
+});
+
+test('reset clears the journal in browser storage', () => {
+  journal.keep('tiny', 8, 3, undefined, NOW);
+  assert.ok(Object.keys(journal.load().cleared).length > 0);
+  journal.reset();
+  assert.deepEqual(journal.load(), { cleared: {}, daily: {}, activity: {} });
 });

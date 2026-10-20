@@ -450,3 +450,93 @@ test('a solve can be rated from the completion dialog', async ({ page }) => {
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#rate-right')).toHaveClass(/on/);
 });
+
+test('the stats page reads the journal', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.addInitScript(() => {
+    const now = new Date();
+    localStorage.setItem(
+      'sokomind-rust.v1.journal',
+      JSON.stringify({
+        cleared: { 'ultra-tiny': { moves: 5, pushes: 2, clearedAt: now.toISOString(), elapsedMs: 90000 } },
+        daily: {},
+        activity: { [now.toISOString().slice(0, 10)]: ['ultra-tiny'] },
+      }),
+    );
+  });
+  await page.goto('/#/stats');
+  await expect(page.locator('#stats-solved')).toHaveText('1');
+  await expect(page.locator('.stat-card:has(#stats-solved) .stat-sub')).toHaveText('of 57 (2%)');
+  await expect(page.locator('.donut-center')).toHaveText('1');
+  await expect(page.locator('.legend-item')).toHaveCount(1);
+  await expect(page.locator('.legend-item')).toContainText('tutorial');
+  await expect(page.locator('.bar-row')).toHaveCount(6);
+  await expect(page.locator('.bar-row').first()).toContainText('1/4');
+  await expect(page.locator('.heat-grid .heat-cell')).toHaveCount(90);
+  await expect(page.locator(".heat-grid .heat-cell[data-level='1']")).toHaveCount(1);
+  await expect(page.locator('#stats-copy')).toBeVisible();
+  await expect(page.locator('#stats-export')).toBeVisible();
+  await expect(page.locator('#stats-file')).toBeHidden();
+});
+
+test('an import merges with a summary', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  // The init script runs on every load, so it seeds only while nothing is stored:
+  // the reload below must read the journal the import wrote, not the seed again.
+  await page.addInitScript(() => {
+    if (localStorage.getItem('sokomind-rust.v1.journal') !== null) return;
+    const now = new Date();
+    localStorage.setItem(
+      'sokomind-rust.v1.journal',
+      JSON.stringify({ cleared: { 'ultra-tiny': { moves: 5, pushes: 2, clearedAt: now.toISOString() } }, daily: {}, activity: {} }),
+    );
+  });
+  await page.goto('/#/stats');
+  await expect(page.locator('#stats-solved')).toHaveText('1');
+  await page.setInputFiles('#stats-file', {
+    name: 'progress.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        cleared: {
+          'ultra-tiny': { moves: 4, pushes: 1, clearedAt: new Date().toISOString() },
+          'ghost-room': { moves: 9, pushes: 4, clearedAt: new Date().toISOString() },
+        },
+        daily: {},
+        activity: {},
+      }),
+    ),
+  });
+  await expect(page.locator('#stats-status')).toHaveText('Imported: 0 added, 1 improved, 0 unchanged, 1 rejected, 0 invalid.');
+  // The merged record persists: the moves card carries the imported route.
+  await page.reload();
+  await expect(page.locator('#stats-solved')).toHaveText('1');
+  await expect(page.locator('.stat-card:has-text("Total moves") .stat-big')).toHaveText('4');
+});
+
+test('the type-RESET reset clears progress', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.addInitScript(() => {
+    const now = new Date();
+    localStorage.setItem(
+      'sokomind-rust.v1.journal',
+      JSON.stringify({
+        cleared: { 'ultra-tiny': { moves: 5, pushes: 2, clearedAt: now.toISOString() } },
+        daily: {},
+        activity: { [now.toISOString().slice(0, 10)]: ['ultra-tiny'] },
+      }),
+    );
+  });
+  await page.goto('/#/stats');
+  await expect(page.locator('#stats-solved')).toHaveText('1');
+  await page.click('#stats-reset');
+  await page.getByRole('button', { name: 'I understand, continue' }).click();
+  await expect(page.locator('#stats-reset')).toBeDisabled();
+  await page.fill('#stats-reset-input', 'RESE');
+  await expect(page.locator('#stats-reset')).toBeDisabled();
+  await page.fill('#stats-reset-input', 'RESET');
+  await expect(page.locator('#stats-reset')).toBeEnabled();
+  await page.click('#stats-reset');
+  await expect(page).toHaveURL(/#\/$/);
+  await expect(page.locator('#home-dash > .muted')).toHaveText('0 of 57 rooms cleared');
+});

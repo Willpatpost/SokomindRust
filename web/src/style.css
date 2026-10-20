@@ -1141,3 +1141,212 @@ details[open] summary {
   color: var(--paper-50);
   font-weight: 700;
 }
+
+/* The stats page: the tools row, the cards over the journal, the donut and
+ * bars by tier, the activity heat map, and the danger zone. */
+.stats-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+#stats-status {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.stats-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.stats-grid .card {
+  margin-bottom: 0;
+}
+
+.stats-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.stat-card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.stat-card .eyebrow {
+  margin: 0;
+}
+
+.stat-big {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-sub {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* The donut: one arc per solved tier, with its legend beside it. */
+.donut-row {
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.donut {
+  width: 132px;
+  height: 132px;
+  flex-shrink: 0;
+}
+
+.donut-center {
+  font-size: 22px;
+  font-weight: 700;
+  fill: var(--ink-950);
+}
+
+.donut-label {
+  font-size: 9px;
+  fill: var(--ink-muted);
+}
+
+.donut-legend {
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+  flex: 1;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.legend-value {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+/* The completion bars: the track sized by the tier's room count. */
+.bar-chart {
+  display: grid;
+  gap: 12px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 56px;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.bar-track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--paper-200);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  transition: width 600ms ease;
+}
+
+.bar-value {
+  font-size: 12px;
+  color: var(--ink-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The activity heat map: one cell per day, five levels deep. */
+.heat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14px, 1fr));
+  gap: 3px;
+}
+
+.heat-cell {
+  height: 14px;
+  border-radius: 3px;
+  background: var(--paper-200);
+}
+
+.heat-cell[data-level='1'] {
+  background: var(--sage-400);
+}
+
+.heat-cell[data-level='2'] {
+  background: var(--sage-500);
+}
+
+.heat-cell[data-level='3'] {
+  background: var(--sage-600);
+}
+
+.heat-cell[data-level='4'] {
+  background: var(--sage-700);
+}
+
+.heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.heat-legend .heat-cell {
+  width: 14px;
+  height: 14px;
+}
+
+.heat-word {
+  margin: 0 4px;
+}
+
+/* The danger zone: the reset asks three times, the last by name. */
+.danger-zone {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.danger-zone .muted {
+  margin: 0;
+  flex-basis: 100%;
+}
+
+.danger-zone input {
+  width: 140px;
+  background: var(--paper-50);
+  color: var(--ink-950);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font: inherit;
+  font-size: 13px;
+}
