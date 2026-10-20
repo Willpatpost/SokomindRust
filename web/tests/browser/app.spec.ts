@@ -300,10 +300,44 @@ test('the bracket keys walk puzzles and ? lists the shortcuts', async ({ page })
   await loaded(page);
   await page.keyboard.press(']');
   await expect(page).toHaveURL(/#\/play\/tiny$/);
+  // The URL changes before the puzzle loads; the title waits out that race,
+  // or the next bracket would step from the stale session and wrap.
+  await expect(page.locator('#title')).toHaveText("Two's Company");
   await page.keyboard.press('[');
   await expect(page).toHaveURL(/#\/play\/ultra-tiny$/);
   await page.keyboard.press('?');
   await expect(page.locator('#shortcuts')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('#shortcuts')).not.toBeVisible();
+});
+
+test('a push that strands a box opens the deadlock dialog and reddens it', async ({ page }) => {
+  await loaded(page);
+  await page.locator('summary', { hasText: 'Import / edit a puzzle' }).click();
+  await page.fill('#rows', 'OOOOOOO\nO  R  O\nO  A  O\nOa  B O\nO  OO O\nO  b  O\nOOOOOOO');
+  await page.click('#load-custom');
+  // Pushing A down corners it with B against the walls: the 2x2 rule strands them both.
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#deadlock')).toBeVisible();
+  await expect(page.locator('#board .crate[data-deadlocked]')).toHaveCount(2);
+  await page.click('#deadlock-undo');
+  await expect(page.locator('#deadlock')).not.toBeVisible();
+  await expect(page.locator('#board .crate[data-deadlocked]')).toHaveCount(0);
+});
+
+test('the hint plays the first steps of a fast route', async ({ page }) => {
+  await loaded(page);
+  await page.click('#hint');
+  await expect(page.locator('#board')).toHaveAttribute('data-solved', '');
+  await expect(page.locator('#moves')).toHaveText('1');
+});
+
+test('share copies the attempt as a play link', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowLeft');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.click('#share');
+  await expect(page.locator('#message')).toHaveText('Share link copied.');
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toContain('#/play/ultra-tiny?play=L');
 });

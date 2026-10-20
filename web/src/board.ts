@@ -146,6 +146,13 @@ export class BoardView {
     return row * this.columns + column;
   }
 
+  /** Marks the crates the position strands — in box-index order, as
+   * WasmGame.deadlocked_boxes reports them — and clears the rest. */
+  markDead(dead: Iterable<number>): void {
+    const stuck = new Set(dead);
+    for (const [index, crate] of this.crates.entries()) crate.toggleAttribute('data-deadlocked', stuck.has(index));
+  }
+
   /** Seats a piece at `cell`, sliding it from `from` when the two differ: the
    * piece starts offset by the cells it traveled and transitions home, which also
    * animates undo and replay, the travels those retrace. */

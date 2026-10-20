@@ -103,6 +103,53 @@ impl WasmGame {
         let board = self.game.board();
         index < board.labels().len() && board.on_goal(index, self.game.state().boxes[index])
     }
+
+    /// Deadlock advisory ABI: the indices of boxes the 2x2 rule strands from
+    /// their goals — a box off its goal with every cell of a square it
+    /// corners in held by a wall or a box cannot reach its goal, whichever
+    /// way the other boxes move — in `snapshot`'s box order. The search
+    /// engine's deeper freeze analysis stays inside it as a push-time
+    /// prune; this is the page's advisory over the live position, naming
+    /// only boxes a solve has stranded.
+    pub fn deadlocked_boxes(&self) -> Vec<u32> {
+        let board = self.game.board();
+        let tiles = board.tiles();
+        let width = board.width();
+        let height = board.height();
+        let boxes = &self.game.state().boxes[..board.labels().len()];
+        let occupied = |cell: usize| {
+            tiles[cell] == sokomind_core::WALL || boxes.iter().any(|&b| b as usize == cell)
+        };
+        let mut dead = Vec::new();
+        for (index, &cell) in boxes.iter().enumerate() {
+            if board.on_goal(index, cell) {
+                continue;
+            }
+            let row = cell as usize / width;
+            let column = cell as usize % width;
+            // The four squares the box corners in. A square past the board's
+            // edge cannot exist; the row padding inside it is walls.
+            let square = |top: isize, left: isize| {
+                (0..2).all(|dr| {
+                    (0..2).all(|dc| occupied(((top + dr) * width as isize + left + dc) as usize))
+                })
+            };
+            let stranded = (-1..1).any(|top| {
+                (-1..1).any(|left| {
+                    let (top, left) = (top + row as isize, left + column as isize);
+                    top >= 0
+                        && left >= 0
+                        && top + 2 <= height as isize
+                        && left + 2 <= width as isize
+                        && square(top, left)
+                })
+            });
+            if stranded {
+                dead.push(index as u32);
+            }
+        }
+        dead
+    }
 }
 
 /// One search for the worker, wrapping [`Search`]. The worker advances it in

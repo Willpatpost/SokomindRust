@@ -142,6 +142,13 @@
   box-shadow: var(--game-crate-home-shadow);
 }
 
+/* A crate the 2x2 rule strands: the position has no way to its goal. */
+.board .crate[data-deadlocked] {
+  background: var(--game-crate-dead-bg);
+  border-color: var(--game-crate-dead-border);
+  box-shadow: var(--game-crate-dead-shadow);
+}
+
 .board .robot {
   z-index: 3;
   margin: 12%;

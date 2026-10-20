@@ -108,6 +108,7 @@ function updateButtons() {
   button('play').disabled = busy || (solver.route === undefined && !playback.active);
   setText('play', !playback.active ? 'Play route' : playback.state.kind === 'paused' ? 'Resume' : 'Pause');
   button('copy').disabled = solver.route === undefined;
+  button('hint').disabled = hint.busy || paused || !state || state.solved;
   button('undo').disabled = !state || state.moves === 0;
 }
 function animate(route: string) {
@@ -126,9 +127,22 @@ function render() {
   current.state = decodeSnapshot(current.game.snapshot(), current.labels.length);
   paint(current);
 }
+/** The dead boxes the last paint saw, and the pushes it saw them at: a push
+ * that strands a new box opens the deadlock dialog. */
+let deadCount = 0;
+let lastPushes = 0;
+
 function paint({ game, tiles, labels, state }: Session) {
   const onGoal = Array.from(labels, (_, i) => game.on_goal(i));
+  const stuck = game.deadlocked_boxes();
   board.draw(game.width(), game.height(), tiles, labels, state, onGoal);
+  board.markDead(stuck);
+  if (stuck.length > deadCount && state.pushes > lastPushes) {
+    openDialog('deadlock');
+    message('Deadlock: a box cannot reach its goal from here.');
+  }
+  deadCount = stuck.length;
+  lastPushes = state.pushes;
   setText('moves', String(state.moves));
   setText('pushes', String(state.pushes));
   score(state, onGoal, game.actions());
@@ -276,7 +290,7 @@ function load(puzzle: Puzzle, actions = '') {
   setText('position', index === -1 ? 'custom' : `${index + 1} / ${catalog.length}`);
   setText('title', puzzle.title);
   setText('difficulty', puzzle.difficulty);
-  setText('hint', puzzle.hint || 'Match every box to its goal.');
+  setText('note', puzzle.hint || 'Match every box to its goal.');
   $<HTMLTextAreaElement>('rows').value = text;
   paint(next);
   progress.select(next.puzzle.id, next.puzzle.text);
@@ -355,6 +369,84 @@ function tap(x: number, y: number, touch: boolean) {
   };
   if (touch && zoom.zoomed) pendingWalk = setTimeout(walk, DOUBLE_TAP_MS);
   else walk();
+}
+
+/** The hint's misses in a row, and when three of them cooled it down. The
+ * cooldown starts unset: performance.now() also starts near zero, and a
+ * zero sentinel would read as a fresh miss. */
+let hintStreak = 0;
+let hintCooldown: number | undefined;
+
+/** The hint: a fast search from the current position whose route's first
+ * steps play as a nudge. Three fruitless hints cool it down for half a
+ * minute. */
+const hint = new SolverClient({
+  worker: () => new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' }),
+  changed: updateButtons,
+  elapsed: () => {},
+  update: (update, route) => {
+    if (update.type !== 'done') return;
+    if (route !== undefined) {
+      hintStreak = 0;
+      animate(route.slice(0, 3));
+    } else {
+      hintStreak += 1;
+      if (hintStreak >= 3) {
+        hintCooldown = performance.now();
+        hintStreak = 0;
+      }
+      message('No hint found from here.');
+    }
+  },
+  status: () => {},
+  verify: (prefix, route) => {
+    verify(loaded().puzzle.text, prefix + route);
+  },
+});
+
+/** Asks for a hint: a fast search at the original's limits, unless one runs,
+ * the attempt is paused, or the cooldown from three misses stands. */
+function askHint() {
+  if (hint.busy || paused || !session) return;
+  if (hintCooldown !== undefined && performance.now() - hintCooldown < 30_000) {
+    message('The hint is resting after three misses. It will return shortly.');
+    return;
+  }
+  const { game, puzzle } = loaded();
+  void hint.solve('browser', {
+    rows: puzzle.text,
+    actions: game.actions(),
+    mode: 'fast',
+    timeMs: 5000,
+    memoryMiB: 128,
+    maxStates: MAX_STATES,
+  });
+}
+
+/** The most moves a share link carries; longer attempts share their start. */
+const SHARED_ACTIONS_CAP = 2000;
+
+/** Shares the attempt as its #/play/ link — the moves so far ride the URL —
+ * through the browser's share sheet when it has one, the clipboard otherwise. */
+async function share() {
+  const { game, puzzle } = loaded();
+  if (puzzle.id === CUSTOM_PUZZLE_ID) {
+    message('A custom puzzle shares as a link once the editor phase lands.');
+    return;
+  }
+  const played = game.actions().slice(0, SHARED_ACTIONS_CAP);
+  const url = `${location.origin}${location.pathname}${playHash(puzzle.id)}${played === '' ? '' : `?play=${played}`}`;
+  try {
+    if (navigator.share !== undefined) {
+      await navigator.share({ title: puzzle.title, url });
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    message('Share link copied.');
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+    message('Sharing is unavailable in this browser.');
+  }
 }
 
 /** Loads the play route's puzzle: a shared log replays as given, and without one the
@@ -544,6 +636,17 @@ async function start() {
     step(1);
   };
   button('complete-close').onclick = () => closeDialog('complete');
+  button('deadlock-undo').onclick = () => {
+    closeDialog('deadlock');
+    button('undo').click();
+  };
+  button('deadlock-restart').onclick = () => {
+    closeDialog('deadlock');
+    button('reset').click();
+  };
+  button('deadlock-keep').onclick = () => closeDialog('deadlock');
+  button('hint').onclick = askHint;
+  button('share').onclick = () => void share();
   /** Walks to the next puzzle with no stored best, wrapping the catalog. */
   const stepToUnsolved = () => {
     const from = session?.puzzle.id ?? catalog[0].id;
@@ -566,6 +669,9 @@ async function start() {
       // The plain Z is zen; its chord undoes in the movement layer.
       case 'z':
         if (!event.ctrlKey && !event.metaKey) toggleZen();
+        break;
+      case 'h':
+        askHint();
         break;
       case 'r':
         if (!paused) button('reset').click();

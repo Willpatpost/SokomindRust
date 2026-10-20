@@ -103,12 +103,14 @@
             </div>
             <span id="push-share" class="muted"></span>
           </div>
-          <p id="hint" class="muted"></p>
+          <p id="note" class="muted"></p>
           <div class="game-controls">
             <button id="undo">Undo <span id="undo-depth"></span><kbd>U</kbd></button>
             <button id="undo-5" hidden>Undo 5</button>
+            <button id="hint">Hint <kbd>H</kbd></button>
             <button id="reset">Restart</button>
             <button id="best">Replay best</button>
+            <button id="share">Share</button>
           </div>
           <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
           <div class="direction-pad" aria-label="Movement controls">
@@ -309,6 +311,10 @@
           <dd>Undo</dd>
         </div>
         <div>
+          <dt>H</dt>
+          <dd>Hint</dd>
+        </div>
+        <div>
           <dt>R</dt>
           <dd>Restart</dd>
         </div>
@@ -333,6 +339,16 @@
           <dd>This list</dd>
         </div>
       </dl>
+    </dialog>
+    <dialog id="deadlock" class="dialog" aria-labelledby="deadlock-title">
+      <p class="eyebrow">DEADLOCK DETECTED</p>
+      <h2 id="deadlock-title">This position has no way out</h2>
+      <p class="muted">A box is cornered off its goal by walls and boxes: however the rest move, it cannot reach its goal from here.</p>
+      <div class="actions">
+        <button id="deadlock-undo" class="primary">Undo last move</button>
+        <button id="deadlock-restart">Restart room</button>
+        <button id="deadlock-keep">Keep playing</button>
+      </div>
     </dialog>
     <div id="celebrate" class="celebrate" aria-hidden="true"></div>
     <p id="announcer" class="sr-only" role="status" aria-live="polite"></p>
