@@ -18,8 +18,9 @@ const TRAIL_LENGTH = 6;
 
 /** The hue a label paints its box and goal: unlettered pieces share the design's
  * neutral crate hue, and every typed label gets its own deterministic hue, so a
- * box and its matching goal always paint the same color. */
-function hue(label: number): number {
+ * box and its matching goal always paint the same color. The editor's typed
+ * glyphs read it too, so a painted pair matches the board it will play as. */
+export function hue(label: number): number {
   return label === PLAIN ? 32 : (label * 47) % 360;
 }
 

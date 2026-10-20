@@ -10,6 +10,7 @@ test('every route formats to a hash that parses back to it', () => {
     { kind: 'puzzles-difficulty', difficulty: 'expert', page: 3 },
     { kind: 'puzzles-collection', difficulty: 'beginner', collection: 'Sokomind Generated', page: 2 },
     { kind: 'editor' },
+    { kind: 'editor', custom: 'abc' },
     { kind: 'stats' },
     { kind: 'solver-lab', puzzleId: '' },
     { kind: 'solver-lab', puzzleId: 'huge' },
@@ -58,4 +59,14 @@ test('a lab hash carries its room and optional action log, bare naming none', ()
   assert.deepEqual(parseHash('#/solver-lab/a%20puzzle'), { kind: 'solver-lab', puzzleId: 'a puzzle' });
   // The log passes through unvalidated; the lab replays it through Rust.
   assert.deepEqual(parseHash('#/solver-lab/x?play=whatever!'), { kind: 'solver-lab', puzzleId: 'x', actionLog: 'whatever!' });
+});
+
+test('an editor hash carries its optional shared payload', () => {
+  assert.deepEqual(parseHash('#/editor'), { kind: 'editor' });
+  assert.deepEqual(parseHash('#/editor?custom=abc'), { kind: 'editor', custom: 'abc' });
+  // An empty payload names no puzzle; the editor page treats it as no link.
+  assert.deepEqual(parseHash('#/editor?custom='), { kind: 'editor' });
+  assert.deepEqual(parseHash('#/editor?other=x'), { kind: 'editor' });
+  assert.equal(formatHash({ kind: 'editor' }), '#/editor');
+  assert.equal(formatHash({ kind: 'editor', custom: 'abc' }), '#/editor?custom=abc');
 });

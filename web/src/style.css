@@ -2343,3 +2343,358 @@ details[open] summary {
   margin: 0;
   font-size: 12px;
 }
+
+/* The puzzle editor's workshop: drafts, tools and size on the left, the
+ * paintable canvas at center, details, validation and actions on the right.
+ * A fieldset carries the columns so a shared preview can disable them whole. */
+.editor-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(240px, 300px) minmax(320px, 1fr) minmax(240px, 300px);
+  align-items: start;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .editor-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.editor-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.editor-side .card {
+  margin-bottom: 0;
+}
+
+.editor-side .fields {
+  grid-template-columns: 1fr;
+}
+
+.editor-side h2 {
+  margin: 0 0 10px;
+}
+
+.editor-size {
+  grid-template-columns: 1fr 1fr;
+}
+
+.editor-banner {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+/* These elements carry display rules, which would otherwise beat the hidden
+ * attribute the page toggles them with. */
+.editor-banner[hidden],
+.editor-layout[hidden],
+.editor-share-field[hidden] {
+  display: none;
+}
+
+.editor-banner h2 {
+  margin: 0;
+}
+
+.editor-banner .muted,
+.editor-banner .actions {
+  margin: 0;
+}
+
+/* A share link the editor could not read. */
+.editor-alert {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--coral-500);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+/* The destructive counterpart of button.primary. */
+button.danger {
+  border-color: var(--coral-500);
+  color: var(--coral-500);
+  font-weight: 700;
+}
+
+button.danger:hover:enabled {
+  background: var(--coral-500);
+  border-color: var(--coral-500);
+  color: var(--paper-50);
+}
+
+/* The paint tools: grouped rows of glyph buttons, one per symbol. */
+.editor-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.editor-tool-group > p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.editor-tool-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.editor-tool {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+}
+
+.editor-tool[aria-pressed='true'] {
+  background: var(--sage-600);
+  border-color: var(--sage-600);
+  color: var(--paper-50);
+}
+
+.editor-typed {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.editor-typed button {
+  display: grid;
+  gap: 2px;
+  place-items: center;
+  padding: 8px 4px;
+}
+
+.editor-typed button strong {
+  font-size: 15px;
+}
+
+.editor-typed button span {
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.editor-typed button[aria-pressed='true'] {
+  background: var(--sage-600);
+  border-color: var(--sage-600);
+}
+
+.editor-typed button[aria-pressed='true'] span {
+  color: var(--paper-50);
+}
+
+/* The canvas: the board's own visual language — a dark tray, floor-colored
+ * cells, wall-dark walls — so a painted room reads like the rooms it plays. */
+.editor-canvas {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.editor-viewport {
+  width: 100%;
+  max-height: 560px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--game-board-bg);
+  box-shadow: var(--game-board-shadow);
+}
+
+#editor-grid {
+  --editor-cell: 34px;
+  display: grid;
+  gap: 3px;
+  width: max-content;
+  margin: 0 auto;
+}
+
+@media (max-width: 600px) {
+  #editor-grid {
+    --editor-cell: 26px;
+  }
+}
+
+.editor-row {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(var(--editor-columns), var(--editor-cell));
+}
+
+.editor-cell {
+  width: var(--editor-cell);
+  height: var(--editor-cell);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--game-floor-base);
+  color: var(--ink-subtle);
+  font-size: calc(var(--editor-cell) * 0.42);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.editor-cell:hover:enabled {
+  border-color: var(--blue-500);
+}
+
+.editor-cell:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 1px;
+}
+
+.editor-cell[data-symbol='O'] {
+  background: var(--game-wall-base);
+  color: var(--paper-300);
+}
+
+.editor-cell[data-symbol='R'] {
+  color: var(--blue-500);
+}
+
+.editor-cell[data-symbol='X'] {
+  background: var(--amber-500);
+  border-color: var(--amber-500);
+  color: var(--paper-50);
+}
+
+.editor-cell[data-symbol='S'] {
+  border-style: dashed;
+  border-color: var(--sage-500);
+  color: var(--sage-600);
+}
+
+.editor-size-badge {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The playtest: the board beside its counters and controls. */
+.editor-playtest-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.editor-playtest-head h2 {
+  margin: 0;
+}
+
+.editor-playtest-head .muted {
+  margin: 0;
+}
+
+.editor-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr minmax(240px, 300px);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .editor-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.editor-panel {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  margin-bottom: 0;
+}
+
+.editor-panel .metrics {
+  width: 100%;
+  padding: 12px 0;
+}
+
+.editor-panel .direction-pad {
+  margin: 0;
+}
+
+#editor-playtest-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+#editor-playtest-status[data-solved='true'] {
+  color: var(--sage-600);
+  font-weight: 700;
+}
+
+.editor-wrap {
+  max-height: 560px;
+}
+
+/* The readiness column: what validation says, the fill toggle, and the
+ * workshop's actions with their notice and share field. */
+#editor-validation {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+#editor-validation p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--coral-500);
+}
+
+#editor-validation p.editor-valid {
+  color: var(--sage-600);
+  font-weight: 600;
+}
+
+#editor-fill {
+  width: 100%;
+  margin: 10px 0;
+}
+
+#editor-fill[aria-pressed='true'] {
+  background: var(--sage-600);
+  border-color: var(--sage-600);
+  color: var(--paper-50);
+}
+
+#editor-notice {
+  margin: 10px 0 0;
+  min-height: 16px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.editor-share-field {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.editor-share-field input {
+  width: 100%;
+  font-size: 12px;
+}
+
+#editor-import textarea {
+  width: 100%;
+}

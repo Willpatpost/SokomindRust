@@ -735,3 +735,153 @@ test('the search laboratory logs its search and links the lab', async ({ page })
   await expect(page).toHaveURL(/#\/solver-lab\/ultra-tiny$/);
   await expect(page.locator('#lab-note')).toHaveText('Initial position');
 });
+
+test('the editor paints a starter and playtests it', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  // A never-painted draft meets the starter templates.
+  await expect(page.locator('#editor-starters')).toBeVisible();
+  await page.click('#editor-starter-single');
+  await expect(page.locator('#editor-starters')).not.toBeVisible();
+  // The starter room parses, so it is ready to test and share.
+  await expect(page.locator('#editor-validation')).toHaveText('Puzzle is valid');
+  await expect(page.locator('.editor-cell[data-row="2"][data-column="3"]')).toHaveAttribute('data-symbol', 'X');
+  await page.click('#editor-test');
+  await expect(page.locator('#editor-playtest')).toBeVisible();
+  await expect(page.locator('#editor-moves')).toHaveText('0');
+  // The box sits directly left of its goal: one push solves the room.
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#editor-moves')).toHaveText('1');
+  await expect(page.locator('#editor-pushes')).toHaveText('1');
+  await expect(page.locator('#editor-playtest-status')).toHaveText('Solved in 1 move!');
+  await page.click('#editor-playtest-exit');
+  await expect(page.locator('#editor-playtest')).not.toBeVisible();
+  await expect(page.locator('#editor-test')).toBeEnabled();
+});
+
+test('edits autosave into the drafts and survive a reload', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-starter-single');
+  // The box tool is key 4; a click paints with it.
+  await page.keyboard.press('4');
+  await page.click('.editor-cell[data-row="1"][data-column="1"]');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', 'X');
+  // Leaving the editor flushes the autosave; the reload proves it stored.
+  await page.goto('/#/');
+  await page.reload();
+  await page.goto('/#/editor');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', 'X');
+  await expect(page.locator('#editor-title')).toHaveValue('Single push starter');
+  await expect(page.locator('#editor-drafts')).toHaveValue('draft-1');
+  await expect(page.locator('#editor-draft-saved')).toContainText('Last saved');
+});
+
+test('undo and redo walk the edit history', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-starter-single');
+  await page.keyboard.press('4');
+  await page.click('.editor-cell[data-row="1"][data-column="1"]');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', 'X');
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', ' ');
+  await expect(page.locator('#editor-redo')).toBeEnabled();
+  // Undoing past the paint reaches the blank room the templates address.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('#editor-starters')).toBeVisible();
+  await page.keyboard.press('Control+Shift+z');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', 'X');
+  await expect(page.locator('#editor-starters')).not.toBeVisible();
+});
+
+test('the typed pair paints labels that must match', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-starter-single');
+  await page.click('#editor-typed-box');
+  await expect(page.locator('#editor-typed-box')).toHaveAttribute('aria-pressed', 'true');
+  await page.click('.editor-cell[data-row="1"][data-column="1"]');
+  await page.click('.editor-cell[data-row="1"][data-column="2"]');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="1"]')).toHaveAttribute('data-symbol', 'A');
+  await expect(page.locator('.editor-cell[data-row="1"][data-column="2"]')).toHaveAttribute('data-symbol', 'A');
+  // One goal against two boxes: the readiness column names the label that is off.
+  await page.click('#editor-typed-goal');
+  await page.click('.editor-cell[data-row="3"][data-column="1"]');
+  await expect(page.locator('#editor-validation')).toContainText('Label A: 2 boxes but 1 goals.');
+  await expect(page.locator('#editor-test')).toBeDisabled();
+  // Matching the pair makes the room ready again.
+  await page.click('.editor-cell[data-row="3"][data-column="2"]');
+  await expect(page.locator('#editor-validation')).toHaveText('Puzzle is valid');
+  await expect(page.locator('#editor-test')).toBeEnabled();
+});
+
+test('a shared link previews read-only and imports as a draft', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor');
+  await page.click('#editor-starter-single');
+  await page.fill('#editor-title', 'Workshop gift');
+  await expect(page.locator('#editor-validation')).toHaveText('Puzzle is valid');
+  await page.click('#editor-share');
+  // The share field always carries the link, whatever the clipboard does.
+  await expect(page.locator('#editor-share-field')).toBeVisible();
+  const url = await page.locator('#editor-share-url').inputValue();
+  expect(url).toContain('#/editor?custom=');
+  await page.goto(url);
+  // The preview keeps the saved draft untouched and the grid read-only.
+  await expect(page.locator('#editor-shared')).toBeVisible();
+  await expect(page.locator('#editor-shared-note')).toContainText('Your saved draft "Untitled" is unchanged.');
+  await expect(page.locator('.editor-cell[data-row="2"][data-column="3"]')).toBeDisabled();
+  await expect(page.locator('#editor-title')).toHaveValue('Workshop gift');
+  // The shared puzzle still plays, privately.
+  await page.click('#editor-shared-play');
+  await expect(page.locator('#editor-playtest')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#editor-playtest-status')).toHaveText('Solved in 1 move!');
+  await page.click('#editor-playtest-exit');
+  // Importing folds the preview into the drafts as its own copy.
+  await page.click('#editor-shared-import');
+  await expect(page).toHaveURL(/#\/editor$/);
+  await expect(page.locator('#editor-fields')).toBeEnabled();
+  await expect(page.locator('#editor-drafts option')).toHaveCount(2);
+  await expect(page.locator('#editor-draft-name')).toHaveValue('Workshop gift');
+  await expect(page.locator('#editor-title')).toHaveValue('Workshop gift');
+});
+
+test('an unreadable shared link leaves the draft editable', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/editor?custom=abc!def');
+  await expect(page.locator('#editor-link-error')).toBeVisible();
+  await expect(page.locator('#editor-link-error')).toContainText('invalid or incomplete');
+  await expect(page.locator('#editor-starters')).toBeVisible();
+  await expect(page.locator('.editor-cell[data-row="0"][data-column="0"]')).toBeEnabled();
+});
+
+test('the play page shares a pasted puzzle as an editor link', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await loaded(page);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          (window as unknown as { __shared: string }).__shared = text;
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  await page.locator('summary', { hasText: 'Import / edit a puzzle' }).click();
+  await page.fill('#rows', 'OOOOO\nO R O\nO X O\nO S O\nOOOOO');
+  await page.click('#load-custom');
+  await expect(page.locator('#title')).toHaveText('Your puzzle');
+  await page.click('#share');
+  await expect(page.locator('#message')).toHaveText('Share link copied.');
+  const url = await page.evaluate(() => (window as unknown as { __shared: string }).__shared);
+  expect(url).toContain('#/editor?custom=');
+  await page.goto(url);
+  await expect(page.locator('#editor-shared')).toBeVisible();
+  await expect(page.locator('#editor-title')).toHaveValue('Your puzzle');
+  await expect(page.locator('.editor-cell[data-row="2"][data-column="2"]')).toHaveAttribute('data-symbol', 'X');
+});

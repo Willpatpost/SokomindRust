@@ -186,8 +186,165 @@
       </section>
       <section data-page="editor" hidden>
         <h1 tabindex="-1">Puzzle editor</h1>
-        <p class="muted">The editor arrives with its phase of the port. Until then, paste puzzle rows on the play page.</p>
-        <div class="actions"><a class="button" href="#/play/ultra-tiny">Go to play</a></div>
+        <p class="muted">Paint a room, prove it plays, and share it as a link anyone can open.</p>
+        <p id="editor-link-error" class="editor-alert" role="alert" hidden>
+          This shared puzzle link is invalid or incomplete. Your current draft was left unchanged.
+        </p>
+        <!-- A link's payload renders read-only until an explicit import folds it into the drafts. -->
+        <section id="editor-shared" class="card editor-banner" role="status" hidden>
+          <p class="eyebrow">SHARED PUZZLE PREVIEW</p>
+          <p id="editor-shared-note" class="muted">Your saved draft is unchanged.</p>
+          <div class="actions">
+            <button id="editor-shared-play" class="primary">Play shared puzzle</button>
+            <button id="editor-shared-import">Import into editor</button>
+          </div>
+        </section>
+        <section id="editor-recovery" class="card editor-banner" role="alert" hidden>
+          <p class="eyebrow">QUARANTINED DRAFT</p>
+          <p class="muted">
+            An invalid editor draft was found in this browser's storage. Download it for recovery, or delete only that draft.
+          </p>
+          <div class="actions">
+            <button id="editor-recovery-download">Download invalid draft</button>
+            <button id="editor-recovery-clear" class="danger">Delete invalid draft</button>
+          </div>
+        </section>
+        <section id="editor-starters" class="card editor-banner" hidden>
+          <p class="eyebrow">FIRST BUILD</p>
+          <h2>Start with a working room</h2>
+          <p class="muted">Pick a template, paint with the tools, then test the puzzle before sharing it.</p>
+          <div class="actions">
+            <button id="editor-starter-single">Single push starter</button>
+            <button id="editor-starter-turn">Turn the corner starter</button>
+          </div>
+        </section>
+        <!-- The playtest swaps in over the editing fieldset; its solves stay private — no journal, no bests. -->
+        <div id="editor-playtest" hidden>
+          <div class="editor-playtest-head">
+            <p class="eyebrow">PRIVATE PLAYTEST</p>
+            <h2 id="editor-playtest-title" tabindex="-1">Untitled</h2>
+            <p class="muted">Arrow keys, WASD, swipe, or use the controls.</p>
+          </div>
+          <div class="editor-workspace">
+            <div class="board-wrap editor-wrap">
+              <div id="editor-board" tabindex="0" role="img" aria-label="Playtest board. Use arrow keys or WASD to move, U to undo."></div>
+            </div>
+            <aside class="card editor-panel">
+              <dl class="metrics">
+                <div>
+                  <dt>Moves</dt>
+                  <dd id="editor-moves">0</dd>
+                </div>
+                <div>
+                  <dt>Pushes</dt>
+                  <dd id="editor-pushes">0</dd>
+                </div>
+              </dl>
+              <p id="editor-playtest-status" role="status">Playtest in progress</p>
+              <!-- The movement keys index ACTIONS like the play page's pad, but bind separately: its
+                   buttons must not double-bind the play page's data-direction controls. -->
+              <div class="direction-pad" aria-label="Playtest movement">
+                <button id="editor-up" aria-label="Move up">↑</button>
+                <div>
+                  <button id="editor-left" aria-label="Move left">←</button><button id="editor-down" aria-label="Move down">↓</button
+                  ><button id="editor-right" aria-label="Move right">→</button>
+                </div>
+              </div>
+              <div class="actions">
+                <button id="editor-playtest-undo">Undo</button>
+                <button id="editor-playtest-reset">Restart</button>
+                <button id="editor-playtest-exit" class="primary">Back to editor</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <fieldset id="editor-fields" class="editor-layout">
+          <div class="editor-side">
+            <section class="card">
+              <p class="eyebrow">LOCAL DRAFTS</p>
+              <h2>Drafts</h2>
+              <div class="fields">
+                <label
+                  ><span>Draft</span
+                  ><select id="editor-drafts" aria-label="Local draft"></select
+                ></label>
+                <p id="editor-draft-saved" class="fine">Not saved yet</p>
+                <label><span>Draft name</span><input id="editor-draft-name" maxlength="60" autocomplete="off" /></label>
+              </div>
+              <div class="actions">
+                <button id="editor-rename">Rename draft</button>
+                <button id="editor-new">New draft</button>
+                <button id="editor-duplicate">Duplicate draft</button>
+                <button id="editor-delete" class="danger">Delete draft</button>
+              </div>
+            </section>
+            <section class="card" aria-label="Editor tools">
+              <p class="eyebrow">TOOLS</p>
+              <h2>Paint</h2>
+              <!-- main.ts builds the tool buttons, in TOOLS order; the keys 1-5 select them. -->
+              <div id="editor-tools" class="editor-tools"></div>
+              <div class="fields">
+                <label
+                  ><span>Typed label</span
+                  ><select id="editor-typed-label" aria-label="Typed label"></select
+                ></label>
+              </div>
+              <div class="editor-typed">
+                <button id="editor-typed-box" aria-label="Typed box"></button>
+                <button id="editor-typed-goal" aria-label="Typed goal"></button>
+              </div>
+              <p class="fine">Each typed box only fits its matching lowercase goal.</p>
+            </section>
+            <section class="card">
+              <p class="eyebrow">CANVAS</p>
+              <h2>Size</h2>
+              <div class="fields editor-size">
+                <label><span>Width</span><input id="editor-width" type="number" min="3" max="26" /></label>
+                <label><span>Height</span><input id="editor-height" type="number" min="3" max="26" /></label>
+              </div>
+            </section>
+          </div>
+          <div class="card editor-canvas">
+            <div id="editor-grid-viewport" class="editor-viewport" aria-label="Scrollable puzzle canvas">
+              <div id="editor-grid" role="grid" aria-label="Puzzle editor grid"></div>
+            </div>
+            <p id="editor-size-badge" class="editor-size-badge">7 × 7</p>
+          </div>
+          <div class="editor-side">
+            <section class="card">
+              <p class="eyebrow">DETAILS</p>
+              <h2>Puzzle</h2>
+              <div class="fields">
+                <label><span>Title</span><input id="editor-title" maxlength="60" autocomplete="off" /></label>
+                <label
+                  ><span>Difficulty</span
+                  ><select id="editor-difficulty"></select
+                ></label>
+                <label><span>Hint</span><textarea id="editor-hint" maxlength="200" rows="2"></textarea></label>
+              </div>
+            </section>
+            <section class="card">
+              <p class="eyebrow">READINESS</p>
+              <h2>Validation</h2>
+              <div id="editor-validation" aria-live="polite"></div>
+              <div class="actions">
+                <button id="editor-undo">↩ Undo</button>
+                <button id="editor-redo">↪ Redo</button>
+              </div>
+              <button id="editor-fill" aria-pressed="false" title="Fill mode — click to flood-fill connected cells">◇ Fill off</button>
+              <div class="actions">
+                <button id="editor-test" class="primary" disabled title="Test puzzle (Ctrl+Enter)">Test puzzle</button>
+                <button id="editor-share" disabled>Share (copy URL)</button>
+                <button id="editor-import-open">Import from text</button>
+                <button id="editor-clear" class="danger">Clear board</button>
+              </div>
+              <p id="editor-notice" role="status" aria-live="polite"></p>
+              <label id="editor-share-field" class="editor-share-field" hidden
+                ><span>Share link</span><input id="editor-share-url" type="text" readonly
+              /></label>
+            </section>
+          </div>
+        </fieldset>
       </section>
       <section data-page="stats" hidden>
         <h1 tabindex="-1">Statistics</h1>
@@ -571,6 +728,33 @@
             Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed these search limits.
           </p>
         </section>
+      </div>
+    </dialog>
+    <!-- The editor's confirmations and its text import. dialog.ts opens them as native modals. -->
+    <dialog id="editor-clear-dialog" class="dialog" aria-labelledby="editor-clear-title">
+      <h2 id="editor-clear-title">Clear the board?</h2>
+      <p class="muted">Clear every cell in this puzzle? This cannot be undone.</p>
+      <div class="actions">
+        <button id="editor-clear-cancel">Cancel</button>
+        <button id="editor-clear-confirm" class="danger">Clear board</button>
+      </div>
+    </dialog>
+    <dialog id="editor-delete-dialog" class="dialog" aria-labelledby="editor-delete-title">
+      <h2 id="editor-delete-title">Delete this draft?</h2>
+      <p id="editor-delete-message" class="muted"></p>
+      <div class="actions">
+        <button id="editor-delete-cancel">Cancel</button>
+        <button id="editor-delete-confirm" class="danger">Delete draft</button>
+      </div>
+    </dialog>
+    <dialog id="editor-import" class="dialog" aria-labelledby="editor-import-title">
+      <h2 id="editor-import-title">Import from text</h2>
+      <p class="muted">Paste puzzle rows using: O (wall), R (robot), X (box), S (goal), space (floor).</p>
+      <textarea id="editor-import-text" rows="10" placeholder="OOOOO&#10;O R O&#10;O X O&#10;O S O&#10;OOOOO"></textarea>
+      <p id="editor-import-error" role="alert" hidden></p>
+      <div class="actions">
+        <button id="editor-import-cancel">Cancel</button>
+        <button id="editor-import-confirm" class="primary">Import</button>
       </div>
     </dialog>
     <div id="celebrate" class="celebrate" aria-hidden="true"></div>

@@ -1,16 +1,16 @@
 /** The app's pages, as hash URLs: `#/`, `#/puzzles` with `/:difficulty` and
  * `/:difficulty/:collection` drill-downs whose lists carry `?page=N`,
- * `#/play/:id[?play=UDLR]`, `#/editor`, `#/stats` and `#/solver-lab` with an
- * optional `/:puzzleId[?play=UDLR]` — a bare lab route names no room, and the
- * lab renders its default. The editor is a placeholder until its port phase
- * lands; the rest carry behavior. */
+ * `#/play/:id[?play=UDLR]`, `#/editor[?custom=ENCODED]` — whose payload, when
+ * one rides the URL, the editor shows as a read-only shared preview —
+ * `#/stats` and `#/solver-lab` with an optional `/:puzzleId[?play=UDLR]` — a
+ * bare lab route names no room, and the lab renders its default. */
 export type Route =
   | { kind: 'home' }
   | { kind: 'puzzles' }
   | { kind: 'puzzles-difficulty'; difficulty: string; page: number }
   | { kind: 'puzzles-collection'; difficulty: string; collection: string; page: number }
   | { kind: 'play'; puzzleId: string; actionLog?: string }
-  | { kind: 'editor' }
+  | { kind: 'editor'; custom?: string }
   | { kind: 'stats' }
   | { kind: 'solver-lab'; puzzleId: string; actionLog?: string };
 
@@ -37,7 +37,11 @@ export function parseHash(hash: string): Route {
   const page = segments[0];
   if (segments.length === 1) {
     if (page === 'puzzles') return { kind: 'puzzles' };
-    if (page === 'editor') return { kind: 'editor' };
+    if (page === 'editor') {
+      // An empty custom parameter names no puzzle; only a payload does.
+      const custom = new URLSearchParams(query).get('custom');
+      return custom === null || custom === '' ? { kind: 'editor' } : { kind: 'editor', custom };
+    }
     if (page === 'stats') return { kind: 'stats' };
     if (page === 'solver-lab') return { kind: 'solver-lab', puzzleId: '' };
   }
@@ -80,7 +84,7 @@ export function formatHash(next: Route): string {
     case 'puzzles-collection':
       return `#/puzzles/${encodeURIComponent(next.difficulty)}/${encodeURIComponent(next.collection)}${pageQuery(next.page)}`;
     case 'editor':
-      return '#/editor';
+      return `#/editor${next.custom === undefined ? '' : `?custom=${next.custom}`}`;
     case 'stats':
       return '#/stats';
     case 'solver-lab':
@@ -94,6 +98,7 @@ export function formatHash(next: Route): string {
 function sameRoute(a: Route, b: Route): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'play' && b.kind === 'play') return a.puzzleId === b.puzzleId && a.actionLog === b.actionLog;
+  if (a.kind === 'editor' && b.kind === 'editor') return a.custom === b.custom;
   if (a.kind === 'solver-lab' && b.kind === 'solver-lab') return a.puzzleId === b.puzzleId && a.actionLog === b.actionLog;
   if (a.kind === 'puzzles-difficulty' && b.kind === 'puzzles-difficulty') return a.difficulty === b.difficulty && a.page === b.page;
   if (a.kind === 'puzzles-collection' && b.kind === 'puzzles-collection')
