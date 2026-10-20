@@ -8,6 +8,13 @@ export type Page = (typeof PAGES)[number];
  * one from the left, the ported design's page transitions. */
 const DEPTH: Record<Page, number> = { home: 0, puzzles: 1, play: 2, editor: 1, stats: 1, 'solver-lab': 1 };
 
+/** The section a route shows: the puzzles family shares one, its drill-downs
+ * re-rendering inside it. */
+function pageOf(next: Route): Page {
+  if (next.kind === 'puzzles-difficulty' || next.kind === 'puzzles-collection') return 'puzzles';
+  return next.kind;
+}
+
 /** What the route announcer calls each page. */
 const TITLES: Record<Page, string> = {
   home: 'Home',
@@ -59,7 +66,7 @@ function slide(section: HTMLElement, direction: 'forward' | 'back'): void {
 export function startShell(): void {
   let previous: Page | undefined;
   subscribe(next => {
-    const page: Page = next.kind;
+    const page = pageOf(next);
     const entering = document.querySelector<HTMLElement>(`[data-page="${page}"]`);
     if (!entering) return;
     for (const name of PAGES) document.querySelector(`[data-page="${name}"]`)?.toggleAttribute('hidden', name !== page);

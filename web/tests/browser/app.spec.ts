@@ -341,3 +341,38 @@ test('share copies the attempt as a play link', async ({ page }) => {
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   expect(copied).toContain('#/play/ultra-tiny?play=L');
 });
+
+test('the puzzle selector drills from tiers to a playable row', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/puzzles');
+  await expect(page.locator('.grid-card')).toHaveCount(6);
+  await expect(page.locator('.grid-card').first()).toContainText('tutorial');
+  await expect(page.locator('.grid-card').first()).toContainText('0 of 4 cleared');
+  // The tutorial tier holds one collection, so its route is that collection's list already.
+  await page.click('.grid-card:first-child');
+  await expect(page).toHaveURL(/#\/puzzles\/tutorial$/);
+  await expect(page.locator('.puzzle-row')).toHaveCount(4);
+  await expect(page.locator('.list-summary')).toHaveText('Showing 1–4 of 4 puzzles');
+  // The search narrows the list, and a row plays its puzzle.
+  await page.fill('#puzzle-search', 'first steps');
+  await expect(page.locator('.puzzle-row')).toHaveCount(1);
+  await page.click('.puzzle-row');
+  await expect(page).toHaveURL(/#\/play\/ultra-tiny$/);
+  await expect(page.locator('#title')).toHaveText('First Steps');
+});
+
+test('the collection grid leads to its list, and favorites shape it', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/puzzles/beginner');
+  await expect(page.locator('.grid-card')).toHaveCount(2);
+  await page.click('.grid-card:first-child');
+  await expect(page).toHaveURL(/#\/puzzles\/beginner\/Sokomind%20Originals$/);
+  await expect(page.locator('.puzzle-row')).toHaveCount(4);
+  await expect(page.locator('.list-summary')).toHaveText('Showing 1–4 of 4 puzzles');
+  // The heart favorites a puzzle; the Favorites chip keeps only favorites.
+  await page.click('.puzzle-row:first-child .heart');
+  await expect(page.locator('.puzzle-row:first-child .heart')).toHaveClass(/on/);
+  await page.click('.chips button:nth-child(4)');
+  await expect(page.locator('.puzzle-row')).toHaveCount(1);
+  await expect(page.locator('.puzzle-row .heart')).toHaveClass(/on/);
+});

@@ -1,10 +1,13 @@
-/** The app's pages, as hash URLs: `#/`, `#/puzzles`, `#/play/:puzzleId[?play=UDLR]`,
- * `#/editor`, `#/stats` and `#/solver-lab`. The puzzle browser, the editor, the
- * statistics page and the lab are placeholders until their port phases land; the
- * home and play routes carry behavior today. */
+/** The app's pages, as hash URLs: `#/`, `#/puzzles` with `/:difficulty` and
+ * `/:difficulty/:collection` drill-downs whose lists carry `?page=N`,
+ * `#/play/:id[?play=UDLR]`, `#/editor`, `#/stats` and `#/solver-lab`. The
+ * editor, the statistics page and the lab are placeholders until their port
+ * phases land; the rest carry behavior. */
 export type Route =
   | { kind: 'home' }
   | { kind: 'puzzles' }
+  | { kind: 'puzzles-difficulty'; difficulty: string; page: number }
+  | { kind: 'puzzles-collection'; difficulty: string; collection: string; page: number }
   | { kind: 'play'; puzzleId: string; actionLog?: string }
   | { kind: 'editor' }
   | { kind: 'stats' }
@@ -16,6 +19,12 @@ export type Route =
 function logParameter(query: string): string | undefined {
   const value = new URLSearchParams(query).get('play');
   return value === null ? undefined : value;
+}
+
+/** The `?page=` parameter's value, 1 by default and never below it. */
+function pageParameter(query: string): number {
+  const value = Number(new URLSearchParams(query).get('page'));
+  return Number.isSafeInteger(value) && value >= 1 ? value : 1;
 }
 
 /** The route a location hash names; anything malformed is the home route, which
@@ -31,6 +40,16 @@ export function parseHash(hash: string): Route {
     if (page === 'stats') return { kind: 'stats' };
     if (page === 'solver-lab') return { kind: 'solver-lab' };
   }
+  if (page === 'puzzles' && (segments.length === 2 || segments.length === 3)) {
+    const difficulty = decodeURIComponent(segments[1]!);
+    if (segments.length === 2) return { kind: 'puzzles-difficulty', difficulty, page: pageParameter(query) };
+    return {
+      kind: 'puzzles-collection',
+      difficulty,
+      collection: decodeURIComponent(segments[2]!),
+      page: pageParameter(query),
+    };
+  }
   if (page === 'play' && segments.length === 2 && segments[1] !== '') {
     const puzzleId = decodeURIComponent(segments[1]);
     const actionLog = logParameter(query);
@@ -39,13 +58,21 @@ export function parseHash(hash: string): Route {
   return { kind: 'home' };
 }
 
-/** The hash URL of a route; parsing it back yields the same route. */
+/** The hash URL of a route; parsing it back yields the same route. The page
+ * parameter rides the URL from page two on. */
+function pageQuery(page: number): string {
+  return page === 1 ? '' : `?page=${page}`;
+}
 export function formatHash(next: Route): string {
   switch (next.kind) {
     case 'home':
       return '#/';
     case 'puzzles':
       return '#/puzzles';
+    case 'puzzles-difficulty':
+      return `#/puzzles/${encodeURIComponent(next.difficulty)}${pageQuery(next.page)}`;
+    case 'puzzles-collection':
+      return `#/puzzles/${encodeURIComponent(next.difficulty)}/${encodeURIComponent(next.collection)}${pageQuery(next.page)}`;
     case 'editor':
       return '#/editor';
     case 'stats':
@@ -61,6 +88,9 @@ export function formatHash(next: Route): string {
 function sameRoute(a: Route, b: Route): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'play' && b.kind === 'play') return a.puzzleId === b.puzzleId && a.actionLog === b.actionLog;
+  if (a.kind === 'puzzles-difficulty' && b.kind === 'puzzles-difficulty') return a.difficulty === b.difficulty && a.page === b.page;
+  if (a.kind === 'puzzles-collection' && b.kind === 'puzzles-collection')
+    return a.difficulty === b.difficulty && a.collection === b.collection && a.page === b.page;
   return true;
 }
 

@@ -726,3 +726,211 @@ details[open] summary {
 .zen-dock[hidden] {
   display: none;
 }
+
+/* The puzzle selector: tier and collection grids, then the filterable list. */
+.grid-wrap {
+  display: grid;
+  gap: 20px;
+}
+
+.selector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.grid-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+  color: var(--ink-950);
+}
+
+.grid-card:hover {
+  border-color: var(--sage-500);
+}
+
+.grid-card strong {
+  display: block;
+  font-size: 16px;
+  text-transform: capitalize;
+}
+
+.grid-card span {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-top: 3px;
+}
+
+.ring {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  transform: rotate(-90deg);
+}
+
+.ring circle {
+  fill: none;
+  stroke-width: 4;
+}
+
+.ring .ring-back {
+  stroke: var(--paper-200);
+}
+
+.ring .ring-arc {
+  stroke: var(--sage-500);
+}
+
+.back {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+
+.back:hover {
+  color: var(--ink-950);
+}
+
+.list-wrap {
+  display: grid;
+  gap: 12px;
+}
+
+.list-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.list-bar input {
+  flex: 1;
+  min-width: 200px;
+  margin-bottom: 0;
+  background: var(--paper-50);
+  color: var(--ink-950);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.chips {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.chips button,
+.chips .chip {
+  border: 1px solid var(--border-medium);
+  background: var(--paper-100);
+  color: var(--ink-800);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.chips .on {
+  background: var(--sage-600);
+  border-color: var(--sage-600);
+  color: var(--paper-50);
+  font-weight: 700;
+}
+
+.list-summary {
+  margin: 0;
+}
+
+.puzzle-list {
+  display: grid;
+  gap: 8px;
+}
+
+.puzzle-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-decoration: none;
+  color: var(--ink-950);
+}
+
+.puzzle-row:hover {
+  border-color: var(--sage-500);
+}
+
+.row-detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-detail strong {
+  display: block;
+  font-size: 14px;
+}
+
+.row-detail span {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.heart {
+  flex: none;
+  border: none;
+  background: none;
+  font-size: 18px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.heart.on {
+  color: var(--coral-500);
+}
+
+/* The minimap: a tiny board thumbnail, one cell per div. */
+.minimap {
+  display: grid;
+  grid-template-columns: repeat(var(--columns), 5px);
+  grid-auto-rows: 5px;
+  flex: none;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.minimap .mini.wall {
+  background: var(--game-wall-base);
+}
+
+.minimap .mini.floor {
+  background: var(--game-floor-base);
+}
+
+.minimap .mini.box {
+  background: var(--amber-400);
+}
+
+.minimap .mini.goal {
+  background: var(--sage-400);
+}
+
+.minimap .mini.robot {
+  background: var(--blue-500);
+}
