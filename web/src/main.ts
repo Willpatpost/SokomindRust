@@ -3543,6 +3543,8 @@ function bindGenerator() {
   });
   const width = $<HTMLInputElement>('generator-width');
   width.addEventListener('change', () => {
+    // The generator's rooms cap at 20, inside the editor's MAX_SIZE (26), so a
+    // grown room always fits the editor it opens in.
     genParams.width = clamp(Number(width.value), 5, 20);
     syncGeneratorInputs();
   });
@@ -3862,6 +3864,8 @@ async function start() {
     render();
     animate(best.route);
   };
+  // The play page's own quick load: an engine-verified paste, and the source of the
+  // custom-puzzle share flow — the editor's import dialog serves compose-and-iterate.
   button('load-custom').onclick = () => {
     try {
       load(

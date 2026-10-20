@@ -34,7 +34,8 @@ export const TYPED_LABELS = [
 export type TypedLabel = (typeof TYPED_LABELS)[number];
 
 /** The grid's size bounds; the largest matches the biggest board a share link
- * must be able to carry. */
+ * must be able to carry. The generator's dialog caps its own rooms at 20; the
+ * editor's bound is the wider one so shared links always load. */
 export const MIN_SIZE = 3;
 export const MAX_SIZE = 26;
 

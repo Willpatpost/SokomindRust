@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_PREFERENCES } from '../src/theme.ts';
 import * as audio from '../src/audio.ts';
+import { ACTIONS } from '../src/protocol.ts';
 
 test('the cues and variants name what the pages ask for', () => {
   assert.equal(audio.CUES.length, 8);
@@ -20,6 +21,11 @@ test('each direction lends its pitch, clamped to five semitones', () => {
   assert.equal(audio.clampPitchOffset(-9), -5);
   assert.equal(audio.clampPitchOffset(undefined), 0);
   assert.equal(audio.clampPitchOffset(Number.NaN), 0);
+});
+
+test('the pitch table covers every direction ACTIONS names', () => {
+  assert.equal(audio.DIRECTION_PITCH.length, ACTIONS.length);
+  for (const pitch of audio.DIRECTION_PITCH) assert.ok(Number.isFinite(pitch));
 });
 
 test("one move's audio, off the engine's own verdict", () => {
