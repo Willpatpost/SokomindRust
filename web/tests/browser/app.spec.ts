@@ -380,7 +380,7 @@ test('the collection grid leads to its list, and favorites shape it', async ({ p
 test('the home dashboard shows progress, tiers and the daily challenge', async ({ page }) => {
   await page.route('**/api/health', health => health.fulfill({ status: 404 }));
   await page.goto('/');
-  await expect(page.locator('#home-dash .muted')).toHaveText('0 of 57 rooms cleared');
+  await expect(page.locator('#home-dash > .muted')).toHaveText('0 of 57 rooms cleared');
   await expect(page.locator('.progress-fill')).toHaveCSS('width', '0px');
   await expect(page.locator('.tier-row a')).toHaveCount(6);
   await expect(page.locator('.tier-row a').first()).toContainText('tutorial');
@@ -390,6 +390,51 @@ test('the home dashboard shows progress, tiers and the daily challenge', async (
   await expect(page.locator('.daily .button')).toHaveText('Play today’s room');
   const href = await page.locator('.daily .button').getAttribute('href');
   expect(href).toMatch(/^#\/play\//);
+  // A fresh journal leaves the run open: seven days of history, today pending, no streak.
+  await expect(page.locator('.daily-top span').last()).toHaveText('New room daily');
+  await expect(page.locator('.daily-history li')).toHaveCount(7);
+  await expect(page.locator('.daily-history li').last()).toHaveAttribute('data-outcome', 'today');
+  await expect(page.locator('.daily-history li').last()).toContainText('Today');
+  await expect(page.locator('.streak-banner')).toHaveCount(0);
+});
+
+test('a solve joins the journal as the streak and the recently cleared', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('ArrowDown');
+  await page.click('#complete-close');
+  await page.goto('/#/');
+  await expect(page.locator('.streak-banner strong')).toHaveText('1-day streak');
+  await expect(page.locator('.recent-list a strong')).toHaveText('First Steps');
+  await expect(page.locator('.recent-list a span')).toHaveText('1m / 1p · just now');
+});
+
+test('today’s daily room, once cleared, records the day and the run', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/');
+  await expect(page.locator('.daily .button')).toHaveText('Play today’s room');
+  const id = (await page.locator('.daily .button').getAttribute('href'))!.replace('#/play/', '');
+  // Seed the journal as though today’s room was cleared today, then read the card off it.
+  await page.addInitScript(room => {
+    const now = new Date();
+    const day = now.toISOString().slice(0, 10);
+    localStorage.setItem(
+      'sokomind-rust.v1.journal',
+      JSON.stringify({
+        cleared: { [room]: { moves: 5, pushes: 2, clearedAt: now.toISOString() } },
+        daily: { [day]: { id: room, at: now.toISOString() } },
+        activity: { [day]: [room] },
+      }),
+    );
+  }, id);
+  await page.reload();
+  await expect(page.locator('.daily')).toHaveAttribute('data-state', 'cleared');
+  await expect(page.locator('.daily .button')).toHaveText('Replay today’s room');
+  await expect(page.locator('.daily-top span').last()).toHaveText('1-day run');
+  await expect(page.locator('.daily .muted')).toContainText('Today is recorded');
+  await expect(page.locator('.daily-history li').last()).toHaveAttribute('data-outcome', 'cleared');
+  await expect(page.locator('.daily-history li').last()).toContainText('✓');
+  await expect(page.locator('.streak-banner strong')).toHaveText('1-day streak');
+  await expect(page.locator('.recent-list a span')).toHaveText('5m / 2p · just now');
 });
 
 test('a solve can be rated from the completion dialog', async ({ page }) => {

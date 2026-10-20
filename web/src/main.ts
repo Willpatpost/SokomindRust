@@ -35,6 +35,7 @@ import { ENGINES, SolverClient } from './solver-client.ts';
 import { decodeHealth, decodeSnapshot } from './transport.ts';
 import { Playback } from './playback.ts';
 import { Progress } from './progress.ts';
+import * as journal from './journal.ts';
 import { statusText } from './verdict.ts';
 
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
@@ -298,6 +299,14 @@ function changed() {
   const actions = game.actions();
   progress.session(actions);
   progress.keep(actions, state.moves, state.pushes);
+  // Every solve joins the journal — its dates feed the streaks, the daily run
+  // and the recently cleared — and today's daily pick records the run itself.
+  // A custom puzzle keeps only its rows-scoped best, never catalog progress.
+  const { puzzle } = loaded();
+  if (puzzle.id !== CUSTOM_PUZZLE_ID) {
+    journal.keep(puzzle.id, state.moves, state.pushes, timer.elapsed());
+    if (puzzle.id === daily().id) journal.keepDaily(puzzle.id);
+  }
   finish(state, before);
 }
 function load(puzzle: Entry, actions = '') {
@@ -725,8 +734,9 @@ function enterPlay(next: Route) {
 }
 
 /** Renders the home dashboard and aims its primary action: the cleared
- * progress with its bar, the tier row, today's daily challenge, and the
- * saved session's puzzle as the way back in. */
+ * progress with its bar, the tier row, the solving streak, today's daily
+ * challenge with its run and history, the recently cleared, and the saved
+ * session's puzzle as the way back in. */
 function syncHome() {
   const saved = storage.session();
   const id = saved && ENTRIES.some(p => p.id === saved.id) ? saved.id : ENTRIES[0]!.id;
@@ -756,20 +766,99 @@ function syncHome() {
     link.append(name, count);
     tiers.append(link);
   }
+  const book = journal.load();
+  const parts: HTMLElement[] = [summary, bar, tiers];
+  const streak = journal.solvingStreak(book);
+  if (streak.current > 0) {
+    const banner = document.createElement('div');
+    banner.className = 'streak-banner';
+    const flame = document.createElement('span');
+    flame.className = 'flame';
+    flame.setAttribute('aria-hidden', 'true');
+    flame.textContent = '🔥';
+    const detail = document.createElement('div');
+    const current = document.createElement('strong');
+    current.textContent = `${streak.current}-day streak`;
+    detail.append(current);
+    if (streak.longest > streak.current) {
+      const longest = document.createElement('span');
+      longest.textContent = `Best: ${streak.longest} days`;
+      detail.append(longest);
+    }
+    banner.append(flame, detail);
+    parts.push(banner);
+  }
   const challenge = daily();
+  const view = journal.dailyView(book);
   const card = document.createElement('div');
   card.className = 'card daily';
-  const eyebrow = document.createElement('p');
-  eyebrow.className = 'eyebrow';
-  eyebrow.textContent = solved(challenge) ? 'DAILY CHALLENGE · CLEARED' : 'DAILY CHALLENGE';
+  card.dataset.state = view.state;
+  const topline = document.createElement('p');
+  topline.className = 'daily-top';
+  const label = document.createElement('span');
+  label.textContent = 'Daily challenge';
+  const run = document.createElement('span');
+  run.textContent = view.streak > 0 ? `${view.streak}-day run` : 'New room daily';
+  topline.append(label, run);
   const title = document.createElement('h2');
   title.textContent = challenge.title;
+  const framing = document.createElement('p');
+  framing.className = 'muted';
+  framing.textContent =
+    view.state === 'cleared'
+      ? 'Today is recorded. Replay the room to refine your route, or return tomorrow for a new one.'
+      : view.state === 'recovery'
+        ? 'A missed day does not close the path. This room starts a fresh run today.'
+        : 'One shared room each day. Solve it before the day rolls over to add today to your run.';
   const play = document.createElement('a');
   play.className = 'button';
   play.href = playHash(challenge.id);
-  play.textContent = solved(challenge) ? 'Replay today’s room' : 'Play today’s room';
-  card.append(eyebrow, title, play);
-  $('home-dash').replaceChildren(summary, bar, tiers, card);
+  play.textContent = view.state === 'cleared' ? 'Replay today’s room' : 'Play today’s room';
+  card.append(topline, title, framing, play);
+  const history = document.createElement('ol');
+  history.className = 'daily-history';
+  history.setAttribute('aria-label', 'Seven-day daily history');
+  for (const day of view.history) {
+    const item = document.createElement('li');
+    item.dataset.outcome = day.outcome;
+    item.setAttribute('aria-label', `${day.label}: ${day.outcome === 'today' ? 'open today' : day.outcome}`);
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.setAttribute('aria-hidden', 'true');
+    dot.textContent = day.outcome === 'cleared' ? '✓' : day.outcome === 'today' ? '•' : '';
+    const name = document.createElement('span');
+    name.textContent = day.label;
+    item.append(dot, name);
+    history.append(item);
+  }
+  card.append(history);
+  parts.push(card);
+  const recent = journal
+    .recentlyCleared(book)
+    .map(clear => ({ clear, entry: ENTRIES.find(p => p.id === clear.id) }))
+    .filter((row): row is { clear: journal.RecentClear; entry: Entry } => row.entry !== undefined);
+  if (recent.length > 0) {
+    const strip = document.createElement('div');
+    strip.className = 'recent';
+    const heading = document.createElement('p');
+    heading.className = 'muted';
+    heading.textContent = 'Recently cleared';
+    const list = document.createElement('div');
+    list.className = 'recent-list';
+    for (const { clear, entry } of recent) {
+      const link = document.createElement('a');
+      link.href = playHash(entry.id);
+      const name = document.createElement('strong');
+      name.textContent = entry.title;
+      const meta = document.createElement('span');
+      meta.textContent = `${clear.moves}m / ${clear.pushes}p · ${journal.timeAgo(clear.clearedAt)}`;
+      link.append(name, meta);
+      list.append(link);
+    }
+    strip.append(heading, list);
+    parts.push(strip);
+  }
+  $('home-dash').replaceChildren(...parts);
 }
 
 /** The theme menu's labels; the values are theme.ts's lists. */
