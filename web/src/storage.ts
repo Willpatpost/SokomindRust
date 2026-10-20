@@ -34,12 +34,17 @@ export function write(key: string, value: unknown): boolean {
   }
 }
 /** Every name the app stores something under, for the resets that clear a
- * family of values without knowing its ids. */
+ * family of values without knowing its ids. Enumerated through Web Storage's
+ * own key()/length, which every storage — the browser's and the tests' shim
+ * alike — implements. */
 export function names(): string[] {
   try {
-    return Object.keys(localStorage)
-      .filter(key => key.startsWith(prefix))
-      .map(key => key.slice(prefix.length));
+    const stored: string[] = [];
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index);
+      if (key !== null && key.startsWith(prefix)) stored.push(key.slice(prefix.length));
+    }
+    return stored;
   } catch {
     return [];
   }

@@ -37,6 +37,9 @@ import { Playback } from './playback.ts';
 import { Progress } from './progress.ts';
 import * as journal from './journal.ts';
 import * as stats from './stats.ts';
+import * as achievements from './achievements.ts';
+import * as frames from './frames.ts';
+import * as journey from './journey.ts';
 import { statusText } from './verdict.ts';
 
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
@@ -246,8 +249,9 @@ function markRating() {
 }
 
 /** Opens the completion dialog for a solve, against the best that stood before
- * it, and bursts the celebration sized by the tier the solve earned. */
-function finish(state: Snapshot, before: storage.Best | null) {
+ * it, bursts the celebration sized by the tier the solve earned, and lists any
+ * achievements the solve unlocked. */
+function finish(state: Snapshot, before: storage.Best | null, earned: readonly achievements.Def[] = []) {
   const shown = present({ moves: state.moves, pushes: state.pushes }, before);
   setText('complete-eyebrow', shown.eyebrow);
   setText('complete-title', shown.title);
@@ -256,6 +260,11 @@ function finish(state: Snapshot, before: storage.Best | null) {
     ...shown.milestones.map(text => {
       const item = document.createElement('li');
       item.textContent = text;
+      return item;
+    }),
+    ...earned.map(def => {
+      const item = document.createElement('li');
+      item.textContent = `Achievement earned · ${def.title}`;
       return item;
     }),
   );
@@ -304,11 +313,20 @@ function changed() {
   // and the recently cleared — and today's daily pick records the run itself.
   // A custom puzzle keeps only its rows-scoped best, never catalog progress.
   const { puzzle } = loaded();
+  let earned: readonly achievements.Def[] = [];
   if (puzzle.id !== CUSTOM_PUZZLE_ID) {
+    // The unlock moment: the achievements standing before the solve, against
+    // the journal it joins.
+    const priorBook = journal.load();
+    const priorIds = achievements.unlockedIds(stats.aggregates(priorBook), priorBook);
     journal.keep(puzzle.id, state.moves, state.pushes, timer.elapsed());
     if (puzzle.id === daily().id) journal.keepDaily(puzzle.id);
+    const book = journal.load();
+    earned = achievements.newlyUnlocked(priorIds, achievements.unlockedIds(stats.aggregates(book), book));
+    // A solve can earn the frame the board wears.
+    frames.apply();
   }
-  finish(state, before);
+  finish(state, before, earned);
 }
 function load(puzzle: Entry, actions = '') {
   const text = puzzle.rows.join('\n');
@@ -667,6 +685,15 @@ function puzzleRow(entry: Entry): HTMLElement {
   meta.textContent = `${entry.width}×${entry.height} · ${entry.boxes} boxes${best === null ? '' : ` · best ${best.moves} moves`}`;
   detail.append(name, meta);
   row.append(detail);
+  // The felt-difficulty mark the rating store holds, colored by its verdict.
+  const felt = rating(entry.id);
+  if (felt !== undefined) {
+    const dot = document.createElement('span');
+    dot.className = 'rating-dot';
+    dot.dataset.rating = felt;
+    dot.title = felt === 'easy' ? 'Felt easy' : felt === 'right' ? 'Just right' : 'Felt hard';
+    row.append(dot);
+  }
   const heart = document.createElement('button');
   const favorite = favorites().has(entry.id);
   heart.className = `heart${favorite ? ' on' : ''}`;
@@ -834,6 +861,7 @@ function syncHome() {
   }
   card.append(history);
   parts.push(card);
+  parts.push(journeyCard(book));
   const recent = journal
     .recentlyCleared(book)
     .map(clear => ({ clear, entry: ENTRIES.find(p => p.id === clear.id) }))
@@ -862,6 +890,140 @@ function syncHome() {
   $('home-dash').replaceChildren(...parts);
 }
 
+/** The home page's guided journey card: five concept chapters with their
+ * rooms, the next suggestion, and the pause that folds it away. */
+function journeyCard(book: journal.Journal): HTMLElement {
+  const card = document.createElement('section');
+  card.className = 'card journey';
+  if (journey.dismissed()) {
+    const eyebrow = document.createElement('p');
+    eyebrow.className = 'eyebrow';
+    eyebrow.textContent = 'GUIDED PATH PAUSED';
+    const title = document.createElement('h2');
+    title.textContent = 'Explore your own way';
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = 'Your chapter progress is safe. Resume whenever you want a suggestion.';
+    const resume = document.createElement('button');
+    resume.textContent = 'Resume guided path';
+    resume.onclick = () => {
+      journey.setDismissed(false);
+      syncHome();
+    };
+    card.append(eyebrow, title, note, resume);
+    return card;
+  }
+  const chapters = journey.chapterProgress(book);
+  const done = chapters.reduce((sum, chapter) => sum + chapter.solved, 0);
+  const total = chapters.reduce((sum, chapter) => sum + chapter.total, 0);
+  const header = document.createElement('div');
+  header.className = 'journey-head';
+  const lead = document.createElement('div');
+  const eyebrow = document.createElement('p');
+  eyebrow.className = 'eyebrow';
+  eyebrow.textContent = `Optional journey · ${done}/${total}`;
+  const title = document.createElement('h2');
+  title.textContent = 'Build your Sokoban instincts';
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.textContent = 'Five concept chapters offer direction, never gates.';
+  lead.append(eyebrow, title, note);
+  const pause = document.createElement('button');
+  pause.className = 'journey-pause';
+  pause.textContent = 'Pause';
+  pause.setAttribute('aria-label', 'Pause guided path');
+  pause.onclick = () => {
+    journey.setDismissed(true);
+    syncHome();
+  };
+  header.append(lead, pause);
+  card.append(header);
+  const suggestion = journey.recommendation(book);
+  const row = document.createElement('div');
+  row.className = 'journey-next';
+  const copy = document.createElement('div');
+  const where = document.createElement('span');
+  const room = document.createElement('strong');
+  const why = document.createElement('p');
+  why.className = 'muted';
+  const go = document.createElement('a');
+  go.className = 'button';
+  if (suggestion !== null) {
+    where.textContent = `Suggested next · ${suggestion.chapterTitle}`;
+    room.textContent = ENTRIES.find(entry => entry.id === suggestion.roomId)?.title ?? suggestion.roomId;
+    why.textContent = suggestion.reason;
+    go.href = playHash(suggestion.roomId);
+    go.textContent = 'Play suggestion';
+  } else {
+    where.textContent = 'Journey complete';
+    room.textContent = 'Every chapter cleared';
+    why.textContent = 'Your next direction is yours: revisit a favorite route or explore the full catalog.';
+    go.href = '#/puzzles';
+    go.textContent = 'Browse catalog';
+  }
+  copy.append(where, room, why);
+  row.append(copy, go);
+  card.append(row);
+  const map = document.createElement('ol');
+  map.className = 'journey-map';
+  map.setAttribute('aria-label', 'Guided journey chapters');
+  for (const chapter of chapters) {
+    const item = document.createElement('li');
+    item.className = 'chapter';
+    if (chapter.complete) item.dataset.complete = 'true';
+    const heading = document.createElement('div');
+    heading.className = 'chapter-head';
+    const number = document.createElement('span');
+    number.className = 'chapter-number';
+    number.textContent = String(chapter.number);
+    const named = document.createElement('div');
+    const name = document.createElement('h3');
+    name.textContent = chapter.title;
+    const concept = document.createElement('p');
+    concept.textContent = chapter.concept;
+    named.append(name, concept);
+    const count = document.createElement('span');
+    count.className = 'chapter-count';
+    count.textContent = `${chapter.solved}/${chapter.total}`;
+    heading.append(number, named, count);
+    const explanation = document.createElement('p');
+    explanation.className = 'muted';
+    explanation.textContent = chapter.explanation;
+    item.append(heading, explanation);
+    if (chapter.requires.length > 0 && !chapter.ready) {
+      const wait = document.createElement('p');
+      wait.className = 'chapter-wait';
+      const required = chapter.requires[0]!;
+      wait.textContent = `Recommended first: ${chapters.find(entry => entry.id === required)?.title ?? required}`;
+      item.append(wait);
+    }
+    const nodes = document.createElement('div');
+    nodes.className = 'chapter-nodes';
+    nodes.setAttribute('aria-label', `${chapter.title} rooms`);
+    for (const [index, id] of chapter.rooms.entries()) {
+      const node = document.createElement('a');
+      node.className = 'node';
+      const entry = ENTRIES.find(candidate => candidate.id === id);
+      const cleared = book.cleared[id] !== undefined || (entry !== undefined && solved(entry));
+      if (cleared) node.dataset.complete = 'true';
+      node.href = playHash(id);
+      node.textContent = cleared ? '✓' : String(index + 1);
+      node.title = entry?.title ?? id;
+      node.setAttribute('aria-label', `${entry?.title ?? id}${cleared ? ', cleared' : ', not cleared'}`);
+      nodes.append(node);
+    }
+    item.append(nodes);
+    map.append(item);
+  }
+  card.append(map);
+  const browse = document.createElement('a');
+  browse.className = 'journey-browse';
+  browse.href = '#/puzzles';
+  browse.textContent = `Browse all ${ENTRIES.length} rooms`;
+  card.append(browse);
+  return card;
+}
+
 /** Renders the stats route: the aggregates over the journal and the stored
  * bests, the activity heat map, and the progress tools — copy, export,
  * import with its merge summary, and the reset behind three steps. */
@@ -869,6 +1031,8 @@ function renderStats() {
   const body = $('stats-body');
   const book = journal.load();
   const a = stats.aggregates(book);
+  // The tools below can change what the board wears; keep the frame current.
+  frames.apply();
   const note = (text: string) => {
     const live = document.getElementById('stats-status');
     if (live) live.textContent = text;
@@ -938,7 +1102,7 @@ function renderStats() {
     const empty = document.createElement('p');
     empty.className = 'muted';
     empty.textContent = 'Solve some rooms to fill in your statistics. An import still works.';
-    body.replaceChildren(tools, empty);
+    body.replaceChildren(tools, empty, showcase(a, book));
     return;
   }
 
@@ -1162,6 +1326,8 @@ function renderStats() {
     go.onclick = () => {
       journal.reset();
       for (const name of storage.names()) if (name.startsWith('best.')) storage.remove(name);
+      // The reset can unearn the frame the board wears.
+      frames.apply();
       navigate({ kind: 'home' });
     };
     const cancel = document.createElement('button');
@@ -1173,7 +1339,197 @@ function renderStats() {
   danger.append(dangerLabel, zone);
   grid.append(danger);
 
-  body.replaceChildren(tools, grid);
+  body.replaceChildren(tools, grid, showcase(a, book));
+}
+
+/** The stats page's progression showcase: the achievements in their
+ * collections with their progress, the milestones behind them, and the
+ * board-frame keepsakes an achievement unlocks. */
+function showcase(a: stats.Aggregates, book: journal.Journal): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'showcase';
+  const intro = document.createElement('div');
+  intro.className = 'showcase-intro';
+  const lead = document.createElement('div');
+  const eyebrow = document.createElement('p');
+  eyebrow.className = 'eyebrow';
+  eyebrow.textContent = 'LONG-TERM PROGRESS';
+  const title = document.createElement('h2');
+  title.textContent = 'Achievements and keepsakes';
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.textContent = 'Every requirement is visible and evaluated from your saved solves. Rewards never lock rooms or change board rules.';
+  lead.append(eyebrow, title, note);
+  const earned = achievements.unlocked(a, book);
+  const tally = document.createElement('strong');
+  tally.textContent = `${earned.length}/${achievements.ACHIEVEMENTS.length} earned`;
+  intro.append(lead, tally);
+  section.append(intro);
+
+  // Recent milestones: the path behind you, dated by the records.
+  const marks = achievements.milestones(a, book);
+  const recent = document.createElement('div');
+  recent.className = 'showcase-block';
+  const recentHead = document.createElement('div');
+  const recentEyebrow = document.createElement('p');
+  recentEyebrow.className = 'eyebrow';
+  recentEyebrow.textContent = 'RECENT MILESTONES';
+  const recentTitle = document.createElement('h3');
+  recentTitle.textContent = 'The path behind you';
+  recentHead.append(recentEyebrow, recentTitle);
+  const recentNote = document.createElement('span');
+  recentNote.className = 'muted';
+  recentNote.textContent = 'Based on saved completion dates';
+  recent.append(recentHead, recentNote);
+  if (marks.length > 0) {
+    const list = document.createElement('ol');
+    list.className = 'milestone-list';
+    for (const mark of marks) {
+      const item = document.createElement('li');
+      const tick = document.createElement('span');
+      tick.className = 'milestone-mark';
+      tick.setAttribute('aria-hidden', 'true');
+      tick.textContent = '✓';
+      const detail = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = mark.title;
+      const when = document.createElement('span');
+      when.textContent = `${mark.collectionTitle} · ${achievements.milestoneLabel(mark.earnedAt)}`;
+      const what = document.createElement('small');
+      what.textContent = mark.description;
+      detail.append(name, when, what);
+      item.append(tick, detail);
+      list.append(item);
+    }
+    recent.append(list);
+  } else {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.textContent = 'Your first solved room will place a milestone here.';
+    recent.append(none);
+  }
+  section.append(recent);
+
+  // The collections, one block per group of achievements.
+  const earnedIds = new Set(earned.map(def => def.id));
+  const collections = document.createElement('div');
+  collections.className = 'showcase-collections';
+  for (const collection of achievements.COLLECTIONS) {
+    const defs = achievements.ACHIEVEMENTS.filter(def => def.collection === collection.id);
+    const block = document.createElement('section');
+    const head = document.createElement('div');
+    const name = document.createElement('h3');
+    name.textContent = collection.title;
+    const blurb = document.createElement('p');
+    blurb.className = 'muted';
+    blurb.textContent = collection.description;
+    head.append(name, blurb);
+    const count = document.createElement('span');
+    count.className = 'showcase-tally';
+    count.textContent = `${defs.filter(def => earnedIds.has(def.id)).length}/${defs.length}`;
+    block.append(head, count);
+    const list = document.createElement('ul');
+    list.className = 'achievement-list';
+    for (const def of defs) {
+      const progress = def.progress(a, book);
+      const item = document.createElement('li');
+      if (progress.complete) item.dataset.earned = 'true';
+      const icon = document.createElement('span');
+      icon.className = 'achievement-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = progress.complete ? '✓' : def.icon;
+      const detail = document.createElement('div');
+      const top = document.createElement('div');
+      const label = document.createElement('strong');
+      label.textContent = def.title;
+      const standing = document.createElement('span');
+      standing.textContent = progress.complete ? 'Earned' : 'In progress';
+      top.append(label, standing);
+      const what = document.createElement('p');
+      what.textContent = def.description;
+      const track = document.createElement('div');
+      track.className = 'progress-track';
+      track.setAttribute('role', 'progressbar');
+      track.setAttribute('aria-label', `${def.title}: ${progress.label}`);
+      track.setAttribute('aria-valuemin', '0');
+      track.setAttribute('aria-valuemax', String(progress.target));
+      track.setAttribute('aria-valuenow', String(progress.current));
+      const fill = document.createElement('span');
+      fill.className = 'progress-fill';
+      fill.style.width = `${Math.round((progress.current / progress.target) * 100)}%`;
+      track.append(fill);
+      const label2 = document.createElement('small');
+      label2.textContent = progress.label;
+      detail.append(top, what, track, label2);
+      item.append(icon, detail);
+      list.append(item);
+    }
+    block.append(list);
+    collections.append(block);
+  }
+  section.append(collections);
+
+  // The board-frame keepsakes: choose a quiet finishing touch.
+  const keepsakes = document.createElement('div');
+  keepsakes.className = 'showcase-block';
+  const keepsakeHead = document.createElement('div');
+  const keepsakeEyebrow = document.createElement('p');
+  keepsakeEyebrow.className = 'eyebrow';
+  keepsakeEyebrow.textContent = 'BOARD-FRAME KEEPSAKES';
+  const keepsakeTitle = document.createElement('h3');
+  keepsakeTitle.textContent = 'Choose a quiet finishing touch';
+  keepsakeHead.append(keepsakeEyebrow, keepsakeTitle);
+  const keepsakeNote = document.createElement('span');
+  keepsakeNote.className = 'muted';
+  keepsakeNote.textContent = 'Frame and shadow only';
+  keepsakes.append(keepsakeHead, keepsakeNote);
+  const never = document.createElement('p');
+  never.className = 'muted';
+  never.textContent = 'These never recolor tiles, goals, crates, the robot, warnings, or focus indicators.';
+  keepsakes.append(never);
+  const picks = document.createElement('div');
+  picks.className = 'keepsake-grid';
+  picks.setAttribute('role', 'group');
+  picks.setAttribute('aria-label', 'Board frame cosmetic');
+  for (const state of frames.states(frames.preference(), theme.preferences().themeFamily, a, book)) {
+    const usable = state.unlocked && state.compatible;
+    const pick = document.createElement('button');
+    pick.className = 'keepsake';
+    pick.dataset.frame = state.id;
+    if (state.active) pick.dataset.active = 'true';
+    if (!usable) pick.dataset.locked = 'true';
+    pick.setAttribute('aria-pressed', String(state.active));
+    pick.disabled = !usable;
+    pick.onclick = () => {
+      frames.save(state.id);
+      renderStats();
+    };
+    const preview = document.createElement('span');
+    preview.className = 'keepsake-preview';
+    preview.setAttribute('aria-hidden', 'true');
+    const chip = document.createElement('span');
+    preview.append(chip);
+    const copy = document.createElement('span');
+    copy.className = 'keepsake-copy';
+    const name = document.createElement('strong');
+    name.textContent = state.title;
+    const blurb = document.createElement('small');
+    blurb.textContent = state.description;
+    const standing = document.createElement('em');
+    standing.textContent = !state.unlocked
+      ? state.requirement
+      : !state.compatible
+        ? `Use with ${state.families.map(family => family.replaceAll('-', ' ')).join(' or ')}`
+        : state.active
+          ? 'Active'
+          : 'Available';
+    copy.append(name, blurb, standing);
+    pick.append(preview, copy);
+    picks.append(pick);
+  }
+  keepsakes.append(picks);
+  section.append(keepsakes);
+  return section;
 }
 
 /** The theme menu's labels; the values are theme.ts's lists. */
@@ -1203,7 +1559,11 @@ function bindThemeMenu() {
   const motion = select('motion');
   for (const value of theme.MOTIONS) motion.add(new Option(MOTION_LABELS[value], value));
   syncThemeMenu();
-  family.onchange = () => theme.set({ themeFamily: choice('theme-family', theme.THEME_FAMILIES) });
+  family.onchange = () => {
+    theme.set({ themeFamily: choice('theme-family', theme.THEME_FAMILIES) });
+    // The family decides which frames fit.
+    frames.apply();
+  };
   appearance.onchange = () => theme.set({ appearance: choice('appearance', theme.APPEARANCES) });
   motion.onchange = () => theme.set({ motion: choice('motion', theme.MOTIONS) });
   addEventListener('storage', event => {
@@ -1214,6 +1574,8 @@ function bindThemeMenu() {
 async function start() {
   theme.start();
   bindThemeMenu();
+  // The board wears whatever frame the journal has earned.
+  frames.apply();
   const mode = select('mode');
   const syncModeHelp = () => setText('mode-help', mode.selectedOptions[0]?.dataset.help ?? '');
   mode.onchange = syncModeHelp;

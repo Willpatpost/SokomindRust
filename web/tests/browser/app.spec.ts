@@ -540,3 +540,86 @@ test('the type-RESET reset clears progress', async ({ page }) => {
   await expect(page).toHaveURL(/#\/$/);
   await expect(page.locator('#home-dash > .muted')).toHaveText('0 of 57 rooms cleared');
 });
+
+test('the guided journey recommends the next room and pauses', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/');
+  await expect(page.locator('.journey .eyebrow')).toHaveText('Optional journey · 0/19');
+  // A fresh journal points at the first room of the first chapter.
+  await expect(page.locator('.journey-next strong')).toHaveText('First Steps');
+  await expect(page.locator('.journey-next .button')).toHaveAttribute('href', '#/play/ultra-tiny');
+  await expect(page.locator('.journey-map .chapter')).toHaveCount(5);
+  await expect(page.locator('.chapter-nodes .node')).toHaveCount(19);
+  // Pause folds the card to its resume state; resume brings it back.
+  await page.click('.journey-pause');
+  await expect(page.locator('.journey h2')).toHaveText('Explore your own way');
+  await page.getByRole('button', { name: 'Resume guided path' }).click();
+  await expect(page.locator('.journey .eyebrow')).toHaveText('Optional journey · 0/19');
+});
+
+test('achievements and keepsakes render from the journal', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.addInitScript(() => {
+    const now = new Date();
+    const day = now.toISOString().slice(0, 10);
+    localStorage.setItem(
+      'sokomind-rust.v1.journal',
+      JSON.stringify({
+        cleared: {
+          'ultra-tiny': { moves: 5, pushes: 2, clearedAt: now.toISOString() },
+          'tutorial-push': { moves: 6, pushes: 3, clearedAt: now.toISOString() },
+          tiny: { moves: 7, pushes: 4, clearedAt: now.toISOString() },
+        },
+        daily: {},
+        activity: { [day]: ['ultra-tiny'] },
+      }),
+    );
+  });
+  await page.goto('/#/stats');
+  await expect(page.locator('.showcase-intro strong')).toHaveText('1/17 earned');
+  await expect(page.locator('.milestone-list li')).toHaveCount(1);
+  await expect(page.locator('.milestone-list li')).toContainText('First Steps');
+  await expect(page.locator('.milestone-list li')).toContainText('Room by room');
+  await expect(page.locator(".achievement-list li[data-earned='true']")).toHaveCount(1);
+  // The classic frame wears; the earned ones name their requirements.
+  await expect(page.locator(".keepsake[data-frame='classic']")).toHaveAttribute('data-active', 'true');
+  await expect(page.locator(".keepsake[data-frame='classic'] em")).toHaveText('Active');
+  await expect(page.locator(".keepsake[data-frame='sage-thread']")).toBeDisabled();
+  await expect(page.locator(".keepsake[data-frame='sage-thread'] em")).toHaveText('Earn Getting Started');
+});
+
+test('an earned frame wears on the board, and ratings mark their rows', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.addInitScript(() => {
+    const now = new Date();
+    const rooms = [
+      'ultra-tiny',
+      'tutorial-push',
+      'tiny',
+      'tutorial-around',
+      'beginner-detour',
+      'box-5x5-a',
+      'beginner-three',
+      'beginner-typed-line',
+      'workshop-1',
+      'classic-1',
+    ];
+    const cleared: Record<string, { moves: number; pushes: number; clearedAt: string }> = {};
+    for (const room of rooms) cleared[room] = { moves: 6, pushes: 2, clearedAt: now.toISOString() };
+    localStorage.setItem('sokomind-rust.v1.journal', JSON.stringify({ cleared, daily: {}, activity: {} }));
+    localStorage.setItem('sokomind-rust.v1.ratings', JSON.stringify({ 'ultra-tiny': 'easy' }));
+  });
+  await page.goto('/#/stats');
+  // Ten cleared rooms earn the sage thread; choosing it makes it wear.
+  await expect(page.locator(".keepsake[data-frame='sage-thread']")).toBeEnabled();
+  await expect(page.locator(".keepsake[data-frame='sage-thread'] em")).toHaveText('Available');
+  await page.click(".keepsake[data-frame='sage-thread']");
+  await expect(page.locator(".keepsake[data-frame='sage-thread']")).toHaveAttribute('data-active', 'true');
+  await page.goto(PLAY_FIRST);
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await expect(page.locator('html')).toHaveAttribute('data-board-frame', 'sage-thread');
+  // The felt-difficulty rating marks its row in the catalog's list.
+  await page.goto('/#/puzzles/tutorial');
+  await expect(page.locator('.puzzle-row').first().locator('.rating-dot')).toHaveAttribute('data-rating', 'easy');
+  await expect(page.locator('.puzzle-row').first().locator('.rating-dot')).toHaveAttribute('title', 'Felt easy');
+});
