@@ -144,6 +144,10 @@ function animate(route: string) {
 }
 function invalidate() {
   solver.reset();
+  // The position is moving on, and a hint answers for the position it was
+  // asked about: it goes with the search and the playback. The client
+  // silences the worker before terminating it, so no late nudge lands.
+  hint.reset();
   playback.stop();
   updateButtons();
   setStatus('Ready when you are.');
@@ -308,12 +312,15 @@ function toggleZen() {
   $('zen-dock').hidden = !zen;
 }
 
-/** Pauses the attempt: input and the clock stop until P resumes them. */
+/** Pauses the attempt: input, searches and the clock stop until P resumes them. */
 function togglePause() {
   paused = !paused;
   $('pause').hidden = !paused;
-  if (paused) timer.pause();
-  else if (session !== undefined && !session.state.solved && session.state.moves > 0) timer.run();
+  if (paused) {
+    timer.pause();
+    // A hint running under a pause would land its nudge on resume, unasked for.
+    hint.reset();
+  } else if (session !== undefined && !session.state.solved && session.state.moves > 0) timer.run();
 }
 
 function changed() {
@@ -411,7 +418,7 @@ let zen = false;
 function move(direction: number) {
   if (!session || paused) return;
   const { game } = session;
-  if (solver.busy || solver.route !== undefined || playback.active) invalidate();
+  if (solver.busy || hint.busy || solver.route !== undefined || playback.active) invalidate();
   if (stepWithCue(direction)) changed();
   else {
     board.blocked(direction);
@@ -518,7 +525,7 @@ function tap(x: number, y: number, touch: boolean) {
     const current = session;
     const cell = current === undefined ? undefined : board.cellAt(x, y);
     if (current === undefined || cell === undefined || paused) return;
-    if (solver.busy || solver.route !== undefined || playback.active) invalidate();
+    if (solver.busy || hint.busy || solver.route !== undefined || playback.active) invalidate();
     const route = walkRoute(current.game.width(), current.tiles, current.state.boxes, current.state.player, cell);
     if (route !== undefined) animate(route);
   };
@@ -560,9 +567,10 @@ const hint = new SolverClient({
 });
 
 /** Asks for a hint: a fast search at the original's limits, unless one runs,
- * the attempt is paused, or the cooldown from three misses stands. */
+ * a route is playing, the attempt is paused, or the cooldown from three
+ * misses stands. */
 function askHint() {
-  if (hint.busy || paused || !session) return;
+  if (hint.busy || playback.active || paused || !session) return;
   if (hintCooldown !== undefined && performance.now() - hintCooldown < 30_000) {
     message('The hint is resting after three misses. It will return shortly.');
     return;
@@ -706,6 +714,7 @@ export {
   engineReady,
   enterPlay,
   goalsOn,
+  hint,
   invalidate,
   load,
   loaded,

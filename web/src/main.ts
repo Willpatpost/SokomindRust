@@ -23,6 +23,7 @@ import {
   engineArrived,
   engineReady,
   enterPlay,
+  hint,
   invalidate,
   load,
   loaded,
@@ -284,7 +285,11 @@ async function start() {
   };
   button('deadlock-keep').onclick = () => closeDialog('deadlock');
   // The search laboratory: the play page's solver dialog, and its door to the lab.
-  button('open-solver').onclick = () => openDialog('solver');
+  button('open-solver').onclick = () => {
+    // A hint asked before the dialog opened would play its nudge behind it.
+    hint.reset();
+    openDialog('solver');
+  };
   button('solver-close').onclick = () => closeDialog('solver');
   button('solver-lab-link').onclick = () => {
     closeDialog('solver');
