@@ -7,6 +7,10 @@ export type PlaybackState =
 /** Replays a route through `step`, one move per STEP_INTERVAL_MS, with pause and resume. */
 export class Playback {
   state: PlaybackState = { kind: 'idle' };
+  /** Whether the route's steps hold just now, as the page's pause holds them:
+   * a held tick steps nothing and ends nothing, and the route resumes where it
+   * stood once the hold lifts. Distinct from toggle(), the route's own pause. */
+  holds?: () => boolean;
   private clock: Scheduler;
   private step: (direction: number) => boolean;
   private changed: () => void;
@@ -44,6 +48,7 @@ export class Playback {
     this.state = state;
     state.timer = this.clock.interval(() => {
       if (this.state !== state) return;
+      if (this.holds?.()) return;
       if (state.index >= state.route.length) {
         this.end();
         return;

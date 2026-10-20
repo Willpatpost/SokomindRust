@@ -51,3 +51,27 @@ test('stop and blocked replay invalidate old callbacks', () => {
   assert.equal(playback.active, false);
   assert.equal(clock.tasks.size, 0);
 });
+test('a hold gate stops stepping while held and resumes after', () => {
+  const clock = new Clock();
+  const moves: number[] = [];
+  const playback = new Playback(
+    direction => {
+      moves.push(direction);
+      return true;
+    },
+    () => {},
+    () => {},
+    clock,
+  );
+  let held = true;
+  playback.holds = () => held;
+  playback.play('UDLR');
+  clock.advance(280);
+  assert.deepEqual(moves, []);
+  held = false;
+  // Four ticks step the four moves; a fifth ends the route.
+  clock.advance(350);
+  assert.deepEqual(moves, [0, 1, 2, 3]);
+  assert.equal(playback.state.kind, 'idle');
+  assert.equal(clock.tasks.size, 0);
+});

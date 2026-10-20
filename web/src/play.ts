@@ -122,6 +122,9 @@ const playback = new Playback(stepWithCue, changed, blocked => {
   updateButtons();
   if (blocked) message('Replay was blocked.');
 });
+// The page's pause holds a playing route's steps: the robot stops behind the
+// overlay, and the route resumes where it stood when the pause lifts.
+playback.holds = () => paused;
 const progress = new Progress({ verify, show: showBest, status: value => setText('storage', value) });
 const timer = new Timer({ show: ms => setText('timer', clock(ms)) });
 /** The best on show, for the score card's pace deltas. */
@@ -136,7 +139,7 @@ function updateButtons() {
   setText('play', !playback.active ? 'Play route' : playback.state.kind === 'paused' ? 'Resume' : 'Pause');
   button('copy').disabled = solver.route === undefined;
   button('hint').disabled = hint.busy || paused || !state || state.solved;
-  button('undo').disabled = !state || state.moves === 0;
+  button('undo').disabled = !state || state.moves === 0 || paused;
 }
 function animate(route: string) {
   playback.play(route);
@@ -321,6 +324,7 @@ function togglePause() {
     // A hint running under a pause would land its nudge on resume, unasked for.
     hint.reset();
   } else if (session !== undefined && !session.state.solved && session.state.moves > 0) timer.run();
+  updateButtons();
 }
 
 function changed() {

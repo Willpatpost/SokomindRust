@@ -237,6 +237,7 @@ async function start() {
     }
   };
   button('load-route').onclick = () => {
+    if (paused) return;
     const actions = $<HTMLTextAreaElement>('route-input').value.toUpperCase().replace(/\s/g, '');
     if (!actions) {
       message('Route is empty.');
