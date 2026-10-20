@@ -10,16 +10,33 @@ export type Appearance = (typeof APPEARANCES)[number];
 export const MOTIONS = ['system', 'full', 'reduced'] as const;
 export type Motion = (typeof MOTIONS)[number];
 
-/** The theme preferences, stored as one record under the app's storage prefix.
- * Sound and music preferences join this record when the audio phase lands. */
+/** The theme preferences, stored as one record under the app's storage prefix,
+ * with the sound choices the audio phase landed. */
 export interface Preferences {
   themeFamily: ThemeFamily;
   appearance: Appearance;
   motion: Motion;
+  /** The master switch; the music and effects choices survive a mute. */
+  soundEnabled: boolean;
+  /** The quiet procedural soundscape's own switch. */
+  musicEnabled: boolean;
+  /** Effect loudness, 0 to 1. */
+  effectsVolume: number;
+  /** Music loudness, 0 to 1. */
+  musicVolume: number;
 }
 
-/** What a visitor with no stored choice gets: the default family, following the OS. */
-export const DEFAULT_PREFERENCES: Preferences = { themeFamily: 'cozy-study', appearance: 'system', motion: 'system' };
+/** What a visitor with no stored choice gets: the default family, following the
+ * OS, with sound on at half volume. */
+export const DEFAULT_PREFERENCES: Preferences = {
+  themeFamily: 'cozy-study',
+  appearance: 'system',
+  motion: 'system',
+  soundEnabled: true,
+  musicEnabled: true,
+  effectsVolume: 0.5,
+  musicVolume: 0.5,
+};
 
 /** The storage key the preferences live under; the boot script in index.html
  * reads the same key before this module loads (checked by scripts/mirrors.test.mjs). */
@@ -29,15 +46,30 @@ function member<T extends string>(list: readonly T[], value: unknown): value is 
   return typeof value === 'string' && list.includes(value as T);
 }
 
-/** A value as preferences, or null unless every field is one of the module's options.
- * A record that fails is discarded whole, so a partly-written theme never applies. */
+/** A volume as stored, clamped to its range, or the fallback when absent or malformed. */
+function volume(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback;
+}
+
+/** A value as preferences, or null unless the theme fields are one of the
+ * module's options. A record that fails is discarded whole, so a partly-written
+ * theme never applies; the sound fields read leniently, so a record the app
+ * stored before the audio phase keeps its theme and takes the sound defaults. */
 function parse(value: unknown): Preferences | null {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Partial<Preferences>;
   if (!member(THEME_FAMILIES, candidate.themeFamily) || !member(APPEARANCES, candidate.appearance) || !member(MOTIONS, candidate.motion)) {
     return null;
   }
-  return { themeFamily: candidate.themeFamily, appearance: candidate.appearance, motion: candidate.motion };
+  return {
+    themeFamily: candidate.themeFamily,
+    appearance: candidate.appearance,
+    motion: candidate.motion,
+    soundEnabled: candidate.soundEnabled !== false,
+    musicEnabled: candidate.musicEnabled !== false,
+    effectsVolume: volume(candidate.effectsVolume, DEFAULT_PREFERENCES.effectsVolume),
+    musicVolume: volume(candidate.musicVolume, DEFAULT_PREFERENCES.musicVolume),
+  };
 }
 
 /** The stored preferences, or the defaults when none are stored or the record is malformed. */

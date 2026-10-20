@@ -58,6 +58,7 @@ import * as traces from './traces.ts';
 import { statusText } from './verdict.ts';
 import * as editor from './editor.ts';
 import * as generator from './generator.ts';
+import * as audio from './audio.ts';
 
 /** The loaded puzzle. load() replaces it whole; render() refreshes `state`
  * from the game after every change. */
@@ -160,15 +161,11 @@ const solver = new SolverClient({
     verify(loaded().puzzle.text, prefix + route);
   },
 });
-const playback = new Playback(
-  direction => loaded().game.step(direction),
-  changed,
-  blocked => {
-    solver.dropRoute();
-    updateButtons();
-    if (blocked) message('Replay was blocked.');
-  },
-);
+const playback = new Playback(stepWithCue, changed, blocked => {
+  solver.dropRoute();
+  updateButtons();
+  if (blocked) message('Replay was blocked.');
+});
 const progress = new Progress({ verify, show: showBest, status: value => setText('storage', value) });
 const timer = new Timer({ show: ms => setText('timer', clock(ms)) });
 /** The best on show, for the score card's pace deltas. */
@@ -214,6 +211,7 @@ function paint({ game, tiles, labels, state }: Session) {
   if (stuck.length > deadCount && state.pushes > lastPushes) {
     openDialog('deadlock');
     message('Deadlock: a box cannot reach its goal from here.');
+    void sound.playCue('blocked', { variant: 'deadlock' });
   }
   deadCount = stuck.length;
   lastPushes = state.pushes;
@@ -315,7 +313,8 @@ function markRating() {
  * as move-optimal. */
 function finish(state: Snapshot, before: storage.Best | null, earned: readonly achievements.Def[] = []) {
   const { puzzle } = loaded();
-  const shown = present({ moves: state.moves, pushes: state.pushes }, before, optimal.proven(puzzle.id, puzzle.text));
+  const certified = optimal.proven(puzzle.id, puzzle.text);
+  const shown = present({ moves: state.moves, pushes: state.pushes }, before, certified);
   setText('complete-eyebrow', shown.eyebrow);
   setText('complete-title', shown.title);
   setText('complete-summary', shown.summary);
@@ -339,6 +338,9 @@ function finish(state: Snapshot, before: storage.Best | null, earned: readonly a
   setText('complete-pushes', signed(state.pushes, before?.pushes));
   setText('complete-time', clock(timer.elapsed()));
   markRating();
+  // The celebration's chord: the engine's certification outranks the record,
+  // and a first clear outranks a personal best.
+  void sound.playCue('solve', { variant: audio.solveVariant(before, state.moves, certified !== undefined) });
   openDialog('complete');
   celebrate(before === null ? 'first' : shown.eyebrow === 'PERSONAL MILESTONE' ? 'best' : 'clear');
 }
@@ -448,7 +450,7 @@ function move(direction: number) {
   if (!session || paused) return;
   const { game } = session;
   if (solver.busy || solver.route !== undefined || playback.active) invalidate();
-  if (game.step(direction)) changed();
+  if (stepWithCue(direction)) changed();
   else {
     board.blocked(direction);
     if (game.moves() >= MAX_ROUTE) message(`Session move limit reached (${MAX_ROUTE}). Undo or restart to continue.`);
@@ -2877,10 +2879,27 @@ function drawPlaytest() {
 function playtestMove(direction: number) {
   const active = playtest;
   if (active === undefined || active.state.solved) return;
+  const beforeGoals = goalsOn(active.game, active.labels);
+  const beforePushes = active.state.pushes;
   if (active.game.step(direction)) {
     active.state = decodeSnapshot(active.game.snapshot(), active.labels.length);
+    const afterGoals = goalsOn(active.game, active.labels);
+    const kind: audio.MoveKind =
+      afterGoals > beforeGoals
+        ? 'goal-enter'
+        : afterGoals < beforeGoals
+          ? 'goal-leave'
+          : active.state.pushes > beforePushes
+            ? 'push'
+            : 'step';
+    const presentation = audio.moveCue(kind, direction, afterGoals, active.labels.length);
+    void sound.playCue(presentation.cue, { pitchOffset: presentation.pitchOffset, variant: presentation.variant });
     drawPlaytest();
-  } else editorBoard.blocked(direction);
+  } else {
+    const blocked = audio.moveCue('blocked', direction, 0, 0);
+    void sound.playCue(blocked.cue, { pitchOffset: blocked.pitchOffset });
+    editorBoard.blocked(direction);
+  }
 }
 
 /** A still touch or click on the playtest board walks the robot to the cell,
@@ -3279,6 +3298,7 @@ function bindEditor() {
     const active = playtest;
     if (active !== undefined && active.game.undo()) {
       active.state = decodeSnapshot(active.game.snapshot(), active.labels.length);
+      void sound.playCue('undo');
       drawPlaytest();
     }
   };
@@ -3287,6 +3307,7 @@ function bindEditor() {
     if (active === undefined) return;
     active.game.reset();
     active.state = decodeSnapshot(active.game.snapshot(), active.labels.length);
+    void sound.playCue('reset');
     drawPlaytest();
   };
   button('editor-playtest-exit').onclick = () => {
@@ -3565,6 +3586,113 @@ function bindGenerator() {
   };
 }
 
+/** ────────────────────────────────────────────────────────────────────────────
+ * The procedural sound: the synthesizer the theme menu mixes, and the step
+ * wrapper that reads each move's cue off the engine's own verdict.
+ */
+
+/** The page's synthesizer, quiet until a gesture unlocks it. */
+const sound = new audio.AudioController(theme.preferences());
+
+/** How many boxes stand on their goals, straight off the engine. */
+function goalsOn(game: WasmGame, labels: Uint8Array): number {
+  let count = 0;
+  for (let index = 0; index < labels.length; index++) if (game.on_goal(index)) count++;
+  return count;
+}
+
+/** Steps the game and plays the move's cue off the engine's own verdict —
+ * blocked, a step, a push, or a push that changed how many boxes stand on
+ * their goals. The play page's moves and every playback ride the same step. */
+function stepWithCue(direction: number): boolean {
+  const { game, labels } = loaded();
+  const beforeGoals = goalsOn(game, labels);
+  const beforePushes = decodeSnapshot(game.snapshot(), labels.length).pushes;
+  if (!game.step(direction)) {
+    const blocked = audio.moveCue('blocked', direction, 0, 0);
+    void sound.playCue(blocked.cue, { pitchOffset: blocked.pitchOffset });
+    return false;
+  }
+  const afterGoals = goalsOn(game, labels);
+  const afterPushes = decodeSnapshot(game.snapshot(), labels.length).pushes;
+  const kind: audio.MoveKind =
+    afterGoals > beforeGoals ? 'goal-enter' : afterGoals < beforeGoals ? 'goal-leave' : afterPushes > beforePushes ? 'push' : 'step';
+  const presentation = audio.moveCue(kind, direction, afterGoals, labels.length);
+  void sound.playCue(presentation.cue, { pitchOffset: presentation.pitchOffset, variant: presentation.variant });
+  return true;
+}
+
+/** Binds the sound choices into the theme menu, keeps the controller following
+ * the stored record — this tab's menu and another tab's — and wakes the
+ * browser's audio on the first gesture. */
+function bindAudio() {
+  const master = $<HTMLInputElement>('sound-enabled');
+  const music = $<HTMLInputElement>('music-enabled');
+  const effects = $<HTMLInputElement>('effects-volume');
+  const effectsOut = $<HTMLOutputElement>('effects-volume-out');
+  const musicVolume = $<HTMLInputElement>('music-volume');
+  const musicOut = $<HTMLOutputElement>('music-volume-out');
+  const note = $('audio-note');
+  const sync = () => {
+    const prefs = theme.preferences();
+    sound.setPreferences(prefs);
+    master.checked = prefs.soundEnabled;
+    music.checked = prefs.musicEnabled;
+    music.disabled = !prefs.soundEnabled;
+    effects.value = String(prefs.effectsVolume);
+    musicVolume.value = String(prefs.musicVolume);
+    effectsOut.textContent = `${Math.round(prefs.effectsVolume * 100)}%`;
+    musicOut.textContent = `${Math.round(prefs.musicVolume * 100)}%`;
+  };
+  master.addEventListener('change', () => {
+    theme.set({ soundEnabled: master.checked });
+    sync();
+  });
+  music.addEventListener('change', () => {
+    theme.set({ musicEnabled: music.checked });
+    sync();
+  });
+  effects.addEventListener('input', () => {
+    theme.set({ effectsVolume: Number(effects.value) });
+    sync();
+  });
+  musicVolume.addEventListener('input', () => {
+    theme.set({ musicVolume: Number(musicVolume.value) });
+    sync();
+  });
+  button('preview-effects').onclick = () => {
+    void sound.previewEffects().then(played => {
+      note.textContent = played ? 'Effects preview played.' : 'Effects preview could not play.';
+    });
+  };
+  button('preview-music').onclick = () => {
+    void sound.previewMusic().then(played => {
+      note.textContent = played ? 'Music preview played.' : 'Music preview could not play.';
+    });
+  };
+  sync();
+  // Another tab's menu writes the same record.
+  addEventListener('storage', event => {
+    if (event.key === storage.key(theme.EXPERIENCE_KEY)) sync();
+  });
+  // The browser needs a gesture before sound; the first one anywhere wakes it.
+  const wake = () => void sound.unlock();
+  document.addEventListener('pointerdown', wake, { once: true, capture: true });
+  document.addEventListener('keydown', wake, { once: true, capture: true });
+  // A hidden page goes quiet, whatever the menu says.
+  document.addEventListener('visibilitychange', () => sound.setPageVisible(document.visibilityState !== 'hidden'));
+  // M mutes or restores, anywhere a dialog is not open and a field is not
+  // taking the key.
+  document.addEventListener('keydown', event => {
+    if (event.key.toLowerCase() !== 'm' || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (document.querySelector('dialog[open]')) return;
+    if (event.target instanceof Element && event.target.matches('input,textarea,select')) return;
+    theme.set({ soundEnabled: !theme.preferences().soundEnabled });
+    sync();
+    note.textContent = theme.preferences().soundEnabled ? 'Audio restored.' : 'Audio muted.';
+  });
+}
+
 async function start() {
   theme.start();
   bindThemeMenu();
@@ -3585,12 +3713,13 @@ async function start() {
   onPage('stats', renderStats);
   onPage('solver-lab', renderLab);
   onPage('editor', renderEditor);
-  // The lab's, the editor's and the generator's controls bind before the
-  // router reports its first route, so a page that opens cold is interactive
-  // at once.
+  // The lab's, the editor's, the generator's and the sound's controls bind
+  // before the router reports its first route, so a page that opens cold is
+  // interactive at once.
   bindLab();
   bindEditor();
   bindGenerator();
+  bindAudio();
   // Leaving the play page stops its search and playback; the session keeps
   // saving. Leaving the editor flushes its autosave and ends any playtest.
   subscribe(next => {
@@ -3628,12 +3757,16 @@ async function start() {
   button('next').onclick = () => step(1);
   button('undo').onclick = () => {
     invalidate();
-    if (loaded().game.undo()) changed();
+    if (loaded().game.undo()) {
+      void sound.playCue('undo');
+      changed();
+    }
   };
   button('undo-5').onclick = () => {
     invalidate();
     const { game } = loaded();
     for (let i = 0; i < 5 && game.moves() > 0; i++) game.undo();
+    void sound.playCue('undo');
     changed();
   };
   button('copy-moves').onclick = async () => {
@@ -3649,6 +3782,7 @@ async function start() {
     loaded().game.reset();
     // A restart is a fresh attempt: its clock starts over.
     timer.reset(loaded().puzzle.id);
+    void sound.playCue('reset');
     changed();
   };
   button('best').onclick = () => {

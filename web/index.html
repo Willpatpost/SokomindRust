@@ -44,7 +44,7 @@
       </nav>
       <span class="tagline">Small moves. Deep puzzles.</span>
       <details class="theme-menu">
-        <summary>Theme</summary>
+        <summary>Theme &amp; sound</summary>
         <div class="theme-fields">
           <label for="theme-family">Family</label>
           <select id="theme-family"></select>
@@ -52,6 +52,20 @@
           <select id="appearance"></select>
           <label for="motion">Motion</label>
           <select id="motion"></select>
+          <div class="sound-fields">
+            <label class="check"><input id="sound-enabled" type="checkbox" checked /><span>All audio</span></label>
+            <label class="check"><input id="music-enabled" type="checkbox" checked /><span>Music</span></label>
+            <label class="range-label" for="effects-volume">Effects volume <output id="effects-volume-out">50%</output></label>
+            <input id="effects-volume" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <label class="range-label" for="music-volume">Music volume <output id="music-volume-out">50%</output></label>
+            <input id="music-volume" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <div class="actions">
+              <button id="preview-effects">Preview effects</button>
+              <button id="preview-music">Preview music</button>
+            </div>
+            <p id="audio-note" class="fine" role="status"></p>
+            <p class="fine">Browsers need a click or a key before sound can begin. Press M to mute or restore.</p>
+          </div>
         </div>
       </details>
       <span id="connection">Browser mode</span>

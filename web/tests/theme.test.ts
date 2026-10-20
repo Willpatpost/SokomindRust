@@ -29,7 +29,7 @@ test('update merges each patch over the stored preferences', () => {
     appearance: 'dark',
     motion: 'reduced',
   });
-  assert.deepEqual(preferences(), { themeFamily: 'minimal-ink', appearance: 'dark', motion: 'reduced' });
+  assert.deepEqual(preferences(), { ...DEFAULT_PREFERENCES, themeFamily: 'minimal-ink', appearance: 'dark', motion: 'reduced' });
 });
 
 test('a system appearance or motion resolves through the OS preference; an explicit choice wins', () => {
@@ -41,4 +41,28 @@ test('a system appearance or motion resolves through the OS preference; an expli
   assert.equal(resolveMotion('system', false), 'full');
   assert.equal(resolveMotion('full', true), 'full');
   assert.equal(resolveMotion('reduced', false), 'reduced');
+});
+
+test('the sound choices ride the theme record', () => {
+  // A record the pre-audio app stored keeps its theme and takes the sound defaults.
+  storage.write('experience', { themeFamily: 'minimal-ink', appearance: 'dark', motion: 'reduced' });
+  assert.deepEqual(preferences(), { ...DEFAULT_PREFERENCES, themeFamily: 'minimal-ink', appearance: 'dark', motion: 'reduced' });
+  // Malformed sound fields fall back to the defaults; the theme survives.
+  storage.write('experience', {
+    themeFamily: 'minimal-ink',
+    appearance: 'dark',
+    motion: 'reduced',
+    effectsVolume: 'loud',
+    soundEnabled: 'yes',
+  });
+  assert.deepEqual(preferences(), { ...DEFAULT_PREFERENCES, themeFamily: 'minimal-ink', appearance: 'dark', motion: 'reduced' });
+  // A volume outside its range clamps into it.
+  storage.write('experience', { ...DEFAULT_PREFERENCES, musicVolume: 7 });
+  assert.equal(preferences().musicVolume, 1);
+  storage.write('experience', { ...DEFAULT_PREFERENCES, effectsVolume: -3 });
+  assert.equal(preferences().effectsVolume, 0);
+  // Explicit choices round-trip over the defaults.
+  storage.write('experience', DEFAULT_PREFERENCES);
+  update({ soundEnabled: false, musicVolume: 0.25 });
+  assert.deepEqual(preferences(), { ...DEFAULT_PREFERENCES, soundEnabled: false, musicVolume: 0.25 });
 });

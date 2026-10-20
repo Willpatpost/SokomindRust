@@ -919,3 +919,26 @@ test('the difficulty preset shapes the room the generator grows', async ({ page 
   await expect(page.locator('#generator-boxes')).toHaveValue('1');
   await expect(page.locator('#generator-labels')).toBeDisabled();
 });
+
+test('the sound choices persist and M mutes', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await loaded(page);
+  // The menu shows the defaults.
+  await page.locator('summary', { hasText: 'Theme & sound' }).click();
+  await expect(page.locator('#sound-enabled')).toBeChecked();
+  await expect(page.locator('#effects-volume-out')).toHaveText('50%');
+  // M mutes from wherever the page stands, and the menu follows.
+  await page.keyboard.press('m');
+  await expect(page.locator('#sound-enabled')).not.toBeChecked();
+  await expect(page.locator('#audio-note')).toHaveText('Audio muted.');
+  // The music toggle follows the master switch.
+  await expect(page.locator('#music-enabled')).toBeDisabled();
+  // The choice persists across a reload, and M restores it.
+  await page.reload();
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await page.locator('summary', { hasText: 'Theme & sound' }).click();
+  await expect(page.locator('#sound-enabled')).not.toBeChecked();
+  await page.keyboard.press('m');
+  await expect(page.locator('#sound-enabled')).toBeChecked();
+  await expect(page.locator('#audio-note')).toHaveText('Audio restored.');
+});
