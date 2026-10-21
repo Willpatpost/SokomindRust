@@ -45,6 +45,7 @@
         <button id="update-dismiss" aria-label="Dismiss update notification">×</button>
       </div>
     </aside>
+
     <header>
       <a href="#/" class="brand">SOKOMIND <span>RUST</span></a>
       <nav class="site-nav" aria-label="Site">
@@ -103,61 +104,63 @@
       </section>
       <section data-page="play" aria-label="Puzzle game">
         <div class="play-grid">
-          <div class="puzzle-picker">
-            <label for="puzzles">Puzzle</label>
-            <select id="puzzles"></select>
-            <button id="prev" title="Previous puzzle" aria-label="Previous puzzle">←</button>
-            <span id="position" class="muted"></span>
-            <button id="next" title="Next puzzle" aria-label="Next puzzle">→</button>
-          </div>
-          <div class="heading">
-            <div>
-              <p id="difficulty" class="eyebrow"></p>
-              <h1 id="title" tabindex="-1">Loading Rust engine…</h1>
+          <div class="play-main">
+            <div class="puzzle-picker">
+              <label for="puzzles">Puzzle</label>
+              <select id="puzzles"></select>
+              <button id="prev" title="Previous puzzle" aria-label="Previous puzzle">←</button>
+              <span id="position" class="muted"></span>
+              <button id="next" title="Next puzzle" aria-label="Next puzzle">→</button>
             </div>
-          </div>
-          <div class="board-wrap">
-            <!-- board.ts builds the DOM board's layers inside this element. -->
-            <div id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, U to undo."></div>
-          </div>
-          <!-- The strip shows the attempt's recent moves; the bars split them into walks and pushes. -->
-          <div class="notation" aria-label="Recent moves">
-            <span id="notation"></span>
-            <button id="copy-moves" class="copy" title="Copy the whole move sequence">Copy</button>
-          </div>
-          <div class="timeline" aria-label="Move breakdown">
-            <div class="timeline-bars">
-              <div id="walks"></div>
-              <div id="pushes-bar"></div>
+            <div class="heading">
+              <div>
+                <p id="difficulty" class="eyebrow"></p>
+                <h1 id="title" tabindex="-1">Loading Rust engine…</h1>
+              </div>
             </div>
-            <span id="push-share" class="muted"></span>
-          </div>
-          <p id="note" class="muted"></p>
-          <div class="game-controls">
-            <button id="undo">Undo <span id="undo-depth"></span><kbd>U</kbd></button>
-            <button id="undo-5" hidden>Undo 5</button>
-            <button id="hint">Hint <kbd>H</kbd></button>
-            <button id="reset">Restart</button>
-            <button id="best">Replay best</button>
-            <button id="share">Share</button>
-          </div>
-          <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
-          <div class="direction-pad" aria-label="Movement controls">
-            <button data-direction="0" aria-label="Move up">↑</button>
-            <!-- Breaks sit inside the tags so no whitespace separates the buttons. -->
-            <div>
-              <button data-direction="2" aria-label="Move left">←</button><button data-direction="1" aria-label="Move down">↓</button
-              ><button data-direction="3" aria-label="Move right">→</button>
+            <div class="board-wrap">
+              <!-- board.ts builds the DOM board's layers inside this element. -->
+              <div id="board" tabindex="0" role="img" aria-label="Sokomind board. Use arrow keys or WASD to move, U to undo."></div>
             </div>
-          </div>
-          <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
-          <!-- Pause locks input and the clock; zen folds the chrome away around the board. -->
-          <div id="pause" class="pause" hidden>
-            <p class="eyebrow">PAUSED</p>
-            <p class="muted">Press P to resume.</p>
-          </div>
-          <div id="zen-dock" class="zen-dock" hidden>
-            <button id="exit-zen">Exit zen <kbd>Z</kbd></button>
+            <!-- The strip shows the attempt's recent moves; the bars split them into walks and pushes. -->
+            <div class="notation" aria-label="Recent moves">
+              <span id="notation"></span>
+              <button id="copy-moves" class="copy" title="Copy the whole move sequence">Copy</button>
+            </div>
+            <div class="timeline" aria-label="Move breakdown">
+              <div class="timeline-bars">
+                <div id="walks"></div>
+                <div id="pushes-bar"></div>
+              </div>
+              <span id="push-share" class="muted"></span>
+            </div>
+            <p id="note" class="muted"></p>
+            <div class="game-controls">
+              <button id="undo">Undo <span id="undo-depth"></span><kbd>U</kbd></button>
+              <button id="undo-5" hidden>Undo 5</button>
+              <button id="hint">Hint <kbd>H</kbd></button>
+              <button id="reset">Restart</button>
+              <button id="best">Replay best</button>
+              <button id="share">Share</button>
+            </div>
+            <!-- Each data-direction indexes ACTIONS in web/src/protocol.ts by its button's label (checked by scripts/mirrors.test.mjs). -->
+            <div class="direction-pad" aria-label="Movement controls">
+              <button data-direction="0" aria-label="Move up">↑</button>
+              <!-- Breaks sit inside the tags so no whitespace separates the buttons. -->
+              <div>
+                <button data-direction="2" aria-label="Move left">←</button><button data-direction="1" aria-label="Move down">↓</button
+                ><button data-direction="3" aria-label="Move right">→</button>
+              </div>
+            </div>
+            <p id="message" role="status" aria-live="polite">Starting WebAssembly…</p>
+            <!-- Pause locks input and the clock; zen folds the chrome away around the board. -->
+            <div id="pause" class="pause" hidden>
+              <p class="eyebrow">PAUSED</p>
+              <p class="muted">Press P to resume.</p>
+            </div>
+            <div id="zen-dock" class="zen-dock" hidden>
+              <button id="exit-zen">Exit zen <kbd>Z</kbd></button>
+            </div>
           </div>
           <aside>
             <section class="card score">
@@ -178,7 +181,7 @@
                 Search from the exact position shown on the board — either engine, every mode, with the live log and result at hand.
               </p>
               <div class="actions">
-                <button id="open-solver" class="primary">Open the laboratory</button>
+                <button id="open-solver" class="primary">Solver laboratory</button>
               </div>
             </section>
             <details class="card">
@@ -208,6 +211,132 @@
               <p id="storage" class="fine">Progress stays in this browser.</p>
             </section>
           </aside>
+          <!-- The search laboratory: the play page's docked solver panel. The setup selects are the
+           sidebar card's own, relocated here with their mirrors-checked comments — main.ts binds by id. -->
+          <section id="solver" class="card solver-dock" hidden aria-labelledby="solver-title">
+            <header class="solver-head">
+              <div>
+                <p class="eyebrow">SEARCH LABORATORY</p>
+                <h2 id="solver-title">Find a route</h2>
+                <p class="muted">Search from the exact position currently shown on the board.</p>
+              </div>
+              <button id="solver-close" aria-label="Close the laboratory">×</button>
+            </header>
+            <div class="solver-body">
+              <section class="solver-setup">
+                <label for="mode">Search mode</label>
+                <!-- Mode::as_str's names (crates/search/src/lib.rs), as MODES in web/src/protocol.ts (checked by scripts/mirrors.test.mjs). -->
+                <select id="mode">
+                  <option value="fast" data-help="Prioritizes a quick first route. It may use extra moves and never proves optimality.">
+                    Fast · first solution
+                  </option>
+                  <option
+                    value="quality"
+                    data-help="Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality."
+                  >
+                    Quality · improve over time
+                  </option>
+                  <option
+                    value="optimal"
+                    data-help="Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal."
+                  >
+                    Optimal · exact move search
+                  </option>
+                </select>
+                <p id="mode-help" class="muted"></p>
+                <div class="fields">
+                  <div>
+                    <label for="seconds">Time budget</label>
+                    <!-- Within TIME_MS in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
+                    <select id="seconds">
+                      <option value="5">5 seconds</option>
+                      <option value="15">15 seconds</option>
+                      <option value="30">30 seconds</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="memory">Memory budget</label>
+                    <!-- Up to MEMORY_MIB's cap in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
+                    <select id="memory">
+                      <option value="16">16 MiB</option>
+                      <option value="32">32 MiB</option>
+                      <option value="64" selected>64 MiB</option>
+                      <option value="128">128 MiB</option>
+                      <option value="256">256 MiB</option>
+                      <option value="512">512 MiB</option>
+                      <option value="1024">1024 MiB</option>
+                    </select>
+                  </div>
+                </div>
+                <label for="engine">Run on</label>
+                <!-- The values are ENGINES in web/src/solver-client.ts (checked by scripts/mirrors.test.mjs). -->
+                <select id="engine">
+                  <option value="browser">This browser · WebAssembly</option>
+                  <option value="native">Server · native Rust</option>
+                </select>
+                <div class="actions">
+                  <button id="solve" class="primary">Solve from here</button>
+                  <button id="cancel" disabled>Stop</button>
+                </div>
+                <p id="search-status" role="status">Ready when you are.</p>
+              </section>
+              <section class="solver-side">
+                <dl class="metrics">
+                  <div>
+                    <dt>Expanded</dt>
+                    <dd id="expanded">—</dd>
+                  </div>
+                  <div>
+                    <dt>States</dt>
+                    <dd id="generated">—</dd>
+                  </div>
+                  <div>
+                    <dt>Memory ceiling</dt>
+                    <dd id="reserved">—</dd>
+                  </div>
+                  <div>
+                    <dt>Elapsed</dt>
+                    <dd id="elapsed">—</dd>
+                  </div>
+                  <div>
+                    <dt>Best so far</dt>
+                    <dd id="solver-best">—</dd>
+                  </div>
+                </dl>
+                <div class="solver-log-wrap">
+                  <h3>Status log</h3>
+                  <ol id="solver-log" class="solver-log"></ol>
+                </div>
+                <section id="solver-result" class="solver-result" hidden>
+                  <h3 id="solver-result-title"></h3>
+                  <p id="solver-result-summary" class="muted"></p>
+                  <dl class="metrics">
+                    <div>
+                      <dt>Moves</dt>
+                      <dd id="solver-result-moves"></dd>
+                    </div>
+                    <div>
+                      <dt>Pushes</dt>
+                      <dd id="solver-result-pushes"></dd>
+                    </div>
+                    <div>
+                      <dt>Guarantee</dt>
+                      <dd id="solver-result-guarantee"></dd>
+                    </div>
+                  </dl>
+                  <p id="solver-optimal" class="fine" hidden>★ Saved as this room’s certified optimum.</p>
+                  <div class="actions">
+                    <button id="play" class="primary" disabled>Play route</button>
+                    <button id="copy" disabled>Copy route</button>
+                    <button id="solver-lab-link">Open full Solver Lab</button>
+                  </div>
+                </section>
+                <p class="fine">
+                  Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed these search limits.
+                </p>
+              </section>
+            </div>
+          </section>
         </div>
       </section>
       <section data-page="editor" hidden>
@@ -641,132 +770,7 @@
         <p id="replay-description" role="status" aria-live="polite"></p>
       </div>
     </dialog>
-    <!-- The search laboratory: the play page's solver dialog. The setup selects are the sidebar
-         card's own, relocated here with their mirrors-checked comments — main.ts binds by id. -->
-    <dialog id="solver" class="dialog solver-dialog" aria-labelledby="solver-title">
-      <header class="solver-head">
-        <div>
-          <p class="eyebrow">SEARCH LABORATORY</p>
-          <h2 id="solver-title">Find a route</h2>
-          <p class="muted">Search from the exact position currently shown on the board.</p>
-        </div>
-        <button id="solver-close" aria-label="Close the laboratory">×</button>
-      </header>
-      <div class="solver-body">
-        <section class="solver-setup">
-          <label for="mode">Search mode</label>
-          <!-- Mode::as_str's names (crates/search/src/lib.rs), as MODES in web/src/protocol.ts (checked by scripts/mirrors.test.mjs). -->
-          <select id="mode">
-            <option value="fast" data-help="Prioritizes a quick first route. It may use extra moves and never proves optimality.">
-              Fast · first solution
-            </option>
-            <option
-              value="quality"
-              data-help="Keeps the best verified route and searches for shorter routes until the budget ends. It never proves optimality."
-            >
-              Quality · improve over time
-            </option>
-            <option
-              value="optimal"
-              data-help="Exact A* minimizes total moves and can prove a puzzle unsolvable. If a limit stops it early, a route it found is still reported as proven move-optimal or within N moves of optimal."
-            >
-              Optimal · exact move search
-            </option>
-          </select>
-          <p id="mode-help" class="muted"></p>
-          <div class="fields">
-            <div>
-              <label for="seconds">Time budget</label>
-              <!-- Within TIME_MS in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
-              <select id="seconds">
-                <option value="5">5 seconds</option>
-                <option value="15">15 seconds</option>
-                <option value="30">30 seconds</option>
-              </select>
-            </div>
-            <div>
-              <label for="memory">Memory budget</label>
-              <!-- Up to MEMORY_MIB's cap in crates/server/src/solve.rs (checked by scripts/mirrors.test.mjs). -->
-              <select id="memory">
-                <option value="16">16 MiB</option>
-                <option value="32">32 MiB</option>
-                <option value="64" selected>64 MiB</option>
-                <option value="128">128 MiB</option>
-                <option value="256">256 MiB</option>
-                <option value="512">512 MiB</option>
-                <option value="1024">1024 MiB</option>
-              </select>
-            </div>
-          </div>
-          <label for="engine">Run on</label>
-          <!-- The values are ENGINES in web/src/solver-client.ts (checked by scripts/mirrors.test.mjs). -->
-          <select id="engine">
-            <option value="browser">This browser · WebAssembly</option>
-            <option value="native">Server · native Rust</option>
-          </select>
-          <div class="actions">
-            <button id="solve" class="primary">Solve from here</button>
-            <button id="cancel" disabled>Stop</button>
-          </div>
-          <p id="search-status" role="status">Ready when you are.</p>
-        </section>
-        <section class="solver-side">
-          <dl class="metrics">
-            <div>
-              <dt>Expanded</dt>
-              <dd id="expanded">—</dd>
-            </div>
-            <div>
-              <dt>States</dt>
-              <dd id="generated">—</dd>
-            </div>
-            <div>
-              <dt>Memory ceiling</dt>
-              <dd id="reserved">—</dd>
-            </div>
-            <div>
-              <dt>Elapsed</dt>
-              <dd id="elapsed">—</dd>
-            </div>
-            <div>
-              <dt>Best so far</dt>
-              <dd id="solver-best">—</dd>
-            </div>
-          </dl>
-          <div class="solver-log-wrap">
-            <h3>Status log</h3>
-            <ol id="solver-log" class="solver-log"></ol>
-          </div>
-          <section id="solver-result" class="solver-result" hidden>
-            <h3 id="solver-result-title"></h3>
-            <p id="solver-result-summary" class="muted"></p>
-            <dl class="metrics">
-              <div>
-                <dt>Moves</dt>
-                <dd id="solver-result-moves"></dd>
-              </div>
-              <div>
-                <dt>Pushes</dt>
-                <dd id="solver-result-pushes"></dd>
-              </div>
-              <div>
-                <dt>Guarantee</dt>
-                <dd id="solver-result-guarantee"></dd>
-              </div>
-            </dl>
-            <p id="solver-optimal" class="fine" hidden>★ Saved as this room’s certified optimum.</p>
-            <div class="actions">
-              <button id="play" class="primary" disabled>Play route</button>
-              <button id="copy" disabled>Copy route</button>
-              <button id="solver-lab-link">Open full Solver Lab</button>
-            </div>
-          </section>
-          <p class="fine">
-            Search memory is accounted storage, not total browser memory. Difficult puzzles can exceed these search limits.
-          </p>
-        </section>
-      </div>
-    </dialog>
+
     <!-- The editor's confirmations and its text import. dialog.ts opens them as native modals. -->
     <dialog id="editor-clear-dialog" class="dialog" aria-labelledby="editor-clear-title">
       <h2 id="editor-clear-title">Clear the board?</h2>

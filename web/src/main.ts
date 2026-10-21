@@ -292,15 +292,17 @@ async function start() {
     performReset();
   };
   button('deadlock-keep').onclick = () => closeDialog('deadlock');
-  // The search laboratory: the play page's solver dialog, and its door to the lab.
+  // The search laboratory: the play page's docked solver panel, and its door to the lab.
   button('open-solver').onclick = () => {
-    // A hint asked before the dialog opened would play its nudge behind it.
+    // A hint asked before the panel opened would play its nudge beside it.
     hint.reset();
-    openDialog('solver');
+    $('solver').hidden = !$('solver').hidden;
   };
-  button('solver-close').onclick = () => closeDialog('solver');
+  button('solver-close').onclick = () => {
+    $('solver').hidden = true;
+  };
   button('solver-lab-link').onclick = () => {
-    closeDialog('solver');
+    $('solver').hidden = true;
     const actions = session?.game.actions() ?? '';
     navigate(
       actions === ''
@@ -379,6 +381,11 @@ async function start() {
   button('play').onclick = () => {
     playback.toggle(solver.route);
     updateButtons();
+    // The route plays on the board: center it in view before the first step.
+    // 'instant' is deliberate: 'auto' would inherit the page's smooth
+    // scrolling, which later UI can cancel mid-flight and strand the board
+    // off-screen on the widths where the dock sits below it.
+    document.querySelector('.board-wrap')?.scrollIntoView({ block: 'center', behavior: 'instant' });
   };
   button('copy').onclick = async () => {
     if (solver.route === undefined) return;

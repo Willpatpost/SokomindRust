@@ -195,6 +195,15 @@ main {
   gap: 46px;
 }
 
+/* The board column keeps the rhythm the interleaved grid gave it: the row
+   gap plus each item's own margins, so the flex gap carries the row gap's
+   half and nothing on the page moves. */
+.play-main {
+  display: flex;
+  flex-direction: column;
+  gap: 46px;
+}
+
 h1 {
   font-family: Georgia, 'Times New Roman', Times, serif;
   font-size: 1.875rem;
@@ -802,6 +811,7 @@ details[open] summary {
 [data-page='play'].zen #hint,
 [data-page='play'].zen .game-controls,
 [data-page='play'].zen #message,
+[data-page='play'].zen #solver,
 [data-page='play'].zen aside {
   display: none;
 }
@@ -2334,13 +2344,32 @@ details[open] summary {
   margin-top: 16px;
 }
 
-/* The search laboratory: the play page's solver dialog — the setup column,
- * the metrics and status log beside it, the result panel beneath. */
-.solver-dialog {
-  width: min(880px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
+/* The search laboratory: the play page's docked solver panel. Below the wide
+ * breakpoint it spans the grid full-width beneath the columns; at the wide
+ * breakpoint, with the panel open, the grid gains its column between the
+ * board and the rail, and the panel's body stacks in one column to fit. */
+.solver-dock {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 1280px) {
+  .play-grid:has(.solver-dock:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px) 300px;
+  }
+
+  .play-grid:has(.solver-dock:not([hidden])) .solver-dock {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .play-grid:has(.solver-dock:not([hidden])) > aside {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .play-grid:has(.solver-dock:not([hidden])) .solver-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 .solver-head {

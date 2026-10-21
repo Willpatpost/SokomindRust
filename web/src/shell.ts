@@ -87,12 +87,14 @@ export function startShell(): void {
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || route().kind === 'home') return;
-    const open = document.querySelector('details[open], dialog[open]');
+    const open = document.querySelector('details[open], dialog[open], #solver:not([hidden])');
     if (open) {
       // A dialog must close through close(): removing the open attribute
       // hides it without ending the modal session, and the page behind
-      // stays inert — no click lands until the next navigation.
+      // stays inert — no click lands until the next navigation. The solver
+      // dock hides through its hidden attribute, as the panels it joins do.
       if (open instanceof HTMLDialogElement) open.close();
+      else if (open.id === 'solver') (open as HTMLElement).hidden = true;
       else open.removeAttribute('open');
       return;
     }

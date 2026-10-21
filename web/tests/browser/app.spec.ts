@@ -136,19 +136,21 @@ test('finds a route through the in-browser engine', async ({ page }) => {
   await expect(page.locator('#expanded')).not.toHaveText('—');
 });
 
-// A modal dialog owns the keyboard: movement and undo must not act behind it,
-// which the ported app's input gate ensured and this port's movement layer missed.
+// A modal dialog owns the keyboard: movement and undo must not act behind it.
+// The solver dock is a panel, not a modal — the board stays live beside it,
+// which the dock's own spec below covers — so this pins the guard against a
+// true dialog.
 test('movement keys stay with an open dialog', async ({ page }) => {
   await loaded(page);
-  await page.click('#open-solver');
-  await expect(page.locator('#solver')).toBeVisible();
+  await page.keyboard.press('?');
+  await expect(page.locator('#shortcuts')).toBeVisible();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('u');
   await expect(page.locator('#moves')).toHaveText('0');
   await expect(page.locator('#board')).toHaveAttribute('aria-label', FIRST_BOARD);
-  await page.click('#solver-close');
-  await expect(page.locator('#solver')).not.toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#shortcuts')).not.toBeVisible();
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('#moves')).toHaveText('1');
 });
@@ -1114,8 +1116,6 @@ test.describe('short landscape viewport', () => {
     await page.keyboard.press('Escape');
     await page.click('#open-solver');
     await expect(page.locator('#solver')).toBeVisible();
-    box = (await page.locator('#solver').boundingBox())!;
-    expect(box.height).toBeLessThanOrEqual(360);
     await page.click('#solver-close');
     await page.keyboard.press('ArrowDown');
     await expect(page.locator('#complete')).toBeVisible();
@@ -1136,4 +1136,46 @@ test('the theme menu closes on a click away', async ({ page }) => {
   // A click away — on the board, clear of the menu's hanging panel — closes it.
   await page.click('#board');
   await expect(page.locator('.theme-menu')).not.toHaveAttribute('open', '');
+});
+
+// The solver docks as a panel, not a modal: the board stays visible and live
+// beside it, and Play route shows the solution where it can be seen.
+test('the solver docks beside a live board', async ({ page }) => {
+  await loaded(page);
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
+  // The board answers keys while the panel is open — the dock blocks nothing.
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#moves')).toHaveText('1');
+  // The route plays on the board, in view.
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toContainText('Search complete.');
+  await page.click('#play');
+  await expect(page.locator('#board')).toHaveAttribute('data-solved', '');
+  const board = (await page.locator('#board').boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(board.y).toBeGreaterThanOrEqual(-1);
+  expect(board.y + board.height).toBeLessThanOrEqual(viewport.height + 1);
+});
+
+// Below the wide breakpoint the dock spans the grid beneath the board, and
+// Play route scrolls the board into view so the solution is not missed.
+test.describe('narrow desktop viewport', () => {
+  test.use({ viewport: { width: 1000, height: 700 } });
+
+  test('the docked solver sits below the board and Play route shows it', async ({ page }) => {
+    await loaded(page);
+    await page.click('#open-solver');
+    const board = (await page.locator('#board').boundingBox())!;
+    const dock = (await page.locator('#solver').boundingBox())!;
+    expect(dock.y).toBeGreaterThanOrEqual(board.y + board.height - 1);
+    await page.click('#solve');
+    await expect(page.locator('#search-status')).toContainText('Search complete.');
+    await page.click('#play');
+    await expect(page.locator('#board')).toHaveAttribute('data-solved', '');
+    const after = (await page.locator('#board').boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(after.y).toBeGreaterThanOrEqual(-1);
+    expect(after.y + after.height).toBeLessThanOrEqual(viewport.height + 1);
+  });
 });
