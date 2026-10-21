@@ -1196,3 +1196,22 @@ test('an optimal search at the app state ceiling solves and proves', async ({ pa
   await expect(page.locator('#search-status')).toContainText('Search complete.', { timeout: 30_000 });
   await expect(page.locator('#solver-optimal')).toBeVisible();
 });
+
+// The shell moves focus to the entering page's heading so screen readers
+// announce the page, and on a cold load the browser paints the keyboard
+// ring around it — no click or key has told it the user is a pointer
+// user, and the heading's focus is programmatic, never a tab stop. The
+// focus stays for the announcement; the ring does not.
+test('the page heading takes focus on load without a ring', async ({ page }) => {
+  await loaded(page);
+  const state = await page.evaluate(() => {
+    const heading = document.querySelector('[data-page="play"] h1')!;
+    return {
+      focused: document.activeElement === heading,
+      // A none style paints nothing whatever its width computes to.
+      outlineStyle: getComputedStyle(heading).outlineStyle,
+    };
+  });
+  expect(state.focused).toBe(true);
+  expect(state.outlineStyle).toBe('none');
+});

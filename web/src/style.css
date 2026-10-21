@@ -430,6 +430,16 @@ textarea {
   outline-offset: 2px;
 }
 
+/* The shell moves focus to the entering page's heading so screen readers
+   announce the page change. The heading is never tabbable, so its focus is
+   always programmatic, and on a cold load — no click or key yet — the
+   browser takes that for a keyboard user's focus and paints the ring
+   above; a pointer user then sees a box around the title until their
+   first click. The focus stays; only its ring goes. */
+h1[tabindex='-1']:focus {
+  outline: none;
+}
+
 button,
 .button {
   border: 1px solid var(--border-medium);
