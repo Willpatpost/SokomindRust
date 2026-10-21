@@ -1048,6 +1048,24 @@ test.describe('phone viewport', () => {
     await expect(page).toHaveURL(/#\/puzzles$/);
     await expect(page.locator('#puzzles-body')).toBeVisible();
   });
+
+  // No page may exceed the phone's width: the body once clipped overflow
+  // silently, which hid the stats page's showcase behind an unreachable edge.
+  test('no page overflows the phone viewport', async ({ page }) => {
+    for (const [name, path] of [
+      ['home', '/'],
+      ['puzzles', '/#/puzzles'],
+      ['play', '/#/play/ultra-tiny'],
+      ['editor', '/#/editor'],
+      ['stats', '/#/stats'],
+      ['lab', '/#/solver-lab'],
+    ]) {
+      await page.goto(path, { waitUntil: 'load' });
+      await page.waitForTimeout(1300);
+      const excess = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(excess, name).toBeLessThanOrEqual(1);
+    }
+  });
 });
 
 // Escape is the shortcuts dialog's only close control, and closing a dialog

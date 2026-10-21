@@ -116,7 +116,6 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   margin: 0;
-  overflow-x: hidden;
   color: var(--ink-950);
   background: var(--app-background);
   font-family:

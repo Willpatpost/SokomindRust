@@ -1617,7 +1617,11 @@ details[open] summary {
   gap: 10px;
 }
 
-.showcase-block > div {
+/* The header rows this flexes are the eyebrow-and-title pairs; the picker
+   grid is a div child of the same blocks, and matching it here once bent
+   the picker into a four-across flex row whose minimum — the four cards
+   plus the row's gaps — outgrew every phone. */
+.showcase-block > div:not(.keepsake-grid) {
   display: flex;
   justify-content: space-between;
   gap: 12px;
