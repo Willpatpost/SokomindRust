@@ -89,7 +89,11 @@ export function startShell(): void {
     if (event.key !== 'Escape' || route().kind === 'home') return;
     const open = document.querySelector('details[open], dialog[open]');
     if (open) {
-      open.removeAttribute('open');
+      // A dialog must close through close(): removing the open attribute
+      // hides it without ending the modal session, and the page behind
+      // stays inert — no click lands until the next navigation.
+      if (open instanceof HTMLDialogElement) open.close();
+      else open.removeAttribute('open');
       return;
     }
     history.back();

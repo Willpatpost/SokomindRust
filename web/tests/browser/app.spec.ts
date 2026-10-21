@@ -1049,3 +1049,18 @@ test.describe('phone viewport', () => {
     await expect(page.locator('#puzzles-body')).toBeVisible();
   });
 });
+
+// Escape is the shortcuts dialog's only close control, and closing a dialog
+// by removing its open attribute leaves the modal session alive: the page
+// behind stays inert, and no click lands until the next navigation.
+test('Escape closes a dialog and hands the page back', async ({ page }) => {
+  await loaded(page);
+  await page.keyboard.press('?');
+  await expect(page.locator('#shortcuts')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#shortcuts')).not.toBeVisible();
+  await page.click('#open-solver');
+  await expect(page.locator('#solver')).toBeVisible();
+  await page.click('#solver-close');
+  await expect(page.locator('#solver')).not.toBeVisible();
+});
