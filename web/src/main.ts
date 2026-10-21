@@ -94,6 +94,13 @@ function bindThemeMenu() {
   addEventListener('storage', event => {
     if (event.key === storage.key(theme.EXPERIENCE_KEY)) syncThemeMenu();
   });
+  // A menu closes when a click lands anywhere else: the theme menu is a
+  // details element, which otherwise stays open until its own summary is
+  // clicked again.
+  document.addEventListener('click', event => {
+    const menu = document.querySelector('details.theme-menu[open]');
+    if (menu && !(event.target instanceof Node && menu.contains(event.target))) menu.removeAttribute('open');
+  });
 }
 
 async function start() {

@@ -1123,3 +1123,17 @@ test.describe('short landscape viewport', () => {
     expect(box.height).toBeLessThanOrEqual(360);
   });
 });
+
+// The theme menu is a details element, which stays open until its own
+// summary answers again — a click anywhere else should fold it.
+test('the theme menu closes on a click away', async ({ page }) => {
+  await loaded(page);
+  await page.locator('summary', { hasText: 'Theme & sound' }).click();
+  await expect(page.locator('.theme-menu')).toHaveAttribute('open', '');
+  // A click inside the menu keeps it open.
+  await page.locator('#motion').selectOption({ index: 1 });
+  await expect(page.locator('.theme-menu')).toHaveAttribute('open', '');
+  // A click away — on the board, clear of the menu's hanging panel — closes it.
+  await page.click('#board');
+  await expect(page.locator('.theme-menu')).not.toHaveAttribute('open', '');
+});
