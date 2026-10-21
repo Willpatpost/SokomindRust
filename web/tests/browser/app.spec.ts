@@ -1082,3 +1082,20 @@ test('Escape closes a dialog and hands the page back', async ({ page }) => {
   await page.click('#solver-close');
   await expect(page.locator('#solver')).not.toBeVisible();
 });
+
+// The reading layer is rem-sized, so the browser's font-size preference
+// scales the text while the board's tile geometry stays put.
+test('text scales with the root font size', async ({ page }) => {
+  await loaded(page);
+  const before = await page.evaluate(() => ({
+    font: getComputedStyle(document.querySelector('#note')!).fontSize,
+    board: Math.round(document.querySelector('#board')!.getBoundingClientRect().width),
+  }));
+  await page.addStyleTag({ content: 'html { font-size: 125% }' });
+  const after = await page.evaluate(() => ({
+    font: getComputedStyle(document.querySelector('#note')!).fontSize,
+    board: Math.round(document.querySelector('#board')!.getBoundingClientRect().width),
+  }));
+  expect(parseFloat(after.font)).toBeCloseTo(parseFloat(before.font) * 1.25, 1);
+  expect(after.board).toBe(before.board);
+});

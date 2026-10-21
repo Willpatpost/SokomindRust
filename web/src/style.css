@@ -15,7 +15,7 @@ header {
 }
 
 .brand {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 800;
   letter-spacing: 2px;
   text-decoration: none;
@@ -23,7 +23,7 @@ header {
 }
 
 .brand span {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--sage-600);
   border: 1px solid var(--sage-400);
   padding: 4px 6px;
@@ -32,7 +32,7 @@ header {
 }
 
 .tagline {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
@@ -42,7 +42,7 @@ header {
 }
 
 .site-nav a {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
   text-decoration: none;
   padding: 6px 1px;
@@ -65,7 +65,7 @@ header {
 .theme-menu summary {
   list-style: none;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.8125rem;
   padding: 9px 12px;
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-sm);
@@ -109,7 +109,7 @@ header {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
   margin: 0;
 }
 
@@ -123,7 +123,7 @@ header {
   justify-content: space-between;
   gap: 8px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: 0.75rem;
   margin: 0;
 }
 
@@ -146,7 +146,7 @@ header {
 }
 
 #connection {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
@@ -165,7 +165,7 @@ header {
   border-radius: var(--radius-md);
   background: var(--surface-dialog);
   box-shadow: var(--shadow-floating);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* The banner carries a display rule, which would otherwise beat the hidden
@@ -197,18 +197,18 @@ main {
 
 h1 {
   font-family: Georgia, 'Times New Roman', Times, serif;
-  font-size: 30px;
+  font-size: 1.875rem;
   margin: 3px 0 15px;
   letter-spacing: -0.3px;
 }
 
 h2 {
-  font-size: 18px;
+  font-size: 1.125rem;
   margin: 4px 0 20px;
 }
 
 .eyebrow {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 750;
   letter-spacing: 1.7px;
   color: var(--sage-600);
@@ -250,19 +250,19 @@ h2 {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .score-grid strong {
-  font-size: 20px;
+  font-size: 1.25rem;
   font-variant-numeric: tabular-nums;
   color: var(--ink-950);
 }
 
 .score-grid .delta {
   font-style: normal;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   color: var(--ink-muted);
 }
@@ -289,7 +289,7 @@ h2 {
   overflow: hidden;
   white-space: nowrap;
   font-family: ui-monospace, monospace;
-  font-size: 15px;
+  font-size: 0.9375rem;
   letter-spacing: 3px;
   text-align: center;
   color: var(--ink-800);
@@ -297,7 +297,7 @@ h2 {
 
 .notation .copy {
   padding: 5px 10px;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .timeline {
@@ -329,7 +329,7 @@ h2 {
 }
 
 .timeline .muted {
-  font-size: 11px;
+  font-size: 0.6875rem;
   white-space: nowrap;
 }
 
@@ -356,13 +356,13 @@ h2 {
 
 .muted {
   color: var(--ink-muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.6;
 }
 
 .fine {
   color: var(--ink-subtle);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.6;
 }
 
@@ -380,14 +380,14 @@ h2 {
 }
 
 .rules p {
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.7;
   color: var(--ink-muted);
 }
 
 label {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--ink-800);
   margin-bottom: 8px;
@@ -403,7 +403,7 @@ textarea {
   padding: 10px;
   margin-bottom: 15px;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 textarea {
@@ -421,7 +421,7 @@ button,
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   text-decoration: none;
   cursor: pointer;
   touch-action: manipulation;
@@ -475,7 +475,7 @@ button.primary:hover:enabled,
 
 kbd {
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--ink-muted);
   margin-left: 6px;
 }
@@ -484,7 +484,7 @@ kbd {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 18px 0;
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
@@ -498,7 +498,7 @@ dt {
 dd {
   margin: 0;
   font-family: ui-monospace, monospace;
-  font-size: 15px;
+  font-size: 0.9375rem;
   color: var(--ink-950);
 }
 
@@ -508,20 +508,20 @@ dd {
 }
 
 .direction-pad button {
-  font-size: 20px;
+  font-size: 1.25rem;
   min-width: 52px;
   min-height: 44px;
   margin: 3px;
 }
 
 #message {
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--sage-700);
   min-height: 22px;
 }
 
 #search-status {
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.6;
   min-height: 38px;
   color: var(--ink-muted);
@@ -529,7 +529,7 @@ dd {
 
 summary {
   cursor: pointer;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--ink-950);
 }
@@ -586,7 +586,7 @@ details[open] summary {
   }
 
   .heading h1 {
-    font-size: 25px;
+    font-size: 1.5625rem;
   }
 
   .board-wrap {
@@ -613,7 +613,7 @@ details[open] summary {
   gap: 3px;
   min-width: 56px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
   text-decoration: none;
   touch-action: manipulation;
@@ -683,7 +683,7 @@ details[open] summary {
 }
 
 .dialog li {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-800);
   margin: 5px 0;
 }
@@ -703,7 +703,7 @@ details[open] summary {
   display: flex;
   justify-content: space-between;
   gap: 24px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .shortcuts-list dt {
@@ -836,13 +836,13 @@ details[open] summary {
 
 .grid-card strong {
   display: block;
-  font-size: 16px;
+  font-size: 1rem;
   text-transform: capitalize;
 }
 
 .grid-card span {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
   margin-top: 3px;
 }
@@ -869,7 +869,7 @@ details[open] summary {
 
 .back {
   display: inline-block;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
   text-decoration: none;
   margin-bottom: 4px;
@@ -901,7 +901,7 @@ details[open] summary {
   border-radius: var(--radius-sm);
   padding: 9px 12px;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .chips {
@@ -917,7 +917,7 @@ details[open] summary {
   color: var(--ink-800);
   border-radius: 999px;
   padding: 6px 13px;
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
   text-decoration: none;
 }
@@ -961,11 +961,11 @@ details[open] summary {
 
 .row-detail strong {
   display: block;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .row-detail span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -973,7 +973,7 @@ details[open] summary {
   flex: none;
   border: none;
   background: none;
-  font-size: 18px;
+  font-size: 1.125rem;
   color: var(--ink-muted);
   cursor: pointer;
   padding: 4px 8px;
@@ -1054,7 +1054,7 @@ details[open] summary {
   background: var(--surface-raised);
   text-decoration: none;
   color: var(--ink-950);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .tier-row a:hover {
@@ -1062,7 +1062,7 @@ details[open] summary {
 }
 
 .tier-row span {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1077,7 +1077,7 @@ details[open] summary {
   justify-content: space-between;
   gap: 8px;
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-muted);
@@ -1119,7 +1119,7 @@ details[open] summary {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
@@ -1134,7 +1134,7 @@ details[open] summary {
   place-items: center;
   border: 1px solid var(--border-soft);
   border-radius: 50%;
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1;
   color: var(--paper-50);
 }
@@ -1161,7 +1161,7 @@ details[open] summary {
 }
 
 .streak-banner .flame {
-  font-size: 20px;
+  font-size: 1.25rem;
 }
 
 .streak-banner div {
@@ -1170,11 +1170,11 @@ details[open] summary {
 }
 
 .streak-banner strong {
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .streak-banner span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -1207,7 +1207,7 @@ details[open] summary {
 }
 
 .recent-list span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1233,7 +1233,7 @@ details[open] summary {
 #stats-status {
   margin: 0;
   flex-basis: 100%;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
@@ -1262,13 +1262,13 @@ details[open] summary {
 }
 
 .stat-big {
-  font-size: 28px;
+  font-size: 1.75rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
 .stat-sub {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -1287,13 +1287,13 @@ details[open] summary {
 }
 
 .donut-center {
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 700;
   fill: var(--ink-950);
 }
 
 .donut-label {
-  font-size: 9px;
+  font-size: 0.5625rem;
   fill: var(--ink-muted);
 }
 
@@ -1308,7 +1308,7 @@ details[open] summary {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .legend-dot {
@@ -1334,7 +1334,7 @@ details[open] summary {
   grid-template-columns: 110px 1fr 56px;
   gap: 10px;
   align-items: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .bar-track {
@@ -1352,7 +1352,7 @@ details[open] summary {
 }
 
 .bar-value {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1392,7 +1392,7 @@ details[open] summary {
   align-items: center;
   gap: 4px;
   margin-top: 10px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
@@ -1426,7 +1426,7 @@ details[open] summary {
   border-radius: var(--radius-sm);
   padding: 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* The guided journey card: the suggestion row, the chapter map and its
@@ -1467,7 +1467,7 @@ details[open] summary {
 }
 
 .journey-next span {
-  font-size: 12px;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-muted);
@@ -1475,13 +1475,13 @@ details[open] summary {
 
 .journey-next strong {
   display: block;
-  font-size: 15px;
+  font-size: 0.9375rem;
   margin: 2px 0;
 }
 
 .journey-next .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .journey-map {
@@ -1520,35 +1520,35 @@ details[open] summary {
   border-radius: 50%;
   background: var(--ink-950);
   color: var(--paper-50);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
 .chapter-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .chapter-head p {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
 .chapter-count {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .chapter .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .chapter-wait {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-subtle);
   font-style: italic;
 }
@@ -1568,7 +1568,7 @@ details[open] summary {
   border: 1px solid var(--border-soft);
   background: var(--paper-100);
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-decoration: none;
 }
 
@@ -1580,7 +1580,7 @@ details[open] summary {
 
 .journey-browse {
   justify-self: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
@@ -1608,7 +1608,7 @@ details[open] summary {
 }
 
 .showcase-intro strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
   white-space: nowrap;
 }
 
@@ -1630,7 +1630,7 @@ details[open] summary {
 
 .showcase-block h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .showcase-block .eyebrow {
@@ -1639,7 +1639,7 @@ details[open] summary {
 
 .showcase .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .milestone-list {
@@ -1664,7 +1664,7 @@ details[open] summary {
   border-radius: 50%;
   background: var(--sage-500);
   color: var(--paper-50);
-  font-size: 12px;
+  font-size: 0.75rem;
   flex-shrink: 0;
 }
 
@@ -1674,16 +1674,16 @@ details[open] summary {
 }
 
 .milestone-list strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .milestone-list span {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
 .milestone-list small {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-subtle);
 }
 
@@ -1705,11 +1705,11 @@ details[open] summary {
 
 .showcase-collections h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .showcase-tally {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1737,7 +1737,7 @@ details[open] summary {
   border: 1px solid var(--border-soft);
   background: var(--paper-100);
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -1762,22 +1762,22 @@ details[open] summary {
 }
 
 .achievement-list strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .achievement-list li > div > div span {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
 .achievement-list p {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .achievement-list small {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-subtle);
 }
 
@@ -1846,16 +1846,16 @@ details[open] summary {
 }
 
 .keepsake-copy strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .keepsake-copy small {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
 .keepsake-copy em {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-subtle);
   font-style: normal;
 }
@@ -1904,16 +1904,16 @@ details[open] summary {
 }
 
 .shelf-list strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .shelf-list span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .shelf-list small {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-subtle);
 }
 
@@ -1969,11 +1969,11 @@ details[open] summary {
   justify-content: space-between;
   gap: 10px;
   align-items: baseline;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .replay-heading span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -2001,7 +2001,7 @@ details[open] summary {
   border-radius: 50%;
   border: 1px solid var(--border-medium);
   background: var(--paper-100);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   color: var(--ink-muted);
   padding: 0;
@@ -2037,7 +2037,7 @@ details[open] summary {
   gap: 6px;
   align-items: center;
   margin-left: auto;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .replay-panel {
@@ -2056,20 +2056,20 @@ details[open] summary {
 
 .replay-panel-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .ghost-toggle {
   display: flex;
   gap: 6px;
   align-items: center;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .replay-panel .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .replay-legend {
@@ -2078,7 +2078,7 @@ details[open] summary {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -2090,14 +2090,14 @@ details[open] summary {
   margin-right: 6px;
   border-radius: 50%;
   border: 1px solid var(--border-medium);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   vertical-align: -3px;
 }
 
 #replay-description {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-subtle);
 }
 
@@ -2120,7 +2120,7 @@ details[open] summary {
 
 .lab-intro .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .lab-workspace {
@@ -2166,11 +2166,11 @@ details[open] summary {
   justify-content: space-between;
   gap: 8px;
   align-items: baseline;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .lab-population-row small {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-subtle);
 }
 
@@ -2194,7 +2194,7 @@ details[open] summary {
 .lab-watch {
   display: grid;
   gap: 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--ink-800);
 }
@@ -2218,7 +2218,7 @@ details[open] summary {
   border: 1px solid var(--border-soft);
   background: var(--paper-100);
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .lab-path span[data-past] {
@@ -2235,7 +2235,7 @@ details[open] summary {
 
 .lab-playback .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .lab-compare {
@@ -2272,13 +2272,13 @@ details[open] summary {
 
 .lab-compare-grid p {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .lab-compare-grid h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .lab-delta {
@@ -2287,11 +2287,11 @@ details[open] summary {
 }
 
 .lab-delta > strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .lab-delta > span {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -2308,13 +2308,13 @@ details[open] summary {
 }
 
 .lab-delta dt {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
 .lab-delta dd {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2376,7 +2376,7 @@ details[open] summary {
 
 .solver-log-wrap h3 {
   margin: 0 0 6px;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .solver-log {
@@ -2393,7 +2393,7 @@ details[open] summary {
   display: flex;
   gap: 10px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -2418,12 +2418,12 @@ details[open] summary {
 
 .solver-result h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .solver-result .muted {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* The puzzle editor's workshop: drafts, tools and size on the left, the
@@ -2521,7 +2521,7 @@ button.danger:hover:enabled {
 
 .editor-tool-group > p {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
 }
 
@@ -2560,11 +2560,11 @@ button.danger:hover:enabled {
 }
 
 .editor-typed button strong {
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .editor-typed button span {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--ink-muted);
 }
 
@@ -2662,7 +2662,7 @@ button.danger:hover:enabled {
 
 .editor-size-badge {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -2713,7 +2713,7 @@ button.danger:hover:enabled {
 
 #editor-playtest-status {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
@@ -2736,7 +2736,7 @@ button.danger:hover:enabled {
 
 #editor-validation p {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--coral-500);
 }
 
@@ -2759,7 +2759,7 @@ button.danger:hover:enabled {
 #editor-notice {
   margin: 10px 0 0;
   min-height: 16px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -2768,13 +2768,13 @@ button.danger:hover:enabled {
   gap: 4px;
   width: 100%;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
 .editor-share-field input {
   width: 100%;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 #editor-import textarea {
@@ -2797,13 +2797,13 @@ button.danger:hover:enabled {
 }
 
 .generator-labels span {
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 #generator-status {
   margin: 12px 0 0;
   min-height: 16px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
