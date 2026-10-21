@@ -1215,3 +1215,21 @@ test('the page heading takes focus on load without a ring', async ({ page }) => 
   expect(state.focused).toBe(true);
   expect(state.outlineStyle).toBe('none');
 });
+
+// A Quality search works by finding a route fast and spending its whole
+// budget shortening it, so ending on the clock with a route in hand is
+// its normal finish. The result panel once titled every unstopped
+// finish "No route returned" and dashed its moves even with the route
+// on show in the line above; it now reports the route the search kept.
+test('a quality search over its budget shows the route it kept', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/play/gen-v2-340272-fd819d0e');
+  await expect(page.locator('#title')).toHaveText('False Promise: Circuit 3');
+  await page.click('#open-solver');
+  await page.selectOption('#mode', 'quality');
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toContainText('Time budget reached.', { timeout: 20000 });
+  await expect(page.locator('#solver-result-title')).toHaveText('Best route found');
+  await expect(page.locator('#solver-result-moves')).not.toHaveText('—');
+  await expect(page.locator('#play')).toBeEnabled();
+});

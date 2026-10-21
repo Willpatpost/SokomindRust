@@ -460,17 +460,26 @@ function applyUpdate(update: SearchUpdate, route: string | undefined) {
 
 /** The laboratory's result panel: what the finished search returned, its
  * guarantee, and — when the engine certified the room from its start — the
- * star noting the optimum was saved. */
+ * star noting the optimum was saved. A search that stopped on a limit
+ * keeps the route it stands on — Quality's normal way of ending — so the
+ * panel keys on the route, not the status: only a finish without one
+ * reports no route. */
 function showResult(update: SearchUpdate, route: string | undefined) {
   setText(
     'solver-result-title',
-    update.metrics.status === 'solved' ? 'Route found' : update.metrics.status === 'cancelled' ? 'Search stopped' : 'No route returned',
+    route === undefined
+      ? update.metrics.status === 'cancelled'
+        ? 'Search stopped'
+        : 'No route returned'
+      : update.metrics.status === 'solved'
+        ? 'Route found'
+        : 'Best route found',
   );
   setText('solver-result-summary', statusText(update.metrics, route));
-  setText('solver-result-guarantee', guarantee(update.metrics));
+  setText('solver-result-guarantee', guarantee(update.metrics, route));
   $('solver-optimal').hidden = !(update.metrics.proof.kind === 'optimal' && route !== undefined && searchedFromStart);
   $('solver-result').hidden = false;
-  if (update.metrics.status !== 'solved' || route === undefined) {
+  if (route === undefined) {
     setText('solver-result-moves', '—');
     setText('solver-result-pushes', '—');
     return;
@@ -481,11 +490,13 @@ function showResult(update: SearchUpdate, route: string | undefined) {
 }
 
 /** What a finished search guarantees about its route, in the engine's own
- * words. */
-function guarantee(metrics: SearchUpdate['metrics']): string {
+ * words. Without a route there is nothing to guarantee: the summary line
+ * beside it already names the limit that stopped the search. */
+function guarantee(metrics: SearchUpdate['metrics'], route: string | undefined): string {
   if (metrics.proof.kind === 'optimal') return 'Proven optimal';
   if (metrics.proof.kind === 'unsolvable') return 'Proven unsolvable';
   if (metrics.proof.kind === 'bounded') return `Best found — within ${metrics.proof.upper - metrics.proof.lower} of optimal`;
+  if (route === undefined) return 'No route found';
   return metrics.status === 'solved' ? 'First route found' : 'Best found before stopping';
 }
 function solve() {
