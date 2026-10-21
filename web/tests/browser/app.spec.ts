@@ -1033,3 +1033,19 @@ test('the app installs as an offline-capable PWA', async ({ page }) => {
   });
   expect(cached).toBe(true);
 });
+
+// The bottom navigation is the only navigation under 850px: the desktop nav
+// hides there, and the port ordered the bar's hiding rule after the
+// breakpoint that shows it, so phones had no page navigation at all.
+test.describe('phone viewport', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('the bottom navigation carries phones between pages', async ({ page }) => {
+    await loaded(page);
+    await expect(page.locator('.mobile-nav')).toBeVisible();
+    await expect(page.locator('.site-nav')).toBeHidden();
+    await page.locator('.mobile-nav a[href="#/puzzles"]').click();
+    await expect(page).toHaveURL(/#\/puzzles$/);
+    await expect(page.locator('#puzzles-body')).toBeVisible();
+  });
+});

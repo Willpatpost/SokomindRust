@@ -544,6 +544,22 @@ details[open] summary {
   }
 }
 
+/* The base sits before the breakpoint that shows it: between rules of equal
+   specificity the later source wins, and this hiding rule once followed the
+   media query, so the bar never rendered on any width. */
+.mobile-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  display: none;
+  justify-content: space-around;
+  padding: 8px 4px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface-dialog);
+  border-top: 1px solid var(--border-soft);
+}
+
 @media (max-width: 850px) {
   header {
     padding: 20px;
@@ -588,19 +604,6 @@ details[open] summary {
   #to-top {
     bottom: calc(68px + env(safe-area-inset-bottom, 0px));
   }
-}
-
-.mobile-nav {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 100;
-  display: none;
-  justify-content: space-around;
-  padding: 8px 4px calc(8px + env(safe-area-inset-bottom, 0px));
-  background: var(--surface-dialog);
-  border-top: 1px solid var(--border-soft);
 }
 
 .mobile-nav a {
