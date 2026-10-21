@@ -85,6 +85,10 @@ export class BoardView {
 
   constructor(element: HTMLElement) {
     this.element = element;
+    // board.css targets its host by class, so the element that becomes the
+    // board wears the class here, whatever the markup gave it: without it the
+    // layers never grid and the pieces stack as a plain column.
+    element.classList.add('board');
     this.wrap = element.parentElement!;
     this.wrapStyle = getComputedStyle(this.wrap);
     this.cells = document.createElement('div');

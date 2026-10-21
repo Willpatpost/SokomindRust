@@ -234,6 +234,10 @@ test('the DOM board renders pieces that move and celebrate', async ({ page }) =>
   await expect(page.locator('#board .cell')).toHaveCount(25);
   await expect(page.locator('#board .robot')).toHaveCount(1);
   await expect(page.locator('#board .crate')).toHaveCount(1);
+  // The board must lay out, not just exist: its sheet targets the host's
+  // class, and a board that lost it collapses into a column of its pieces.
+  const box = (await page.locator('#board').boundingBox())!;
+  expect(box.width).toBeGreaterThan(100);
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#board')).toHaveAttribute('data-solved', '');
   await expect(page.locator('#board .crate[data-home]')).toHaveCount(1);
