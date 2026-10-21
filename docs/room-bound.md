@@ -548,13 +548,23 @@ once, so generated and unique states count it once, and a capped search's
 generated states stay within the state limit. With no table, or when the
 re-size refuses, the search goes on with the entry it has, keyed by M.
 
-The walk term is solved as the build ends, only at the capped work scale:
-its two LPs cost minutes on the large boards only a search of a million
-states or more can amortize — the cap reaches `MAX_CAP` exactly there — so
-smaller searches, every quick solve and every test's, keep S at the hall's
-arm, and a solve that fails leaves the term out the same way, S no weaker.
-The solve runs inside the build's last slice, unsliced itself, and its row
-map and dual vectors are charged to the budget with the tables and the hall.
+The walk term is deferred until the search proves its solves can pay:
+its two LPs cost minutes on the large boards, and the page's every
+search declares the state ceiling, so the cap reaching `MAX_CAP` — the
+old gate — said nothing about the search's own size and charged every
+quick solve the minutes, inside one `advance` call no deadline could
+interrupt. Now only a search at the capped work scale reaches for the
+term, and only after WALK_TERM_AT expansions of its own; the build then
+runs resumably, a pop paying `BUILD_UNITS_PER_POP` of its pivot units
+between the search's expansions, so no `advance` call ever carries a
+whole solve and every deadline check between batches is served. Quick
+solves never reach the threshold and keep S at the hall's arm, and a
+solve that fails leaves the term out the same way, S no weaker. The
+term's bytes are reserved as a ceiling (`bytes_ceiling`, bounded from
+the board's shape before the LP is assembled) at the build's re-size,
+while the arena still holds only the start, so the term attaching
+mid-search never breaks the memory budget; its row map and dual vectors
+then land in the bound's charge in the ceiling's place.
 
 The build's two solves are also the term's slowest cost to iterate on — on
 Grand Hall they run past an hour together — so two native-only environment

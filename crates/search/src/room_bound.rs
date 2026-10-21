@@ -4,7 +4,8 @@
 //! gets tables R(Q, P, LAB) over disjoint parts P of Q (see `table`). The
 //! hall heuristic, which prices the moves that end outside every part,
 //! adds to their sum S, and the exact search queues max(M, S). At the
-//! capped work scale the walk term joins S — one LP at the start, carried
+//! capped work scale the walk term joins S — one LP, solved once the
+//! search's own expansions prove it can pay (see `WALK_TERM_AT`), carried
 //! per state through its duals, pricing the off-counted pushes and keeper
 //! walks jointly (see `walk_term`).
 //!
@@ -12,6 +13,9 @@
 //! the search pays for as pops. The build charges every buffer to the share
 //! of the memory budget the arena leaves, keeps its tables within a quarter
 //! of the budget, and stops at a work budget, keeping what it built by then.
+//! The walk term builds the same way, in pivot units the search pays as
+//! pops once its expansions reach for it, so no single `advance` call ever
+//! carries a whole minutes-long solve.
 //!
 //! - `room`: a room's cells and the keeper's moves its tables walk.
 //! - `table`: one table and its resumable build.
@@ -40,6 +44,29 @@ pub(crate) const BUILD_UNITS_PER_POP: usize = 64;
 /// only, so a search below it proves the same routes with more
 /// expansions, and a capped one reports the start bound of M alone.
 pub(crate) const BUILD_MIN_STATES: usize = 1_000_000;
+/// The expansions a search must spend before the walk term's solves are
+/// worth their minutes. The term prices the off-counted moves of every
+/// state after it, so it pays only where a search runs long enough to
+/// amortize a minutes-long solve — which the search alone can prove: the
+/// page sends every search the state ceiling, so a declared limit says
+/// nothing about the search's own size, and the old gate, the build's cap
+/// reaching `MAX_CAP`, charged every quick solve at that ceiling the LP's
+/// minutes, inside one `advance` call no deadline could interrupt. Below
+/// this many expansions the bound stands on the tables and the hall part,
+/// as sound without the term. Only a search at the capped work scale (see
+/// `walk_scale`) ever reaches for the term, so the observe harness's
+/// million-state runs, just under the cap, never do.
+pub(crate) const WALK_TERM_AT: u32 = 1_000_000;
+
+/// Whether `node_limit` sits at the capped work scale, where the build's
+/// cap reaches `MAX_CAP` — the scale the walk term's solves were measured
+/// at, a million states and up, and the only one that ever defers the
+/// term. The declared states and the memory budget both cap the node
+/// limit, so a search reaches the scale by what it can hold, not by what
+/// it needs.
+pub(crate) fn walk_scale(node_limit: usize) -> bool {
+    (STATES_PER_NODE * (node_limit as u64 + 1)).clamp(MIN_CAP, MAX_CAP) >= MAX_CAP
+}
 /// A table's forward search may reach this many states per node the arena
 /// may hold, so the build scales with the search it serves, ...
 const STATES_PER_NODE: u64 = 16;
@@ -1331,13 +1358,14 @@ impl RoomBuild {
     }
 
     /// Ends the build, a work share spent or every candidate tried: the
-    /// room bound of the rooms built, if any. The walk term is solved
-    /// here, once, over the parts the kept tables count — two LPs at the
-    /// start's rhs, paid before the search proper begins — but only at
-    /// the capped work scale: its LPs cost minutes on the large boards
-    /// only a search of a million states or more can amortize, and the
-    /// cap reaches `MAX_CAP` exactly there. Smaller searches — every
-    /// quick solve, every test's — keep S at the hall's own arm.
+    /// room bound of the rooms built, if any, over the parts the kept
+    /// tables count. The walk term no longer solves here: its LPs cost
+    /// minutes, which one `advance` call cannot spend without wedging
+    /// every deadline around it, so the search defers the term until its
+    /// own expansions prove the solves can pay (see `WALK_TERM_AT`) and
+    /// runs them in units (see `walk_term::WalkBuild`); the bound starts
+    /// at the tables and the hall part, as sound without the term as
+    /// with it.
     fn finish(&mut self, board: &Board, start: &State) -> Option<RoomBound> {
         self.abandon(board, start);
         if self.built.is_empty() {
@@ -1345,7 +1373,7 @@ impl RoomBuild {
         }
         let mut rooms = take(&mut self.built);
         rooms.shrink_to_fit();
-        let counted = &mut self.inside;
+        let mut counted = take(&mut self.inside);
         counted.fill(false);
         for built in &rooms {
             for table in &built.tables {
@@ -1356,25 +1384,22 @@ impl RoomBuild {
                 }
             }
         }
-        let hall = Heuristic::hall(board, start.player, counted);
-        let walk = if self.cap >= MAX_CAP as usize {
-            WalkTerm::build(board, &hall, counted, start)
-        } else {
-            None
-        };
+        let hall = Heuristic::hall(board, start.player, &counted);
         let portfolio = PortfolioArm::build(board, start, self.cap, &rooms);
         let tables: usize = rooms
             .iter()
             .map(|b| b.room.bytes() + b.tables.capacity() * size_of::<Table>() + b.kept())
             .sum();
-        let bytes = (rooms.capacity() * size_of::<RoomTables>() + tables + hall_bytes(board))
-            as u64
-            + walk.as_ref().map_or(0, WalkTerm::bytes)
+        let bytes = (rooms.capacity() * size_of::<RoomTables>()
+            + tables
+            + hall_bytes(board)
+            + counted.capacity()) as u64
             + portfolio.as_ref().map_or(0, PortfolioArm::bytes);
         Some(RoomBound {
             rooms,
             hall,
-            walk,
+            counted,
+            walk: None,
             portfolio,
             bytes,
         })
@@ -1522,9 +1547,13 @@ impl PortfolioArm {
 pub(crate) struct RoomBound {
     rooms: Vec<RoomTables>,
     hall: Heuristic,
+    /// The cells the kept tables count, over which the deferred walk
+    /// term's LP is assembled (see `walk_term::WalkBuild`).
+    counted: Vec<bool>,
     /// The dual-transfer walk term over the parts none of them count
-    /// (see `walk_term`): `None` when its LP could not be solved, which
-    /// leaves S no weaker than the hall's own arm.
+    /// (see `walk_term`): `None` while its deferred build has not run
+    /// and for good when its LP could not be solved, which leaves S no
+    /// weaker than the hall's own arm.
     walk: Option<WalkTerm>,
     /// The portfolio's second configuration (see `PortfolioArm`):
     /// `None` unless its knob names rooms, which leaves S as it is.
@@ -1534,9 +1563,23 @@ pub(crate) struct RoomBound {
 }
 
 impl RoomBound {
-    /// The heap bytes the tables, rooms and hall part hold.
+    /// The heap bytes the tables, rooms, hall part and counted mask hold.
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes
+    }
+
+    /// The hall part and the cells its tables count: what the deferred
+    /// walk term's build assembles its LP from.
+    pub(crate) fn hall(&self) -> (&Heuristic, &[bool]) {
+        (&self.hall, &self.counted)
+    }
+
+    /// Attaches a walk term the deferred build solved. Its bytes were
+    /// reserved before the search ran (see `walk_term::bytes_ceiling`),
+    /// so the budget already holds them.
+    pub(crate) fn attach(&mut self, walk: WalkTerm) {
+        self.bytes += walk.bytes();
+        self.walk = Some(walk);
     }
 
     /// The tables' sum for `state`, `None` when a projection is missing.
@@ -1882,24 +1925,47 @@ mod tests {
 
     /// The walk term joins S only at the capped work scale, and where it
     /// does it never passes the optimum: the pocket board driven at a
-    /// million states builds a term with a positive value at the start,
-    /// and its root bound stays at or below the 3 moves Exact proves.
+    /// million states arms the term — a million exactly, the observe
+    /// harness's own scale, does not — and its deferred build solves in
+    /// stepped units, one pivot at a time, landing a term with a
+    /// positive value at the start whose root bound stays at or below
+    /// the 3 moves Exact proves.
     #[test]
     fn the_walk_term_joins_the_bound_at_the_capped_scale() {
+        use crate::heuristic::walk_term::WalkBuild;
         let board = Board::parse("OOOOOOOO\nO   b  O\nOaA B  O\nOOO ROOO\nOOOOOOOO").unwrap();
         let start = board.initial();
         let heuristic = crate::heuristic::Heuristic::new(&board, Some(start.player));
+        assert!(
+            walk_scale(1 << 20),
+            "a million-node arena reaches the capped scale"
+        );
+        assert!(
+            !walk_scale(1_000_000),
+            "the observe harness's million states stay under it"
+        );
         let mut build = RoomBuild::new(&board, &start, 1 << 20, 16, 0, 0).unwrap();
-        let bound = loop {
+        let mut bound = loop {
             let mut units = 1 << 22;
             if let Some(bound) = build.step(&board, &start, &heuristic, &mut units) {
                 break bound.expect("the pocket board builds tables");
             }
         };
-        let walk = bound
-            .walk
-            .as_ref()
-            .expect("the term builds at the capped scale");
+        assert!(
+            bound.walk.is_none(),
+            "finish defers the term: the search's own expansions must ask for it"
+        );
+        let (hall, counted) = bound.hall();
+        let mut walk = WalkBuild::start(&board, hall, counted, &start)
+            .expect("the term's LP starts at the capped scale");
+        let term = loop {
+            let mut units = 1;
+            if let Some(term) = walk.step(&mut units) {
+                break term.expect("the term solves on the pocket board");
+            }
+        };
+        bound.attach(term);
+        let walk = bound.walk.as_ref().expect("the term attaches to the bound");
         assert!(
             walk.value(&bound.hall, &start) > 0.0,
             "the term prices the start's off-counted moves"

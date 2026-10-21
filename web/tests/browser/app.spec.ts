@@ -1179,3 +1179,20 @@ test.describe('narrow desktop viewport', () => {
     expect(after.y + after.height).toBeLessThanOrEqual(viewport.height + 1);
   });
 });
+
+// The page's every search declares the state ceiling (256M states), so
+// before the room bound's walk term learned to wait for the search to
+// prove its solves can pay, every Optimal run wedged inside one worker
+// batch past its whole time budget — the mode never finished. The term
+// now defers and steps, so Optimal solves and proves Color Wheel well
+// inside the default budget the page sends.
+test('an optimal search at the app state ceiling solves and proves', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/play/medium');
+  await expect(page.locator('#title')).toHaveText('Color Wheel');
+  await page.click('#open-solver');
+  await page.selectOption('#mode', 'optimal');
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toContainText('Search complete.', { timeout: 30_000 });
+  await expect(page.locator('#solver-optimal')).toBeVisible();
+});

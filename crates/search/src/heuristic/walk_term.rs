@@ -20,11 +20,20 @@
 //! elsewhere — is carried beside them, and each state takes the larger
 //! of the two values. The room bound adds the term's arm, the tables'
 //! sum plus the value, to S (docs/room-bound.md).
+//!
+//! The build is resumable ([`WalkBuild`]): the two solves stepped a
+//! caller-paid budget of pivot units at a time, because they run
+//! minutes on the large boards and the search that pays for them must
+//! return between batches to answer its deadline. The search defers
+//! the term until its own expansions prove the solves can pay (see
+//! `room_bound::WALK_TERM_AT`) and reserves the term's bytes before it
+//! runs ([`bytes_ceiling`]), so a term attaching mid-search never
+//! breaks the memory budget.
 use super::*;
 use crate::lp_solver;
 use sokomind_core::WALL;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The push graph the term's flows ship over: every reverse-push edge
 /// between spots, priced by where the push's move ends. The flow LP's
@@ -124,7 +133,9 @@ fn walk_matrix(board: &Board, counted: &[bool]) -> Vec<u8> {
 }
 
 /// The LP's row map, the state-independent half the per-state evaluation
-/// walks: which row each rhs entry lands on.
+/// walks: which row each rhs entry lands on. Defaulted, so a resumable
+/// build can hand its map to the term it finishes with.
+#[derive(Default)]
 struct RowMaps {
     /// Per box, the conservation row of each spot; `usize::MAX` on the
     /// box's own goal cells, whose spots the attribution rows own.
@@ -677,77 +688,13 @@ impl WalkTerm {
         start: &State,
         cache: Option<&Path>,
     ) -> Option<(Self, bool)> {
-        let blocks = &hall
-            .keeper
-            .as_ref()
-            .expect("the hall heuristic keeps keeper sides")
-            .blocks;
-        let graph = push_graph(board, blocks, counted);
-        let w = walk_matrix(board, counted);
-        let (lp, maps) = assemble_lp(hall, board, start, &graph, &w);
-        let name = cache_name(board, counted, hall.goals, start);
-        if let Some(dir) = cache
-            && let Some(entry) = native::load(dir, &name, lp.m, lp.n)
-        {
-            let value: f64 = entry.root.iter().zip(&lp.b).map(|(&u, &b)| u * b).sum();
-            if (value - entry.objective).abs() <= 1e-4 * (1.0 + entry.objective.abs()) {
-                if native::log_enabled() {
-                    eprintln!(
-                        "walk term {}: cache hit, {} primal and {} l1 pivots, objective {:.3}",
-                        board.fingerprint(),
-                        entry.primal_pivots,
-                        entry.l1_pivots,
-                        entry.objective
-                    );
-                }
-                return Some((
-                    Self {
-                        maps,
-                        root: entry.root,
-                        l1: entry.l1,
-                    },
-                    true,
-                ));
-            }
+        let mut build = WalkBuild::new(board, hall, counted, start, cache)?;
+        let cached = matches!(build.stage.as_ref(), Some(WalkStage::Cached { .. }));
+        let mut units = usize::MAX;
+        match build.step(&mut units) {
+            Some(Some(term)) => Some((term, cached)),
+            _ => None,
         }
-        let solved = lp_solver::solve(&lp).ok()?;
-        let pin = (solved.objective - 1e-4).max(0.0);
-        let regularized = lp_solver::solve(&l1_regularization_lp(&lp, pin)).ok()?;
-        let l1: Vec<f64> = (0..lp.m)
-            .map(|i| regularized.x[i] - regularized.x[lp.m + i])
-            .collect();
-        if native::log_enabled() {
-            eprintln!(
-                "walk term {}: {} primal and {} l1 pivots, objective {:.3}",
-                board.fingerprint(),
-                solved.pivots,
-                regularized.pivots,
-                solved.objective
-            );
-        }
-        if let Some(dir) = cache {
-            native::store(
-                dir,
-                &name,
-                lp.m,
-                lp.n,
-                &CachedTerm {
-                    objective: solved.objective,
-                    root: solved.duals.clone(),
-                    l1: l1.clone(),
-                    primal_pivots: solved.pivots,
-                    l1_pivots: regularized.pivots,
-                },
-            );
-        }
-        Some((
-            Self {
-                maps,
-                root: solved.duals,
-                l1,
-            },
-            false,
-        ))
     }
 
     /// The term's value at `state`: the larger of the two carried duals'
@@ -820,6 +767,235 @@ impl WalkTerm {
             + maps.goal_row.capacity() * size_of::<usize>()
             + maps.player_row.capacity() * size_of::<usize>()
             + (self.root.capacity() + self.l1.capacity()) * size_of::<f64>()) as u64
+    }
+}
+
+/// The most heap bytes a walk term on `board` with `goals` boxes can
+/// hold: the row map's per-box spot rows and group rows, the fixed
+/// rows, and the two dual vectors at the LP's largest row count. The
+/// LP is not assembled when this is asked — the search reserves the
+/// ceiling before it runs, so a term attaching mid-search never breaks
+/// the memory budget (see `engine.rs`) — so the row count is bounded
+/// from the board's shape rather than counted: a conservation row per
+/// box and spot, an attribution row per box and goal, and the goal,
+/// end, player and demand rows over the cells.
+pub(crate) fn bytes_ceiling(board: &Board, goals: usize) -> u64 {
+    let cells = board.tiles().len() as u64;
+    let boxes = goals as u64;
+    let spots = cells * SIDES as u64;
+    let rows = boxes * (spots + boxes) + boxes + 3 * cells + 1;
+    let maps = (boxes * (spots + boxes) + boxes + cells) * size_of::<usize>() as u64;
+    maps + 2 * rows * size_of::<f64>() as u64
+}
+
+/// The term's resumable build: the LP assembled once, then its two
+/// solves stepped a caller-paid budget of pivot units at a time, so
+/// the search that pays for them can return between batches and answer
+/// its deadline — a solve that runs minutes never blocks one `advance`
+/// call (see `engine.rs`). The assembly and the solves' transient
+/// buffers ride above the memory budget as the one-shot build's always
+/// did; the built term's bytes land against the ceiling the search
+/// reserved before it ran (see `bytes_ceiling`). A cache entry the
+/// `y·b` guard passes starts the build done.
+pub(crate) struct WalkBuild {
+    /// The walk LP at the start's rhs, its row map beside it.
+    lp: lp_solver::Lp,
+    maps: RowMaps,
+    /// The cache's file name for the term, the directory it lives in,
+    /// and the fingerprint its log lines name.
+    name: String,
+    cache: Option<PathBuf>,
+    fingerprint: String,
+    /// The solve in progress; `None` once the term left.
+    stage: Option<WalkStage>,
+}
+
+/// Where the build is: the root solve, the L1 solve it pinned, or
+/// duals a cache entry supplied.
+enum WalkStage {
+    /// The root solve at the start's rhs.
+    Root(lp_solver::SolveBuild),
+    /// The L1-regularized solve over the root's pinned optimal face,
+    /// carrying the root solve's duals, pivots and objective for the
+    /// term and its log line.
+    L1 {
+        solve: lp_solver::SolveBuild,
+        lp: lp_solver::Lp,
+        root: Vec<f64>,
+        root_pivots: u64,
+        objective: f64,
+    },
+    /// Duals a cache entry supplied; the term is assembled with the
+    /// build's row map on handover.
+    Cached { root: Vec<f64>, l1: Vec<f64> },
+}
+
+impl WalkBuild {
+    /// The build the search starts, its solves carried by the
+    /// environment's dual cache where one is armed (see
+    /// `SOKOMIND_DUAL_CACHE`).
+    pub(crate) fn start(
+        board: &Board,
+        hall: &Heuristic,
+        counted: &[bool],
+        start: &State,
+    ) -> Option<Self> {
+        Self::new(board, hall, counted, start, native::cache_dir().as_deref())
+    }
+
+    /// Assembles the LP over `hall` and `counted` at `start`'s rhs and
+    /// starts its root solve, or holds the duals a passing cache entry
+    /// supplied. `None` when the root solve cannot start — the caller
+    /// runs without the term and never tries again.
+    pub(crate) fn new(
+        board: &Board,
+        hall: &Heuristic,
+        counted: &[bool],
+        start: &State,
+        cache: Option<&Path>,
+    ) -> Option<Self> {
+        let blocks = &hall
+            .keeper
+            .as_ref()
+            .expect("the hall heuristic keeps keeper sides")
+            .blocks;
+        let graph = push_graph(board, blocks, counted);
+        let w = walk_matrix(board, counted);
+        let (lp, maps) = assemble_lp(hall, board, start, &graph, &w);
+        let name = cache_name(board, counted, hall.goals, start);
+        let cache = cache.map(Path::to_path_buf);
+        if let Some(dir) = &cache
+            && let Some(entry) = native::load(dir, &name, lp.m, lp.n)
+        {
+            let value: f64 = entry.root.iter().zip(&lp.b).map(|(&u, &b)| u * b).sum();
+            if (value - entry.objective).abs() <= 1e-4 * (1.0 + entry.objective.abs()) {
+                if native::log_enabled() {
+                    eprintln!(
+                        "walk term {}: cache hit, {} primal and {} l1 pivots, objective {:.3}",
+                        board.fingerprint(),
+                        entry.primal_pivots,
+                        entry.l1_pivots,
+                        entry.objective
+                    );
+                }
+                return Some(Self {
+                    stage: Some(WalkStage::Cached {
+                        root: entry.root,
+                        l1: entry.l1,
+                    }),
+                    lp,
+                    maps,
+                    name,
+                    cache,
+                    fingerprint: board.fingerprint().to_owned(),
+                });
+            }
+        }
+        let solve = lp_solver::SolveBuild::new(&lp).ok()?;
+        Some(Self {
+            stage: Some(WalkStage::Root(solve)),
+            lp,
+            maps,
+            name,
+            cache,
+            fingerprint: board.fingerprint().to_owned(),
+        })
+    }
+
+    /// Runs up to `units` pivot units: `None` while the build has more
+    /// to do, then the term — `Some(None)` when a solve failed, the
+    /// bound standing on the tables and the hall part alone, never
+    /// wrong. Done, it must not be stepped again.
+    pub(crate) fn step(&mut self, units: &mut usize) -> Option<Option<WalkTerm>> {
+        match self.stage.take() {
+            None => Some(None),
+            Some(WalkStage::Cached { root, l1 }) => Some(Some(WalkTerm {
+                maps: std::mem::take(&mut self.maps),
+                root,
+                l1,
+            })),
+            Some(WalkStage::Root(mut solve)) => {
+                let done = match solve.step(&self.lp, units) {
+                    Ok(done) => done,
+                    Err(_) => return Some(None),
+                };
+                if !done {
+                    self.stage = Some(WalkStage::Root(solve));
+                    return None;
+                }
+                let Ok(solved) = solve.finish(&self.lp) else {
+                    return Some(None);
+                };
+                let pin = (solved.objective - 1e-4).max(0.0);
+                let lp = l1_regularization_lp(&self.lp, pin);
+                let Some(solve) = lp_solver::SolveBuild::new(&lp).ok() else {
+                    return Some(None);
+                };
+                self.stage = Some(WalkStage::L1 {
+                    solve,
+                    lp,
+                    root: solved.duals,
+                    root_pivots: solved.pivots,
+                    objective: solved.objective,
+                });
+                // The units the root solve left go on to the L1 solve.
+                self.step(units)
+            }
+            Some(WalkStage::L1 {
+                mut solve,
+                lp,
+                root,
+                root_pivots,
+                objective,
+            }) => {
+                let done = match solve.step(&lp, units) {
+                    Ok(done) => done,
+                    Err(_) => return Some(None),
+                };
+                if !done {
+                    self.stage = Some(WalkStage::L1 {
+                        solve,
+                        lp,
+                        root,
+                        root_pivots,
+                        objective,
+                    });
+                    return None;
+                }
+                let Ok(solved) = solve.finish(&lp) else {
+                    return Some(None);
+                };
+                let l1: Vec<f64> = (0..self.lp.m)
+                    .map(|i| solved.x[i] - solved.x[self.lp.m + i])
+                    .collect();
+                if native::log_enabled() {
+                    eprintln!(
+                        "walk term {}: {} primal and {} l1 pivots, objective {:.3}",
+                        self.fingerprint, root_pivots, solved.pivots, objective
+                    );
+                }
+                if let Some(dir) = &self.cache {
+                    native::store(
+                        dir,
+                        &self.name,
+                        self.lp.m,
+                        self.lp.n,
+                        &CachedTerm {
+                            objective,
+                            root: root.clone(),
+                            l1: l1.clone(),
+                            primal_pivots: root_pivots,
+                            l1_pivots: solved.pivots,
+                        },
+                    );
+                }
+                Some(Some(WalkTerm {
+                    maps: std::mem::take(&mut self.maps),
+                    root,
+                    l1,
+                }))
+            }
+        }
     }
 }
 

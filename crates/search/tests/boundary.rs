@@ -160,6 +160,47 @@ fn interruption_cannot_manufacture_a_verdict() {
     assert_eq!(exact.proof(), Some(Proof::Optimal { moves: 1 }));
 }
 
+/// The page's every browser search declares the state ceiling
+/// ([`MAX_STATES`]) — the memory budget alone sizes the arena — so at
+/// 1024 MiB every Optimal run once reached the walk term's old gate,
+/// and its two LP solves ran inside a single `advance` call: minutes
+/// on this board, past every worker deadline and every server budget,
+/// so Optimal never finished. The term now waits for the search to
+/// prove its solves can pay — a million expansions, a few thousand
+/// here — and runs in pivot units the search pays as pops, so every
+/// `advance` returns promptly and the solve and its proof land far
+/// inside a time budget. The thread and the timeout make a wedged
+/// `advance` a failure rather than a hung suite.
+#[test]
+fn the_app_state_ceiling_never_wedges_an_optimal_search() {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+    let board =
+        Board::parse("OOOOOOO\nOa   bO\nO AXB O\nO XRX O\nOSCXDSO\nOcS SdO\nOOOOOOO").unwrap();
+    let (send, recv) = mpsc::channel();
+    thread::spawn(move || {
+        let start = board.initial();
+        let mut search = Search::new(board, start, Mode::Optimal, MAX_STATES, 1024)
+            .expect("the ceiling and the budget are in range");
+        let mut worst = Duration::ZERO;
+        while search.status() == Status::Running {
+            let call = Instant::now();
+            search.advance(8);
+            worst = worst.max(call.elapsed());
+        }
+        let _ = send.send((worst, search.proof()));
+    });
+    let (worst, proof) = recv
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the search returned within 20s — a wedged advance is the regression");
+    assert!(
+        worst < Duration::from_secs(1),
+        "one advance ran {worst:?} — no deadline check between batches can serve that"
+    );
+    assert_eq!(proof, Some(Proof::Optimal { moves: 34 }));
+}
+
 #[test]
 fn same_label_box_order_is_normalized_and_stats_account_for_versions() {
     let board = Board::parse(BOARD).unwrap();

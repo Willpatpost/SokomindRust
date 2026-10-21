@@ -4,11 +4,17 @@ use crate::{
     arena::{Arena, Key, MAX_QUEUED_H, NIL, Node, TableCounters},
     corral::Corral,
     deadlock::Deadlock,
-    heuristic::{Heuristic, ParentGroup},
+    heuristic::{
+        Heuristic, ParentGroup,
+        walk_term::{WalkBuild, bytes_ceiling},
+    },
     polish::{self, Polish},
     push::{self, Child, Parent, Parts, Push, SkipCounters, canonicalize},
     reach::Reach,
-    room_bound::{BUILD_MIN_STATES, BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent},
+    room_bound::{
+        BUILD_MIN_STATES, BUILD_UNITS_PER_POP, RoomBound, RoomBuild, RoomParent, WALK_TERM_AT,
+        walk_scale,
+    },
     stage::{self, Done, Ladder},
     strategic::DoorwayGuidance,
 };
@@ -427,6 +433,22 @@ pub(crate) struct Engine {
     /// Some while the room bound builds, before the search proper, which
     /// waits with only the start in its arena, queued with M alone.
     room_build: Option<RoomBuild>,
+    /// Some while the deferred walk term's resumable build runs, between
+    /// the search's own expansions (see `room_bound::WALK_TERM_AT`): the
+    /// search waits with its arena as it was, and goes on once the term
+    /// solves, fails, or a stop drops the build.
+    walk_build: Option<WalkBuild>,
+    /// The expansion count at which the walk term's build starts, or
+    /// `u32::MAX` when none is due: set when a room-bound search runs at
+    /// the capped work scale (see `room_bound::walk_scale`), cleared when
+    /// the build starts, solves or fails.
+    walk_at: u32,
+    /// The walk term's reserved byte ceiling, charged from the room
+    /// build's re-size until the term itself lands in the bound's bytes
+    /// (see `walk_term::bytes_ceiling`): a term attaching mid-search
+    /// never breaks the memory budget, which a re-size could not fix
+    /// once the arena holds records.
+    walk_reserved: u64,
     /// The doorway guidance (see `strategic`): `None` unless the weighted
     /// search's knob names it. It shifts the queue's priorities only —
     /// the stored h, the prunes, and the exact search's admissible key
@@ -596,6 +618,9 @@ impl Engine {
             polished: None,
             rooms: None,
             room_build: None,
+            walk_build: None,
+            walk_at: u32::MAX,
+            walk_reserved: 0,
             strategic,
             memory_mib,
             max_states,
@@ -701,12 +726,15 @@ impl Engine {
             self.arena.reserved_bytes()
         }
     }
-    /// The bytes charged to the budget besides the arena: the fixed buffers
-    /// and the room bound's tables and hall part.
+    /// The bytes charged to the budget besides the arena: the fixed
+    /// buffers, the room bound's tables and hall part, and the walk
+    /// term's reserved ceiling until the term itself lands in the
+    /// bound's bytes.
     fn charged_bytes(&self) -> u64 {
         let (cells, boxes) = (self.board.tiles().len(), self.board.labels().len());
         fixed_bytes(cells, boxes, self.policy.keeper_sides)
             .saturating_add(self.rooms.as_ref().map_or(0, RoomBound::bytes))
+            .saturating_add(self.walk_reserved)
     }
     /// The arena's counters and the engine's in one value. The destructures
     /// and the literal name every field, so a counter added to any of the
@@ -756,12 +784,14 @@ impl Engine {
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach. A
     /// running stage ladder is dropped with its unfinished stage, a running
-    /// polish with its unfinished job, keeping its best route, and a running
-    /// room build with its tables, leaving the start queued with M alone.
+    /// polish with its unfinished job, keeping its best route, a running
+    /// room build with its tables and a running walk build with its
+    /// solves, leaving the start queued with M alone.
     pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
             self.staging = None;
             self.room_build = None;
+            self.walk_build = None;
             if let Some(polisher) = &mut self.polish {
                 polisher.stop();
             }
@@ -958,9 +988,20 @@ impl Engine {
         // its relaxed problem has no solution.
         let s = rooms.root(&self.start);
         self.rooms = Some(rooms);
+        // A search at the capped work scale may build the walk term
+        // mid-run, once its expansions prove the solves can pay (see
+        // `WALK_TERM_AT`): the term's bytes are reserved here, while
+        // the re-size can still shape the arena around them, so a term
+        // that attaches mid-search never breaks the memory budget.
+        if walk_scale(self.arena.node_limit()) {
+            self.walk_reserved = bytes_ceiling(&self.board, self.board.labels().len());
+            self.walk_at = WALK_TERM_AT;
+        }
         if !self.arena.recharge(self.charged_bytes(), self.memory_mib) {
             // The arena, unchanged, leaves no room for the tables.
             self.rooms = None;
+            self.walk_reserved = 0;
+            self.walk_at = u32::MAX;
             return left;
         }
         // Exact never stages, so the fill point is the limit.
@@ -978,6 +1019,61 @@ impl Engine {
             } else {
                 self.status = Status::Exhausted;
             }
+        }
+        left
+    }
+    /// Starts the deferred walk term's build (see `WALK_TERM_AT`): the
+    /// resumable solve the next advance runs in units. False, disarming
+    /// the trigger for good, when the LP cannot even start or no room
+    /// bound stands under it — the bound keeps its tables and hall
+    /// part, never wrong.
+    #[cold]
+    #[inline(never)]
+    fn start_walk(&mut self) -> bool {
+        debug_assert_eq!(self.status, Status::Running);
+        let Some(rooms) = self.rooms.as_ref() else {
+            self.walk_at = u32::MAX;
+            return false;
+        };
+        let (hall, counted) = rooms.hall();
+        self.walk_build = WalkBuild::start(&self.board, hall, counted, &self.start);
+        if self.walk_build.is_none() {
+            self.walk_at = u32::MAX;
+        }
+        self.walk_build.is_some()
+    }
+
+    /// Runs the deferred walk term's build for `pops` pop slots of
+    /// [`BUILD_UNITS_PER_POP`] pivot units each, and returns the slots
+    /// left: 0 while it still runs. No pop runs while the build does.
+    /// A term that solves attaches to the room bound — its bytes were
+    /// reserved before the search ran, so the budget already holds
+    /// them — and every state inserted after prices against the
+    /// stronger bound, while the queued states keep their weaker,
+    /// still-admissible entries. A solve that fails leaves the bound
+    /// as it was.
+    // Cold and out of line, as advance_staged: advance calls it only
+    // while the walk build runs.
+    #[cold]
+    #[inline(never)]
+    fn advance_walk(&mut self, pops: u32) -> u32 {
+        let Some(build) = &mut self.walk_build else {
+            return pops;
+        };
+        let mut units = (pops as usize).saturating_mul(BUILD_UNITS_PER_POP);
+        let Some(term) = build.step(&mut units) else {
+            return 0;
+        };
+        self.walk_build = None;
+        self.walk_at = u32::MAX;
+        let left = (units / BUILD_UNITS_PER_POP) as u32;
+        if let Some(term) = term
+            && let Some(rooms) = self.rooms.as_mut()
+        {
+            // The term's own bytes replace the ceiling the re-size
+            // reserved for them.
+            self.walk_reserved = 0;
+            rooms.attach(term);
         }
         left
     }
@@ -1051,10 +1147,11 @@ impl Engine {
     /// Work is sliced by pops so a worker can yield, report, or cancel. A
     /// pop is one queue pop, [`BUILD_UNITS_PER_POP`] room build units while
     /// the room bound builds, one stage ladder unit while the ladder runs
-    /// the search, or one polish unit while a polish runs; a search that
-    /// hands over to the ladder, or starts an episode, returns at once.
-    /// Stale, solved and dominated pops count toward `pops` without
-    /// expanding anything.
+    /// the search, one polish unit while a polish runs, or one of the
+    /// walk term's pivot units while its deferred build runs; a search
+    /// that hands over to the ladder, starts an episode, or starts the
+    /// walk build, returns at once. Stale, solved and dominated pops
+    /// count toward `pops` without expanding anything.
     pub(crate) fn advance(&mut self, mut pops: u32) {
         debug_assert!(self.staging.is_none() || self.incumbent.is_none());
         if self.status != Status::Running {
@@ -1120,6 +1217,12 @@ impl Engine {
                 return;
             }
         }
+        if self.walk_build.is_some() {
+            pops = self.advance_walk(pops);
+            if self.walk_build.is_some() {
+                return;
+            }
+        }
         for _ in 0..pops {
             let parent = match self.pop() {
                 Popped::Expand(parent) => parent,
@@ -1132,6 +1235,12 @@ impl Engine {
             // One compare per expansion: episode_at is u32::MAX unless a
             // polishing search's incumbent is due an episode.
             if self.expanded >= self.episode_at && self.start_episode() {
+                return;
+            }
+            // One compare per expansion: walk_at is u32::MAX unless a
+            // room-bound search at the capped work scale spent the
+            // expansions that prove the walk term's solves can pay.
+            if self.expanded >= self.walk_at && self.start_walk() {
                 return;
             }
         }

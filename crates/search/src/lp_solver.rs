@@ -13,6 +13,14 @@
 //! or the duals guard (`y·b` must reproduce the objective) all fail
 //! loud. The duals come out as a fresh BTRAN of the basic costs — the
 //! row potentials the dual-transfer term carries.
+//!
+//! A solve is resumable: [`SolveBuild::step`] spends a caller-paid
+//! budget of units — one per pass, a pivot with the refresh due beside
+//! it — and returns between batches, so a caller that must answer a
+//! deadline between its own batches can carry a solve that runs
+//! minutes (see `walk_term::WalkBuild`); [`solve`], the one-shot
+//! reference the tests pin the stepping against, runs the same build
+//! to its end, pivoting exactly as the resumable one does.
 
 /// A sparse LP: minimize `c·x` over `A x = b`, `x ≥ 0`, with `b ≥ 0`.
 /// Columns are CSC; the rows are equalities.
@@ -50,8 +58,7 @@ const REFRESH: usize = 100;
 const STALL_LIMIT: usize = 5_000;
 const BLAND_WINDOW: usize = 2_000;
 
-struct Solver<'a> {
-    lp: &'a Lp,
+struct Solver {
     /// The rhs the solver runs on: the caller's `b` plus a tiny
     /// distinct perturbation per row. The walk LPs are massively
     /// degenerate — most rows carry a zero rhs — and the ties stall
@@ -83,12 +90,17 @@ struct Solver<'a> {
     since_refresh: usize,
     bland_until: usize,
     pivots: usize,
+    /// The degenerate-pivot streak, held across `pivot_until` calls so
+    /// a pause at a unit boundary never resets the Bland window's
+    /// timing: a resumable solve pivots exactly where the one-shot
+    /// one does.
+    degenerate: usize,
     /// Scratch: the FTRAN'd entering column and the BTRAN'd pivot row.
     alpha: Vec<f64>,
 }
 
-impl<'a> Solver<'a> {
-    fn new(lp: &'a Lp) -> Self {
+impl Solver {
+    fn new(lp: &Lp) -> Self {
         let m = lp.m;
         let n = lp.n;
         let b: Vec<f64> =
@@ -100,7 +112,6 @@ impl<'a> Solver<'a> {
                 })
                 .collect();
         Solver {
-            lp,
             b: b.clone(),
             m,
             n,
@@ -116,6 +127,7 @@ impl<'a> Solver<'a> {
             since_refresh: 0,
             bland_until: 0,
             pivots: 0,
+            degenerate: 0,
             alpha: vec![0.0; m],
         }
     }
@@ -123,13 +135,9 @@ impl<'a> Solver<'a> {
     /// A column's cost in the current phase: phase 1 minimizes the
     /// artificial sum alone — structural columns carry zero there —
     /// and phase 2 the real costs, artificials nothing once more.
-    fn cost(&self, column: usize) -> f64 {
+    fn cost(&self, lp: &Lp, column: usize) -> f64 {
         if column < self.n {
-            if self.phase == 1 {
-                0.0
-            } else {
-                self.lp.c[column]
-            }
+            if self.phase == 1 { 0.0 } else { lp.c[column] }
         } else if self.phase == 1 {
             1.0
         } else {
@@ -175,7 +183,7 @@ impl<'a> Solver<'a> {
     /// (sparse dot products), and one more chain pass on it — where
     /// relative dust on a small correction is harmless — keeps the
     /// values at the matrix's precision instead of the chain's.
-    fn solve_values(&self) -> Vec<f64> {
+    fn solve_values(&self, lp: &Lp) -> Vec<f64> {
         let mut values = self.b.clone();
         self.ftran(&mut values);
         let mut residual = self.b.clone();
@@ -185,8 +193,8 @@ impl<'a> Solver<'a> {
             }
             let column = self.basis[r];
             if column < self.n {
-                for position in self.lp.starts[column]..self.lp.starts[column + 1] {
-                    residual[self.lp.index[position]] -= self.lp.value[position] * value;
+                for position in lp.starts[column]..lp.starts[column + 1] {
+                    residual[lp.index[position]] -= lp.value[position] * value;
                 }
             } else {
                 residual[column - self.n] -= value;
@@ -201,15 +209,15 @@ impl<'a> Solver<'a> {
 
     /// Solve `Bᵀ y = c_B`, refined the same way: the residual is the
     /// basic costs less each basis column's product with the duals.
-    fn solve_duals(&self, basic_costs: &[f64]) -> Vec<f64> {
+    fn solve_duals(&self, lp: &Lp, basic_costs: &[f64]) -> Vec<f64> {
         let mut duals = basic_costs.to_vec();
         self.btran(&mut duals);
         let mut residual = basic_costs.to_vec();
         for (r, &column) in self.basis.iter().enumerate() {
             let mut product = 0.0;
             if column < self.n {
-                for position in self.lp.starts[column]..self.lp.starts[column + 1] {
-                    product += self.lp.value[position] * duals[self.lp.index[position]];
+                for position in lp.starts[column]..lp.starts[column + 1] {
+                    product += lp.value[position] * duals[lp.index[position]];
                 }
             } else {
                 product = duals[column - self.n];
@@ -226,8 +234,8 @@ impl<'a> Solver<'a> {
     /// Recompute the basic values, the duals, and every reduced cost
     /// from scratch through the chains — the drift corrector. Fails if
     /// the refreshed basic values sit below feasibility.
-    fn refresh(&mut self) -> Result<(), String> {
-        let mut values = self.solve_values();
+    fn refresh(&mut self, lp: &Lp) -> Result<(), String> {
+        let mut values = self.solve_values(lp);
         for (i, &value) in values.iter().enumerate() {
             // The guard sits between two scales: the eta chain's own
             // noise on a fifteen-thousand-row LP runs near 1e-7, and
@@ -246,18 +254,18 @@ impl<'a> Solver<'a> {
             }
         }
         self.x_b = values;
-        let basic_costs: Vec<f64> = (0..self.m).map(|r| self.cost(self.basis[r])).collect();
-        let duals = self.solve_duals(&basic_costs);
+        let basic_costs: Vec<f64> = (0..self.m).map(|r| self.cost(lp, self.basis[r])).collect();
+        let duals = self.solve_duals(lp, &basic_costs);
         self.y = duals;
         for j in 0..self.n {
-            let mut reduced = self.cost(j);
-            for position in self.lp.starts[j]..self.lp.starts[j + 1] {
-                reduced -= self.y[self.lp.index[position]] * self.lp.value[position];
+            let mut reduced = self.cost(lp, j);
+            for position in lp.starts[j]..lp.starts[j + 1] {
+                reduced -= self.y[lp.index[position]] * lp.value[position];
             }
             self.cbar[j] = reduced;
         }
         for i in 0..self.m {
-            self.cbar[self.n + i] = self.cost(self.n + i) - self.y[i];
+            self.cbar[self.n + i] = self.cost(lp, self.n + i) - self.y[i];
         }
         self.since_refresh = 0;
         Ok(())
@@ -267,12 +275,12 @@ impl<'a> Solver<'a> {
     /// collected for the eta push. The vector travels out and back:
     /// the chain solve borrows the solver immutably, so `alpha` cannot
     /// sit in `self` while it turns.
-    fn ftran_column(&mut self, column: usize) -> Vec<(usize, f64)> {
+    fn ftran_column(&mut self, lp: &Lp, column: usize) -> Vec<(usize, f64)> {
         let mut alpha = std::mem::take(&mut self.alpha);
         alpha.fill(0.0);
         if column < self.n {
-            for position in self.lp.starts[column]..self.lp.starts[column + 1] {
-                alpha[self.lp.index[position]] = self.lp.value[position];
+            for position in lp.starts[column]..lp.starts[column + 1] {
+                alpha[lp.index[position]] = lp.value[position];
             }
         } else {
             alpha[column - self.n] = 1.0;
@@ -294,8 +302,8 @@ impl<'a> Solver<'a> {
     /// One pivot: enter `column`, leave `row` (chosen by the ratio
     /// test or forced by the drive-out). Updates the eta file, the
     /// basis, the basic values, and the reduced costs.
-    fn pivot(&mut self, column: usize, row: usize) -> Result<(), String> {
-        let nonzeros = self.ftran_column(column);
+    fn pivot(&mut self, lp: &Lp, column: usize, row: usize) -> Result<(), String> {
+        let nonzeros = self.ftran_column(lp, column);
         let pivot_value = self.alpha[row];
         if pivot_value.abs() <= PIVOT_TOL {
             return Err(format!(
@@ -310,8 +318,8 @@ impl<'a> Solver<'a> {
         let step = self.cbar[column] / pivot_value;
         for j in 0..self.n {
             let mut alpha_r = 0.0;
-            for position in self.lp.starts[j]..self.lp.starts[j + 1] {
-                alpha_r += pi[self.lp.index[position]] * self.lp.value[position];
+            for position in lp.starts[j]..lp.starts[j + 1] {
+                alpha_r += pi[lp.index[position]] * lp.value[position];
             }
             if alpha_r != 0.0 {
                 self.cbar[j] -= step * alpha_r;
@@ -399,28 +407,35 @@ impl<'a> Solver<'a> {
         best.ok_or_else(|| "the ratio test found no stable pivot".to_owned())
     }
 
-    /// The phase loop: price, pivot, refresh, until optimal.
-    fn run_phase(&mut self) -> Result<(), String> {
-        let mut degenerate = 0usize;
+    /// The phase loop: price, pivot, refresh, until the phase reaches
+    /// its optimum or `units` runs out — false while more pivots
+    /// remain. One unit buys one pass — a pivot, with the refresh due
+    /// beside it sharing the pass — so a resumable caller bounds the
+    /// work of every call it makes.
+    fn pivot_until(&mut self, lp: &Lp, units: &mut usize) -> Result<bool, String> {
         loop {
+            if *units == 0 {
+                return Ok(false);
+            }
+            *units -= 1;
             if self.since_refresh >= REFRESH {
-                self.refresh()?;
+                self.refresh(lp)?;
             }
             let Some(column) = self.entering() else {
-                return Ok(());
+                return Ok(true);
             };
-            self.ftran_column(column);
+            self.ftran_column(lp, column);
             let row = self.leaving(&self.alpha)?;
             let before = self.x_b[row];
-            self.pivot(column, row)?;
+            self.pivot(lp, column, row)?;
             if self.x_b[row] <= 1e-12 && before <= 1e-12 {
-                degenerate += 1;
-                if degenerate >= STALL_LIMIT && self.pivots >= self.bland_until {
+                self.degenerate += 1;
+                if self.degenerate >= STALL_LIMIT && self.pivots >= self.bland_until {
                     self.bland_until = self.pivots + BLAND_WINDOW;
-                    degenerate = 0;
+                    self.degenerate = 0;
                 }
             } else {
-                degenerate = 0;
+                self.degenerate = 0;
             }
             if self.pivots > 2_000_000 {
                 return Err("the pivot budget exhausted".to_owned());
@@ -429,70 +444,115 @@ impl<'a> Solver<'a> {
     }
 }
 
-/// Solve the LP. Two phases from the artificial basis; the drive-out
-/// pivots artificials off their rows (or leaves them basic at zero,
-/// harmless in phase 2 — the duals stay feasible over the structural
-/// columns, which is all the transfer needs); the final duals are a
-/// fresh BTRAN checked against the objective.
-pub(crate) fn solve(lp: &Lp) -> Result<Solved, String> {
-    if lp.b.iter().any(|&value| value < 0.0) {
-        return Err("the rhs must be nonnegative".to_owned());
-    }
-    let mut solver = Solver::new(lp);
-    // The first refresh turns the placeholder duals and reduced costs
-    // into phase 1's real ones (the artificial basis's y is the all-ones
-    // vector through the empty chain).
-    solver.refresh()?;
-    solver.run_phase()?;
-    let artificial_sum: f64 = (0..solver.m)
-        .filter(|&r| solver.basis[r] >= solver.n)
-        .map(|r| solver.x_b[r])
-        .sum();
-    // The perturbed rhs leaves the phase-1 optimum a microsum of
-    // artificials — the perturbation's own scale times the active
-    // rows, which on a fifteen-thousand-row LP reaches ~3e-4 at the
-    // 1e-8 band; anything past five thousandths is real infeasibility.
-    if artificial_sum > 5e-3 {
-        return Err(format!(
-            "the LP is infeasible: {artificial_sum} of artificials remain"
-        ));
-    }
-    // No drive-out: a forced pivot on a row whose artificial carries a
-    // real residual takes a step the ratio test never sanctioned, and
-    // the damage lands on the other rows' feasibility. Artificials stay
-    // basic at their residuals instead — phase 2 prices them at nothing
-    // and never enters them, their mass is the perturbation's own
-    // scale, and the duals the solver returns are feasible over the
-    // structural columns regardless, which is all the transfer carries.
-    solver.phase = 2;
-    solver.refresh()?;
-    solver.run_phase()?;
-    let basic_costs: Vec<f64> = (0..solver.m)
-        .map(|r| solver.cost(solver.basis[r]))
-        .collect();
-    let duals = solver.solve_duals(&basic_costs);
-    let objective: f64 = (0..solver.m)
-        .map(|r| solver.cost(solver.basis[r]) * solver.x_b[r])
-        .sum();
-    let check: f64 = (0..solver.m).map(|r| duals[r] * solver.b[r]).sum();
-    if (check - objective).abs() > 1e-4 * (1.0 + objective.abs()) {
-        return Err(format!(
-            "the duals guard failed: y·b {check} against the objective {objective}"
-        ));
-    }
-    let mut x = vec![0.0; solver.n];
-    for r in 0..solver.m {
-        let column = solver.basis[r];
-        if column < solver.n {
-            x[column] = solver.x_b[r];
+/// One LP's solve, resumable: two phases from the artificial basis,
+/// each unit one pass of its loop, so a caller that must return
+/// between batches can. `step` runs a caller-paid budget of units at
+/// a time; `finish` — only once `step` said true — takes the duals
+/// through the guards the one-shot solve always ran.
+pub(crate) struct SolveBuild {
+    solver: Solver,
+    /// Whether the phase-1-to-2 transition already ran.
+    phase2: bool,
+}
+
+impl SolveBuild {
+    /// Starts the solve: the rhs check, the artificial basis, and
+    /// phase 1's first refresh.
+    pub(crate) fn new(lp: &Lp) -> Result<Self, String> {
+        if lp.b.iter().any(|&value| value < 0.0) {
+            return Err("the rhs must be nonnegative".to_owned());
         }
+        let mut solver = Solver::new(lp);
+        // The first refresh turns the placeholder duals and reduced costs
+        // into phase 1's real ones (the artificial basis's y is the all-ones
+        // vector through the empty chain).
+        solver.refresh(lp)?;
+        Ok(Self {
+            solver,
+            phase2: false,
+        })
     }
-    Ok(Solved {
-        objective,
-        duals,
-        x,
-        pivots: solver.pivots as u64,
-    })
+
+    /// Runs up to `units` pivots: false while the solve has more to
+    /// do, true once the second phase reached its optimum. Between the
+    /// phases the artificials' sum is checked and the costs switch; no
+    /// drive-out — a forced pivot on a row whose artificial carries a
+    /// real residual takes a step the ratio test never sanctioned, and
+    /// the damage lands on the other rows' feasibility. Artificials
+    /// stay basic at their residuals instead — phase 2 prices them at
+    /// nothing and never enters them, their mass is the perturbation's
+    /// own scale, and the duals the solver returns are feasible over
+    /// the structural columns regardless, which is all the transfer
+    /// carries.
+    pub(crate) fn step(&mut self, lp: &Lp, units: &mut usize) -> Result<bool, String> {
+        if !self.solver.pivot_until(lp, units)? {
+            return Ok(false);
+        }
+        if self.phase2 {
+            return Ok(true);
+        }
+        self.phase2 = true;
+        let artificial_sum: f64 = (0..self.solver.m)
+            .filter(|&r| self.solver.basis[r] >= self.solver.n)
+            .map(|r| self.solver.x_b[r])
+            .sum();
+        // The perturbed rhs leaves the phase-1 optimum a microsum of
+        // artificials — the perturbation's own scale times the active
+        // rows, which on a fifteen-thousand-row LP reaches ~3e-4 at the
+        // 1e-8 band; anything past five thousandths is real infeasibility.
+        if artificial_sum > 5e-3 {
+            return Err(format!(
+                "the LP is infeasible: {artificial_sum} of artificials remain"
+            ));
+        }
+        self.solver.phase = 2;
+        self.solver.refresh(lp)?;
+        self.solver.pivot_until(lp, units)
+    }
+
+    /// The solved LP, once `step` ran true: the final duals are a
+    /// fresh BTRAN checked against the objective.
+    pub(crate) fn finish(self, lp: &Lp) -> Result<Solved, String> {
+        debug_assert!(self.phase2, "finish before the phases ran");
+        let solver = self.solver;
+        let basic_costs: Vec<f64> = (0..solver.m)
+            .map(|r| solver.cost(lp, solver.basis[r]))
+            .collect();
+        let duals = solver.solve_duals(lp, &basic_costs);
+        let objective: f64 = (0..solver.m)
+            .map(|r| solver.cost(lp, solver.basis[r]) * solver.x_b[r])
+            .sum();
+        let check: f64 = (0..solver.m).map(|r| duals[r] * solver.b[r]).sum();
+        if (check - objective).abs() > 1e-4 * (1.0 + objective.abs()) {
+            return Err(format!(
+                "the duals guard failed: y·b {check} against the objective {objective}"
+            ));
+        }
+        let mut x = vec![0.0; solver.n];
+        for r in 0..solver.m {
+            let column = solver.basis[r];
+            if column < solver.n {
+                x[column] = solver.x_b[r];
+            }
+        }
+        Ok(Solved {
+            objective,
+            duals,
+            x,
+            pivots: solver.pivots as u64,
+        })
+    }
+}
+
+/// Solve the LP in one call — the resumable build run to its end. The
+/// product paths step the build; this is the one-shot reference the
+/// tests pin the stepping against.
+#[cfg(test)]
+pub(crate) fn solve(lp: &Lp) -> Result<Solved, String> {
+    let mut build = SolveBuild::new(lp)?;
+    let mut units = usize::MAX;
+    while !build.step(lp, &mut units)? {}
+    build.finish(lp)
 }
 
 #[cfg(test)]
@@ -569,5 +629,34 @@ mod tests {
             "{}",
             solved.objective
         );
+    }
+
+    /// A solve stepped one pivot at a time lands exactly where the
+    /// one-shot call does: the same duals, the same objective, the
+    /// same pivot count — the resumable build must never pivot
+    /// differently than `solve` would have.
+    #[test]
+    fn a_stepped_solve_matches_the_one_shot() {
+        let lp = Lp {
+            m: 4,
+            n: 4,
+            starts: vec![0, 2, 4, 6, 8],
+            index: vec![0, 2, 0, 3, 1, 2, 1, 3],
+            value: vec![1.0; 8],
+            b: vec![1.0, 1.0, 1.0, 1.0],
+            c: vec![1.0, 2.0, 2.0, 1.0],
+        };
+        let one_shot = solve(&lp).expect("the one-shot solve");
+        let mut build = SolveBuild::new(&lp).expect("the stepped solve starts");
+        let mut units = 1;
+        while !build.step(&lp, &mut units).expect("the stepped solve runs") {
+            units = 1;
+        }
+        let stepped = build.finish(&lp).expect("the stepped solve finishes");
+        assert_eq!(stepped.pivots, one_shot.pivots);
+        assert!((stepped.objective - one_shot.objective).abs() < 1e-12);
+        for (stepped, one_shot) in stepped.duals.iter().zip(&one_shot.duals) {
+            assert!((stepped - one_shot).abs() < 1e-12);
+        }
     }
 }
