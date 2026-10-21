@@ -287,6 +287,7 @@ h2 {
   flex: 1;
   min-height: 22px;
   overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, monospace;
   font-size: 0.9375rem;
@@ -411,6 +412,13 @@ textarea {
   white-space: pre;
   resize: vertical;
   line-height: 1.4;
+}
+
+/* Keyboard focus draws one outline everywhere; the editor cells and the
+   contrast preference already draw theirs. */
+:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
 }
 
 button,
@@ -667,6 +675,9 @@ details[open] summary {
   box-shadow: var(--shadow-floating);
   color: var(--ink-950);
   width: min(440px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
 }
 
 .dialog::backdrop {
@@ -1921,6 +1932,7 @@ details[open] summary {
 .replay-study {
   width: min(680px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow-y: auto;
 }
 
@@ -2327,6 +2339,7 @@ details[open] summary {
 .solver-dialog {
   width: min(880px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow-y: auto;
 }
 

@@ -1099,3 +1099,27 @@ test('text scales with the root font size', async ({ page }) => {
   expect(parseFloat(after.font)).toBeCloseTo(parseFloat(before.font) * 1.25, 1);
   expect(after.board).toBe(before.board);
 });
+
+// The dialogs cap their height where the viewport is short, so landscape
+// phones see the whole dialog instead of its middle.
+test.describe('short landscape viewport', () => {
+  test.use({ viewport: { width: 740, height: 360 } });
+
+  test('the dialogs fit a short landscape screen', async ({ page }) => {
+    await loaded(page);
+    await page.keyboard.press('?');
+    await expect(page.locator('#shortcuts')).toBeVisible();
+    let box = (await page.locator('#shortcuts').boundingBox())!;
+    expect(box.height).toBeLessThanOrEqual(360);
+    await page.keyboard.press('Escape');
+    await page.click('#open-solver');
+    await expect(page.locator('#solver')).toBeVisible();
+    box = (await page.locator('#solver').boundingBox())!;
+    expect(box.height).toBeLessThanOrEqual(360);
+    await page.click('#solver-close');
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#complete')).toBeVisible();
+    box = (await page.locator('#complete').boundingBox())!;
+    expect(box.height).toBeLessThanOrEqual(360);
+  });
+});
