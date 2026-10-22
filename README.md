@@ -65,6 +65,13 @@ fetches for its optimal searches — the engine's own name, dimension and
 objective checks decide whether a record is trusted, so a stale
 manifest is a missed cache, never a wrong bound.
 
+`docs/greedy-fallback.md` records the measured answer to whether a
+constructor that never searches could route the two boards every mode
+leaves routeless: it cannot — the matching-score climb descends most of
+the way on one and freezes, barely descends on the other, and neither
+routes in hundreds of thousands of restarts — so the routeless panel
+steers toward the budgets that route them rather than inventing a route.
+
 ## The web app
 
 The app is the ported face of the original SokomindSolver app: six hash-routed
