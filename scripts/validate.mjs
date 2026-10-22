@@ -60,6 +60,11 @@ export function plan({ quick }) {
     // Reuses the native records bench:check just wrote instead of rerunning the corpus.
     step('node scripts/parity.mjs --native target/bench/catalog.json'),
     step('npm run bench:observe', slow),
+    // The app's own declaration as a gate: the per-push board set, quick enough
+    // to run on every push and not skipped by --quick, because the pathology it
+    // catches — a search that stops answering its deadline at the app's limits —
+    // is exactly what the fixed-size tiers cannot see.
+    step('npm run bench:appscale'),
     // CI=true, which GitHub sets in every job, makes playwright.config.ts fail a
     // leftover test.only and start its own preview server instead of reusing one.
     { command: 'npm run test:browser', skip: slow, env: { CI: 'true' } },

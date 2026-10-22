@@ -1,8 +1,8 @@
 // Pure benchmark-gate logic: baseline schema, regression rules, false-proof
-// invariants, the scoreboard and bench:observe's review helpers. No filesystem
-// or process access, so scripts/bench-gate.test.mjs can exercise every rule
-// without cargo.
-import { MODES } from '../web/src/protocol.ts';
+// invariants, the scoreboard, bench:observe's review helpers and
+// bench:appscale's liveness rule. No filesystem or process access, so
+// scripts/bench-gate.test.mjs can exercise every rule without cargo.
+import { MODES, STATUSES } from '../web/src/protocol.ts';
 
 // The modes, in the order catalog.rs writes them and serialize sorts by.
 export { MODES };
@@ -342,6 +342,42 @@ export function invariants(cases, evidence = []) {
     if (lower !== null && lower > route) fail('I3', `lower bound ${lower} exceeds a verified ${route}-move route`);
     if (proof === 'optimal' && moves !== route) fail('I3', `claims ${moves} moves optimal but a ${route}-move route exists`);
     if (proof === 'unsolvable') fail('I3', `claims unsolvable but a ${route}-move route exists`);
+  }
+  return failures;
+}
+
+// The statuses a finished corpus record can carry: the wire's list (which
+// mirrors the Rust side; mirrors.test.mjs checks it) less the two a catalog
+// run never ends on.
+/** @type {ReadonlySet<string>} */
+const TERMINAL = new Set(STATUSES.filter(status => status !== 'running' && status !== 'cancelled'));
+
+/**
+ * bench:appscale's rules, judged on the corpus records: the app's every search
+ * runs under a time budget the search's own clock enforces, so machine speed
+ * cannot move a run past its deadline by more than the batch it ends in — only
+ * a search that stops answering between its batches can, which is the
+ * pathology the tier exists to catch: the walk term's old unsliced LP held a
+ * 70 ms Color Wheel solve inside one batch for minutes, at exactly the limits
+ * the tier runs, while every fixed-size gate stayed green. L1: a run's wall
+ * time stays within the budget's factor. L2: the status is one the wire names.
+ * Which routes and bounds a time-capped run reaches does vary with machine
+ * speed, so nothing else is judged here; the false-proof invariants, called
+ * beside this by bench:appscale, cover soundness.
+ * @param {readonly import('./corpus.mjs').CorpusRecord[]} records
+ * @param {number} timeMs The time budget every search ran under.
+ * @returns {Failure[]}
+ */
+export function liveness(records, timeMs) {
+  // search_us counts microseconds while the budget arrives in milliseconds.
+  const deadline = timeMs * 4 * 1000;
+  /** @type {Failure[]} */
+  const failures = [];
+  for (const r of records) {
+    /** @param {string} rule @param {string} message */
+    const fail = (rule, message) => failures.push({ key: key(r), rule, message });
+    if (r.search_us > deadline) fail('L1', `ran ${(r.search_us / 1_000_000).toFixed(1)} s under a ${(timeMs / 1000).toFixed(0)} s budget`);
+    if (!TERMINAL.has(r.status)) fail('L2', `status ${r.status} is not one the wire names`);
   }
   return failures;
 }

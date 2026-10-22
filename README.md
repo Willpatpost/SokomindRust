@@ -739,6 +739,7 @@ npm run bench:check
 npm run build
 npm run test:parity
 npm run bench:observe
+npm run bench:appscale
 npm run test:browser
 ```
 
@@ -810,6 +811,16 @@ short (`--states` and `--memory` override it). It fails only on a false proof
 or bound, a nondeterministic run, or a crash. `bench:check`'s 20,000 states lie
 below Fast's stage point, so a gate run that stages does so at its full arena;
 `bench:observe`'s runs stage before the arena fills, as production's do.
+`bench:appscale` runs a board set in every mode at the app's own declaration —
+the 256,000,000-state ceiling the page always sends, with its default 64 MiB
+and 5 s budgets — one corpus run per board, each under a wall budget. Machine
+speed changes which routes and bounds a time-capped run reaches, so it judges
+only what speed cannot: every search answers its deadline (a run past four
+times its budget, or a corpus run that never finishes, fails — the walk term's
+old unsliced LP once held a 70 ms solve for minutes at exactly these limits
+while every fixed-size gate stayed green), every status is one the wire names,
+and the false-proof invariants hold at scale. `--full` runs every catalog
+board, as the weekly CI job does.
 `test:browser` runs the Playwright specs
 in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npm run build` comes first; install the browser once with
@@ -836,7 +847,7 @@ the images, their configuration, or the smoke test come from (the Dockerfile,
 the Rust and npm manifests, locks, and version pins; the workflow lists them
 all), when the base to compare against is missing or can no longer be fetched
 (the push that creates a branch, or a force push), on every manual run, and
-weekly (Mondays at 06:17 UTC), when it is the only job, because base images
+weekly (Mondays at 06:17 UTC), when it and the app-scale sweep are the only jobs, because base images
 change upstream while the repository does not. A change to other sources alone
 waits for the weekly or a manual run.
 

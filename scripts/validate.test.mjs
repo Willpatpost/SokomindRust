@@ -45,7 +45,20 @@ function fake(keepGoing, failing) {
  * @returns {Step[]}
  */
 function ciSteps() {
-  const lines = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').split(/\r?\n/);
+  const all = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').split(/\r?\n/);
+  // Only the always-on jobs: validate mirrors rust and integration, not the
+  // weekly whole-catalog appscale sweep or the deploy checks.
+  const mirrored = new Set(['rust', 'integration']);
+  /** @type {string} */
+  let job = '';
+  const lines = all.filter(line => {
+    const header = /^  ([a-z-]+):$/.exec(line);
+    if (header) {
+      job = header[1];
+      return false;
+    }
+    return mirrored.has(job);
+  });
   /** @param {string} line */
   const indent = line => line.length - line.trimStart().length;
   return lines.flatMap((line, i) => {

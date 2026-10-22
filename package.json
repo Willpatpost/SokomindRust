@@ -30,6 +30,7 @@
     "bench:check": "node scripts/benchmark.mjs --check",
     "bench:update": "node scripts/benchmark.mjs --update",
     "bench:observe": "node scripts/benchmark.mjs --observe",
+    "bench:appscale": "node scripts/benchmark.mjs --appscale",
     "build": "npm run wasm && npm run build:web",
     "build:web": "npm run check:web && vite build web && node scripts/asset-manifest.mjs",
     "build:image": "tsc -p web && vite build web",

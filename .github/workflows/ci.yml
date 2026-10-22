@@ -3,8 +3,8 @@ name: Validate
 # request is validated once per update, not twice). A change to LICENSE alone
 # skips it, but a README-only change does not: scripts/mirrors.test.mjs checks
 # the values README.md copies. workflow_dispatch runs it on demand. The weekly
-# schedule runs only the deploy job, whose base images change upstream while
-# this repository does not.
+# schedule runs the deploy job, whose base images change upstream while this
+# repository does not, and the app-scale sweep over the whole catalog.
 on:
   push:
     branches: [main]
@@ -105,6 +105,10 @@ jobs:
       # Reuses the native records bench:check just wrote instead of rerunning the corpus.
       - run: node scripts/parity.mjs --native target/bench/catalog.json
       - run: npm run bench:observe
+      # The app's own declaration (the state ceiling the page always sends,
+      # its default budgets) as a gate; scripts/benchmark.mjs names the boards
+      # and the rules. What the fixed-size tiers above cannot see.
+      - run: npm run bench:appscale
       # Browsers are cached per runner image and Playwright version: Playwright
       # downloads a build per OS release, and the runner's ImageOS (ubuntu24, for
       # example) names it. The system packages they need are not cached, so a
@@ -141,9 +145,29 @@ jobs:
             target/bench/catalog.json
             target/bench/report.txt
             target/bench/observe.json
+            target/bench/appscale.json
             playwright-report/
             test-results/
           if-no-files-found: ignore
+
+  # The weekly whole-catalog run of the app-scale gate: every board at the
+  # page's declaration, too slow for every push. rust and integration sit the
+  # schedule out (their if:), so this job stands alone beside deploy.
+  appscale:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: npm ci
+      - run: npm run bench:appscale -- --full
 
   # Runs the deploy job when a push or pull request changes a file that shapes
   # the images or their config, and on every weekly or manual run. A change to

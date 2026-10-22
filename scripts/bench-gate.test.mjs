@@ -4,6 +4,7 @@ import {
   compare,
   formatReport,
   invariants,
+  liveness,
   load,
   median,
   mustRecord,
@@ -198,6 +199,28 @@ test('invariants I1-I3 catch false proofs and bounds, using only matching eviden
   assert.deepEqual(found([proven], [fast({ fingerprint: 'changed', moves: 12 })]), []);
   assert.deepEqual(found([proven], [fast({ id: 'b', moves: 12 })]), []);
   assert.deepEqual(found([proven], [fast({ moves: null })]), []);
+});
+
+test('liveness judges only what machine speed cannot: the deadline factor and known statuses', () => {
+  /**
+   * @param {Record<string, unknown>} overrides
+   */
+  const record = (overrides = {}) => ({ id: 'a', mode: 'fast', status: 'time_limit', search_us: 5_010_000, ...overrides });
+  // The search's own clock lands a capped run at the budget and a solved one under it.
+  assert.deepEqual(liveness(/** @type {any} */ ([record(), record({ status: 'solved', search_us: 900 })]), 5_000), []);
+  // Exactly the factor passes; past it, a batch stopped answering its deadline.
+  assert.deepEqual(liveness(/** @type {any} */ ([record({ search_us: 20_000_000 })]), 5_000), []);
+  assert.deepEqual(
+    liveness(/** @type {any} */ ([record({ search_us: 20_000_001 })]), 5_000).map(f => `${f.key} ${f.rule}`),
+    ['a:fast L1'],
+  );
+  // A finished record never carries these statuses.
+  for (const status of ['wedged', 'running', 'cancelled'])
+    assert.deepEqual(
+      liveness(/** @type {any} */ ([record({ status })]), 5_000).map(f => f.rule),
+      ['L2'],
+      status,
+    );
 });
 
 test('R1-R4 and S3 improvements must be recorded, S1 and S2 ones are informational; catalog changes are hard only for check', () => {

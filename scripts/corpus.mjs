@@ -69,14 +69,30 @@ let built = false;
 /**
  * Compile once per process, then return the example's verified JSON-line records.
  * @param {readonly string[]} [args] Options for the catalog example.
+ * @param {{ timeoutMs?: number }} [options] timeoutMs: a wall budget for the example
+ *   itself, which a wedged search — one that stops answering its deadline
+ *   between batches — overruns; the spawn is killed and the error says so.
  * @returns {CorpusRecord[]}
  */
-export function nativeCorpus(args = []) {
+export function nativeCorpus(args = [], { timeoutMs } = {}) {
   if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
   built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
-  const result = spawnSync(binary, args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * MIB });
-  if (result.error) throw result.error;
+  const result = spawnSync(binary, args, {
+    cwd: root,
+    env,
+    encoding: 'utf8',
+    maxBuffer: 64 * MIB,
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
+  });
+  if (result.error) {
+    const code = /** @type {Error & { code?: string }} */ (result.error).code;
+    if (code === 'ETIMEDOUT')
+      throw new Error(
+        `The corpus run exceeded its ${Math.round((timeoutMs ?? 0) / 1000)} s wall budget: a search stopped answering its deadline between batches.`,
+      );
+    throw result.error;
+  }
   if (result.status !== 0) throw new Error(result.stderr || `Corpus exited ${result.status}`);
   return result.stdout
     .trim()

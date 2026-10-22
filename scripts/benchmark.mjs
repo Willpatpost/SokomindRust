@@ -7,6 +7,7 @@
 //   npm run bench:observe [-- --states N --memory M --repeat K --update]
 //                                                   hard boards at OBSERVE's fixed size, median of K;
 //                                                   --update rewrites benchmarks/observe-reference.json
+//   npm run bench:appscale [-- --full]              the app's own declaration as a gate; --full, every board
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
@@ -18,6 +19,7 @@ import {
   formatReport,
   invariants,
   key,
+  liveness,
   load,
   median,
   mustRecord,
@@ -45,6 +47,22 @@ const DEFAULTS = { maxStates: 20_000, memoryMiB: 64 };
 // bench:observe's fixed size, which observe-reference.json records: far below sokomind_search::MAX_STATES
 // on purpose, so a run stays short. It is an observation size, not a cap; --states and --memory override it.
 const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['huge', 'large', 'expert-maze', 'gen-v2-310081-a2088508'] };
+// bench:appscale's declaration: the limits the page's every search runs under —
+// protocol.ts's MAX_STATES ceiling, the memory and time selects' defaults. CI's
+// fixed-size tiers cannot see behavior that appears only here: the walk term's
+// old unsliced LP wedged every Optimal run at exactly these limits while both
+// stayed green. Machine speed changes which routes and bounds a time-capped run
+// reaches, so the tier judges only what speed cannot (liveness, in
+// bench-gate.mjs) beside the false-proof invariants; the board set reaches
+// every part of the engine — quick solves, the room bound and its deferred
+// walk term at 64 MiB, the stage ladder, a board with no room structure, and
+// the generated giants. --full runs every board, as the weekly CI job does.
+const APPSCALE = {
+  maxStates: 256_000_000,
+  memoryMiB: 64,
+  timeMs: 5_000,
+  puzzles: ['tiny', 'medium', 'large', 'huge', 'expert-maze', 'open-field', 'gen-v2-340272-fd819d0e', 'gen-v2-370002-8ea0b852'],
+};
 const TIMINGS = ['sample', 'setup_us', 'first_route_us', 'search_us', 'reconstruct_us'];
 const order = catalog.map(puzzle => puzzle.id);
 
@@ -278,6 +296,70 @@ function observe() {
   return true;
 }
 
+// The app-scale gate: every board of APPSCALE's set — the whole catalog with
+// --full — searched in every mode at the app's declaration, each corpus spawn
+// under a wall budget a wedged search cannot hide inside. It fails on a
+// liveness or invariant failure or a spawn that does not finish; timings and
+// counts stay observational, because machine speed moves them under a time
+// budget. The baseline's solved routes stand as the invariants' evidence.
+function appscale() {
+  const values = options({
+    full: { type: 'boolean' },
+    states: { type: 'string' },
+    memory: { type: 'string' },
+    'time-ms': { type: 'string' },
+  });
+  const config = {
+    maxStates: values.states ? count(values.states, 'states') : APPSCALE.maxStates,
+    memoryMiB: values.memory ? count(values.memory, 'memory') : APPSCALE.memoryMiB,
+    timeMs: values['time-ms'] ? count(values['time-ms'], 'time-ms') : APPSCALE.timeMs,
+  };
+  const puzzles = values.full ? order : APPSCALE.puzzles;
+  for (const id of puzzles) assert(order.includes(id), `App-scale board ${id} is not in the catalog`);
+  // Before the corpus runs, so a file load() rejects fails in seconds.
+  const baseline = committed(BASELINE);
+  assert.equal(catalogHash, baseline.catalogHash, 'Catalog changed: review, then run npm run bench:update');
+  /** @type {CorpusRecord[]} */
+  const records = [];
+  for (const id of puzzles) {
+    // One spawn per board, so a wedge is named to its board and cannot hide
+    // inside another's wall time: every mode under the budget, the factor
+    // liveness allows, and the run's start.
+    try {
+      const samples = nativeCorpus(
+        ['--states', String(config.maxStates), '--memory', String(config.memoryMiB), '--time-ms', String(config.timeMs), '--puzzle', id],
+        { timeoutMs: MODES.length * config.timeMs * 4 + 30_000 },
+      );
+      assert.equal(samples.length, MODES.length, `${id}: expected one record per mode`);
+      records.push(...samples);
+    } catch (error) {
+      console.error(`APPSCALE  ${id}  ${error instanceof Error ? error.message : error}`);
+      return false;
+    }
+  }
+  const cases = records.map(toCase);
+  const failures = [...liveness(records, config.timeMs), ...invariants(cases, baseline.cases)];
+  console.table(
+    records.map(r => ({
+      id: r.id,
+      mode: r.mode,
+      status: r.status,
+      moves: r.moves,
+      lb: r.lower_bound,
+      proof: r.proof.kind,
+      searchMs: +(r.search_us / 1000).toFixed(1),
+    })),
+  );
+  console.table(scoreboard(cases));
+  for (const f of failures) console.log(`FAILURE  ${f.key}  ${f.rule}  ${f.message}`);
+  console.log(
+    `APPSCALE v${SCHEMA_VERSION}: boards=${puzzles.length} config=${config.maxStates}/${config.memoryMiB}/${config.timeMs}ms`
+      + ` liveness+invariants=${failures.length ? `FAIL(${failures.length})` : 'ok'} source=${sourceRevision()}`,
+  );
+  save('appscale.json', JSON.stringify({ catalogHash, ...config, puzzles, records }, null, 2) + '\n');
+  return !failures.length;
+}
+
 function passThrough() {
   const records = nativeCorpus(process.argv.slice(2));
   raw(records);
@@ -287,5 +369,5 @@ function passThrough() {
 }
 
 /** @type {Record<string, () => boolean>} */
-const actions = { '--check': check, '--update': update, '--observe': observe };
+const actions = { '--check': check, '--update': update, '--observe': observe, '--appscale': appscale };
 if (!(actions[action] ?? passThrough)()) process.exitCode = 1;
