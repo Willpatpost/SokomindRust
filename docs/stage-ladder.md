@@ -333,6 +333,24 @@ From P3 (job 47024, rev `e4172fe`):
 - `huge` gets 812 moves (268 pushes) at 64, 128 and 256 MiB, with work
   617,192 and 83,696 checks.
 
+## The app's budgets
+
+The page's defaults — 256,000,000 states, 64 MiB, 5 s — route 50 of the 57
+catalog boards in Quality (median first route 0 ms, p90 450 ms, worst 1.2 s)
+and the same 50 in Fast: the seven give-ups above, which neither mode's
+machinery reaches at those budgets. Higher budgets move the boundary, each
+mode its own way. Quality's capped ladder gives up early and its plain
+restart routes gen-v2-340053-6d91 at 128 MiB and above (95 moves at 256 MiB,
+11 s, 5.9M states) and gen-v2-340046-c9f5 at 1,024 MiB (174 moves, 27 s,
+17.9M states). Fast's limit-grown ladder, given a 30 s budget, routes
+gen-v2-350108-b138, 360313-1615 and 370193-8887 in 6 to 17 s, where
+Quality's capped ladder cannot. gen-v2-340048-b5d3 and 350001-a996 stay
+routeless at every budget the page offers: the ladder fails b5d3's last rung
+whatever its work, and neither mode's plain search reaches either board
+within 1,024 MiB (17.9M and 15.8M states). The result panel's routeless
+guarantee steers across this map. To recheck any figure, run the catalog
+example at the stated limits.
+
 ## Reproducing
 
 The probes and their logs are not in the repository. The figures above are

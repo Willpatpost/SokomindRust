@@ -1233,3 +1233,17 @@ test('a quality search over its budget shows the route it kept', async ({ page }
   await expect(page.locator('#solver-result-moves')).not.toHaveText('—');
   await expect(page.locator('#play')).toBeEnabled();
 });
+
+// The boards the default budgets cannot route are the engine's measured hard
+// core (docs/stage-ladder.md, The app's budgets): the panel reports the
+// finish honestly and steers toward the budgets that route most of them.
+test('a routeless finish steers toward the budgets that route it', async ({ page }) => {
+  await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+  await page.goto('/#/play/gen-v2-340048-b5d312a6');
+  await expect(page.locator('#title')).toHaveText('False Promise: Chambers 7');
+  await page.click('#open-solver');
+  await page.selectOption('#mode', 'quality');
+  await page.click('#solve');
+  await expect(page.locator('#solver-result-title')).toHaveText('No route returned', { timeout: 20000 });
+  await expect(page.locator('#solver-result-guarantee')).toContainText('may find one');
+});

@@ -491,12 +491,15 @@ function showResult(update: SearchUpdate, route: string | undefined) {
 
 /** What a finished search guarantees about its route, in the engine's own
  * words. Without a route there is nothing to guarantee: the summary line
- * beside it already names the limit that stopped the search. */
+ * beside it names the limit that stopped the search — but the measured
+ * boundary steers: the boards the default budgets cannot route yield, each
+ * way its own, to more memory, more time, or the other mode
+ * (docs/stage-ladder.md, The app's budgets). */
 function guarantee(metrics: SearchUpdate['metrics'], route: string | undefined): string {
   if (metrics.proof.kind === 'optimal') return 'Proven optimal';
   if (metrics.proof.kind === 'unsolvable') return 'Proven unsolvable';
   if (metrics.proof.kind === 'bounded') return `Best found — within ${metrics.proof.upper - metrics.proof.lower} of optimal`;
-  if (route === undefined) return 'No route found';
+  if (route === undefined) return 'No route found — a bigger budget or a different mode may find one';
   return metrics.status === 'solved' ? 'First route found' : 'Best found before stopping';
 }
 function solve() {
