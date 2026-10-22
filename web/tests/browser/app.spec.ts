@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 
 const MOVE_HINT = 'Arrow keys or WASD to move. U to undo.';
 const FIRST_BOARD = '5 by 5 puzzle, 1 boxes. 0 moves, 0 pushes. Use arrow keys or WASD to move, U to undo.';
@@ -1266,4 +1267,46 @@ test('a native search solves through the server', async ({ page }) => {
   await page.click('#solve');
   await expect(page.locator('#search-status')).toContainText('Search complete.', { timeout: 30000 });
   await expect(page.locator('#solver-optimal')).toBeVisible();
+});
+
+// The worker fetches a pre-solved walk-term dual cache for optimal
+// searches: the manifest matches the board by its rows' hash and the
+// record is fetched and handed to the engine, whose own name, dimension
+// and objective checks decide whether to trust it. The routes prove the
+// pipeline ran for this board's rows; the record here is bytes the
+// engine refuses, and the search proceeds on its own solves. The shell's
+// service worker answers the same-origin fetch itself, through a
+// pass-through no page route sees, so this group alone blocks its
+// registration — the install spec elsewhere in this file still needs the
+// worker allowed — leaving the consult on the open network, where the
+// routes stand in for the cache the manifest names.
+test.describe('walk-term cache', () => {
+  test.use({ serviceWorkers: 'block' });
+  test('an optimal search consults the walk-term cache manifest', async ({ page }) => {
+    const rows = ['OOOOO', 'O R O', 'O A O', 'O a O', 'OOOOO'].join('\n');
+    const rowsHash = createHash('sha256').update(rows).digest('hex');
+    let manifestFetched = false;
+    let recordFetched = false;
+    await page.route('**/walk-caches/manifest.json', route => {
+      manifestFetched = true;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ entries: [{ rowsHash, name: 'spec.swt' }] }),
+      });
+    });
+    await page.route('**/walk-caches/spec.swt', async route => {
+      recordFetched = true;
+      await route.fulfill({ body: Buffer.from('x'.repeat(32)) });
+    });
+    await page.route('**/api/health', health => health.fulfill({ status: 404 }));
+    await page.goto('/#/play/ultra-tiny');
+    await expect(page.locator('#title')).toHaveText('First Steps');
+    await page.click('#open-solver');
+    await page.selectOption('#mode', 'optimal');
+    await page.click('#solve');
+    await expect(page.locator('#search-status')).toContainText('Search complete.');
+    await expect(page.locator('#solver-optimal')).toBeVisible();
+    expect(manifestFetched).toBe(true);
+    expect(recordFetched).toBe(true);
+  });
 });

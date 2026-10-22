@@ -57,6 +57,14 @@ behavior for experiments; each is documented with its measurement in `docs/`:
   native thread pool: never a longer route, and shorter ones where
   the polish's budget dies mid-chain (docs/parallel-polish.md).
 
+The browser has no environment to read, so its walk-term dual cache is
+shipped data: `npm run walk-caches -- --boards large,huge` runs the
+native engine at the app's declaration and writes the records and a
+rows-hash manifest into `web/public/walk-caches/`, which the worker
+fetches for its optimal searches — the engine's own name, dimension and
+objective checks decide whether a record is trusted, so a stale
+manifest is a missed cache, never a wrong bound.
+
 ## The web app
 
 The app is the ported face of the original SokomindSolver app: six hash-routed

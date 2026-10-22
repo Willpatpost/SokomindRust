@@ -508,6 +508,89 @@ fn cache_name(board: &Board, counted: &[bool], goals: usize, state: &State) -> S
     )
 }
 
+/// One SWT1 record parsed from `bytes`, trusted only when the magic, the
+/// LP's dimensions, the vectors' row counts, and the record's exact
+/// length all agree.
+fn parse_record(bytes: &[u8], m: usize, n: usize) -> Option<CachedTerm> {
+    let mut cursor = 0;
+    if take(bytes, &mut cursor, 4)? != &b"SWT1"[..] {
+        return None;
+    }
+    let rows = read_u64(bytes, &mut cursor)?;
+    let columns = read_u64(bytes, &mut cursor)?;
+    if rows != m as u64 || columns != n as u64 {
+        return None;
+    }
+    let objective = read_f64(bytes, &mut cursor)?;
+    let root = read_vec(bytes, &mut cursor, m)?;
+    let l1 = read_vec(bytes, &mut cursor, m)?;
+    let primal_pivots = read_u64(bytes, &mut cursor)?;
+    let l1_pivots = read_u64(bytes, &mut cursor)?;
+    if cursor != bytes.len() {
+        return None;
+    }
+    Some(CachedTerm {
+        objective,
+        root,
+        l1,
+        primal_pivots,
+        l1_pivots,
+    })
+}
+
+/// One little-endian run off the front, advancing the cursor.
+fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Option<&'a [u8]> {
+    let end = cursor.checked_add(len)?;
+    let slice = bytes.get(*cursor..end)?;
+    *cursor = end;
+    Some(slice)
+}
+
+fn read_u64(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
+    Some(u64::from_le_bytes(take(bytes, cursor, 8)?.try_into().ok()?))
+}
+
+fn read_f64(bytes: &[u8], cursor: &mut usize) -> Option<f64> {
+    Some(f64::from_le_bytes(take(bytes, cursor, 8)?.try_into().ok()?))
+}
+
+/// One dual vector, its row count pinned to the LP's.
+fn read_vec(bytes: &[u8], cursor: &mut usize, m: usize) -> Option<Vec<f64>> {
+    let len = read_u64(bytes, cursor)? as usize;
+    if len != m {
+        return None;
+    }
+    let mut values = Vec::with_capacity(len);
+    for _ in 0..len {
+        values.push(read_f64(bytes, cursor)?);
+    }
+    Some(values)
+}
+
+// The record a binding provided for this thread's next walk-term build:
+// the cache name it was generated under and its SWT1 bytes. wasm has no
+// environment or filesystem, so a record a web worker fetched is the
+// browser's only dual cache; the build takes it through the same name,
+// dimension and y·b checks a directory entry passes, and a mismatched
+// record is dropped, never trusted. One record serves one build: the
+// take is consuming, and a build that never arms leaves it for the next
+// one to refuse by name.
+thread_local! {
+    static INJECTED: std::cell::RefCell<Option<(String, Vec<u8>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Provides a walk-term dual-cache record for this thread's next search:
+/// the manifest's `name` and the record's `bytes` (see [`INJECTED`]).
+pub(crate) fn inject(name: String, bytes: Vec<u8>) {
+    INJECTED.with(|cell| *cell.borrow_mut() = Some((name, bytes)));
+}
+
+/// Takes the provided record, if one stands.
+fn take_injected() -> Option<(String, Vec<u8>)> {
+    INJECTED.with(|cell| cell.borrow_mut().take())
+}
+
 /// The native halves of the term's iteration support: the dual cache
 /// and the build's log line, both off unless their environment
 /// variables name them. The cache is best effort by construction — a
@@ -529,35 +612,18 @@ mod native {
         std::env::var_os("SOKOMIND_WALK_TERM_LOG").is_some()
     }
 
-    /// Reads one entry, trusting it only when the magic, the LP's
-    /// dimensions, the vectors' row counts, and the record's exact
-    /// length all agree.
+    /// Reads one entry, trusting it only as [`super::parse_record`] does.
     pub(super) fn load(dir: &Path, name: &str, m: usize, n: usize) -> Option<CachedTerm> {
         let bytes = std::fs::read(dir.join(name)).ok()?;
-        let mut cursor = 0;
-        if take(&bytes, &mut cursor, 4)? != &b"SWT1"[..] {
-            return None;
+        super::parse_record(&bytes, m, n)
+    }
+
+    /// One dual vector's bytes, for the record `store` writes.
+    fn push_vec(bytes: &mut Vec<u8>, values: &[f64]) {
+        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for &value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
         }
-        let rows = read_u64(&bytes, &mut cursor)?;
-        let columns = read_u64(&bytes, &mut cursor)?;
-        if rows != m as u64 || columns != n as u64 {
-            return None;
-        }
-        let objective = read_f64(&bytes, &mut cursor)?;
-        let root = read_vec(&bytes, &mut cursor, m)?;
-        let l1 = read_vec(&bytes, &mut cursor, m)?;
-        let primal_pivots = read_u64(&bytes, &mut cursor)?;
-        let l1_pivots = read_u64(&bytes, &mut cursor)?;
-        if cursor != bytes.len() {
-            return None;
-        }
-        Some(CachedTerm {
-            objective,
-            root,
-            l1,
-            primal_pivots,
-            l1_pivots,
-        })
     }
 
     /// Writes one entry through a temporary and a rename, so a reader
@@ -577,42 +643,6 @@ mod native {
         let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
         if std::fs::write(&temp, bytes).is_ok() {
             let _ = std::fs::rename(&temp, dir.join(name));
-        }
-    }
-
-    /// One little-endian run off the front, advancing the cursor.
-    fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Option<&'a [u8]> {
-        let end = cursor.checked_add(len)?;
-        let slice = bytes.get(*cursor..end)?;
-        *cursor = end;
-        Some(slice)
-    }
-
-    fn read_u64(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
-        Some(u64::from_le_bytes(take(bytes, cursor, 8)?.try_into().ok()?))
-    }
-
-    fn read_f64(bytes: &[u8], cursor: &mut usize) -> Option<f64> {
-        Some(f64::from_le_bytes(take(bytes, cursor, 8)?.try_into().ok()?))
-    }
-
-    /// One dual vector, its row count pinned to the LP's.
-    fn read_vec(bytes: &[u8], cursor: &mut usize, m: usize) -> Option<Vec<f64>> {
-        let len = read_u64(bytes, cursor)? as usize;
-        if len != m {
-            return None;
-        }
-        let mut values = Vec::with_capacity(len);
-        for _ in 0..len {
-            values.push(read_f64(bytes, cursor)?);
-        }
-        Some(values)
-    }
-
-    fn push_vec(bytes: &mut Vec<u8>, values: &[f64]) {
-        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
-        for &value in values {
-            bytes.extend_from_slice(&value.to_le_bytes());
         }
     }
 }
@@ -864,9 +894,14 @@ impl WalkBuild {
         let (lp, maps) = assemble_lp(hall, board, start, &graph, &w);
         let name = cache_name(board, counted, hall.goals, start);
         let cache = cache.map(Path::to_path_buf);
-        if let Some(dir) = &cache
-            && let Some(entry) = native::load(dir, &name, lp.m, lp.n)
-        {
+        // A provided record comes first: it names this very build, where a
+        // directory's entry only might. A mismatched record falls through
+        // to the solves, never trusted.
+        let entry = take_injected()
+            .filter(|(provided, _)| provided == &name)
+            .and_then(|(_, bytes)| parse_record(&bytes, lp.m, lp.n))
+            .or_else(|| native::load(cache.as_deref()?, &name, lp.m, lp.n));
+        if let Some(entry) = entry {
             let value: f64 = entry.root.iter().zip(&lp.b).map(|(&u, &b)| u * b).sum();
             if (value - entry.objective).abs() <= 1e-4 * (1.0 + entry.objective.abs()) {
                 if native::log_enabled() {
@@ -1072,5 +1107,55 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record provided through the binding's channel behaves as a
+    /// directory entry does: the build whose name it carries takes it
+    /// without solving, and one whose name it does not refuses it, the
+    /// solves running fresh. The browser's only dual cache rides this
+    /// channel, wasm having no environment or filesystem to read.
+    #[test]
+    fn a_provided_record_hits_only_its_own_name() {
+        let (_id, board, states, _edges) = explored_catalog()
+            .iter()
+            .next()
+            .expect("the catalog holds a board");
+        let mut rng = Lcg(11);
+        let counted: Vec<bool> = (0..board.tiles().len()).map(|_| rng.below(4) < 2).collect();
+        let hall = Heuristic::hall(board, board.initial().player, &counted);
+        let dir =
+            std::env::temp_dir().join(format!("sokomind-walk-provided-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // The fresh build stores its record; a file is the one shape the
+        // store writes, so the channel's bytes come from it.
+        let (fresh, _) = WalkTerm::build_with(board, &hall, &counted, &board.initial(), Some(&dir))
+            .expect("the fresh build solves");
+        let name = std::fs::read_dir(&dir)
+            .expect("the store wrote its record")
+            .next()
+            .and_then(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .expect("one record file");
+        let bytes = std::fs::read(dir.join(&name)).expect("the record reads back");
+        let _ = std::fs::remove_dir_all(&dir);
+        // A record under another name is refused: the build solves fresh.
+        inject(
+            "another-board.0000000000000000.swt".to_owned(),
+            bytes.clone(),
+        );
+        let (_, hit) = WalkTerm::build_with(board, &hall, &counted, &board.initial(), None)
+            .expect("the mismatched build solves");
+        assert!(!hit, "a record under another name must be refused");
+        // The matching name takes it: the duals price identically.
+        inject(name, bytes);
+        let (provided, hit) = WalkTerm::build_with(board, &hall, &counted, &board.initial(), None)
+            .expect("the provided build loads");
+        assert!(hit, "the record the name matches must be taken");
+        for state in states {
+            assert!(
+                (fresh.value(&hall, state) - provided.value(&hall, state)).abs() < 1e-9,
+                "the provided duals price {state:?} differently"
+            );
+        }
     }
 }

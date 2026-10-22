@@ -18,6 +18,15 @@ declare module 'node:assert/strict' {
   const assert: Assert;
   export default assert;
 }
+// The browser specs hash a board's rows to name the manifest entry the
+// worker should fetch; the real module exists wherever those specs run.
+declare module 'node:crypto' {
+  interface Hash {
+    update(data: string): Hash;
+    digest(encoding: string): string;
+  }
+  export function createHash(algorithm: string): Hash;
+}
 declare function setImmediate(callback: (...args: unknown[]) => void): unknown;
 declare const process: { env: Record<string, string | undefined> };
 // The browser specs hand Playwright an import file from memory, whose payload

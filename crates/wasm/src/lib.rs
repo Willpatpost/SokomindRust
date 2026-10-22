@@ -198,6 +198,15 @@ impl WasmSearch {
     pub fn cancel(&mut self) {
         self.search.stop(StopReason::Cancelled);
     }
+    /// Provides a walk-term dual-cache record for this search: the
+    /// manifest's `name` and the fetched SWT1 `bytes`. The term's build,
+    /// if it arms, takes the record only through its name, dimension and
+    /// y·b checks; a mismatched record is ignored and the solves run
+    /// fresh. wasm has no filesystem, so a record the worker fetched is
+    /// the browser's only dual cache.
+    pub fn set_walk_cache(&mut self, name: String, bytes: Vec<u8>) {
+        sokomind_search::set_walk_cache(name, bytes);
+    }
     /// The search's state by its wire name, as [`Status::as_str`] spells
     /// it: `running` until it ends, then the reason it ended.
     pub fn status(&self) -> String {

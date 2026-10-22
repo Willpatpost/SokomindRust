@@ -24,6 +24,25 @@ const yieldToEventLoop = () =>
     yieldChannel.port1.onmessage = () => resolve();
     yieldChannel.port2.postMessage(0);
   });
+/** Fetches a pre-solved walk-term dual cache for the board when the app's
+ * manifest ships one, and hands it to the engine: the record was generated
+ * natively, and the engine's own name, dimension and objective checks
+ * decide whether to trust it. Best effort — a missing manifest or entry,
+ * or a fetch that fails, leaves the fresh solves to run. */
+async function provideWalkCache(search: WasmSearch, rows: string) {
+  try {
+    const manifest: { entries: { rowsHash: string; name: string }[] } = await (await fetch('/walk-caches/manifest.json')).json();
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rows));
+    const rowsHash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const entry = manifest.entries.find(candidate => candidate.rowsHash === rowsHash);
+    if (entry) {
+      const bytes = new Uint8Array(await (await fetch(`/walk-caches/${entry.name}`)).arrayBuffer());
+      search.set_walk_cache(entry.name, bytes);
+    }
+  } catch {
+    /* No cache here; the fresh solves run. */
+  }
+}
 self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
   if (data.type === 'cancel') {
     cancelled = true;
@@ -35,6 +54,9 @@ self.onmessage = async ({ data }: MessageEvent<WorkerRequest>) => {
     await init({ module_or_path: wasmUrl });
     const r = data.request;
     search = new WasmSearch(r.rows, r.actions, r.mode, r.maxStates, r.memoryMiB);
+    // The term's LP pair is the browser's slowest setup; a record the app
+    // ships for this board skips both solves, checked before use.
+    if (r.mode === 'optimal') await provideWalkCache(search, r.rows);
     // The longest route the position leaves room for. A longer best is never rebuilt, since no
     // game could replay it after the position's moves; a search that ends with one fails with the
     // text POST /api/solve sends for it, and a Quality run may still improve below the limit.

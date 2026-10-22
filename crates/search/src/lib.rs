@@ -553,6 +553,17 @@ impl Search {
     }
 }
 
+/// Provides a walk-term dual-cache record for this thread's next search:
+/// the manifest's `name` and its SWT1 `bytes`. The term's build, if it
+/// arms, takes the record only through the same name, dimension and y·b
+/// checks a `SOKOMIND_DUAL_CACHE` entry passes; a mismatched record is
+/// ignored and the solves run fresh. wasm has no environment or
+/// filesystem, so a record a web worker fetched is the browser's only
+/// dual cache (see `walk_term`).
+pub fn set_walk_cache(name: String, bytes: Vec<u8>) {
+    heuristic::walk_term::inject(name, bytes);
+}
+
 impl Search {
     fn engine(&self) -> &Engine {
         match &self.0 {

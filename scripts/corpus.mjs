@@ -69,18 +69,20 @@ let built = false;
 /**
  * Compile once per process, then return the example's verified JSON-line records.
  * @param {readonly string[]} [args] Options for the catalog example.
- * @param {{ timeoutMs?: number }} [options] timeoutMs: a wall budget for the example
+ * @param {{ timeoutMs?: number, env?: Record<string, string> }} [options] timeoutMs: a wall budget for the example
  *   itself, which a wedged search — one that stops answering its deadline
  *   between batches — overruns; the spawn is killed and the error says so.
+ *   env: variables added to the child's environment, for a caller arming
+ *   the example's own knobs (the build's dual-cache directory).
  * @returns {CorpusRecord[]}
  */
-export function nativeCorpus(args = [], { timeoutMs } = {}) {
+export function nativeCorpus(args = [], { timeoutMs, env: extra } = {}) {
   if (!built) run('cargo', ['build', '--locked', '--release', '-p', 'sokomind-search', '--example', 'catalog']);
   built = true;
   const binary = resolve(root, 'target/release/examples/catalog' + (process.platform === 'win32' ? '.exe' : ''));
   const result = spawnSync(binary, args, {
     cwd: root,
-    env,
+    env: extra ? { ...env, ...extra } : env,
     encoding: 'utf8',
     maxBuffer: 64 * MIB,
     ...(timeoutMs ? { timeout: timeoutMs } : {}),
