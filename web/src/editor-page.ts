@@ -307,8 +307,9 @@ function syncTypedButtons() {
   };
   pair(typedBoxButton, typedLabel, 'Box');
   pair(typedGoalButton, typedLabel.toLowerCase(), 'Goal');
-  typedBoxButton.setAttribute('aria-label', `Typed box ${typedLabel}`);
-  typedGoalButton.setAttribute('aria-label', `Typed goal ${typedLabel.toLowerCase()}`);
+  // No aria-label: the rendered pair is the name, and it contains the
+  // visible text by construction — a label beside it would have to repeat
+  // both (WCAG's label in name).
   const tool = editorState?.tool;
   typedBoxButton.setAttribute('aria-pressed', String(tool === typedLabel));
   typedGoalButton.setAttribute('aria-pressed', String(tool === typedLabel.toLowerCase()));

@@ -254,9 +254,13 @@ function journeyCard(book: journal.Journal): HTMLElement {
       const cleared = book.cleared[id] !== undefined || (entry !== undefined && solved(entry));
       if (cleared) node.dataset.complete = 'true';
       node.href = playHash(id);
-      node.textContent = cleared ? '✓' : String(index + 1);
+      // The visible mark leads the name: an accessible name must contain the
+      // visible text (WCAG's label in name), which the room title alone does
+      // not.
+      const mark = cleared ? '✓' : String(index + 1);
+      node.textContent = mark;
       node.title = entry?.title ?? id;
-      node.setAttribute('aria-label', `${entry?.title ?? id}${cleared ? ', cleared' : ', not cleared'}`);
+      node.setAttribute('aria-label', `${mark}: ${entry?.title ?? id}${cleared ? ', cleared' : ', not cleared'}`);
       nodes.append(node);
     }
     item.append(nodes);

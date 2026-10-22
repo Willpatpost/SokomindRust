@@ -39,6 +39,10 @@
   --amber-600: #a86820;
   --coral-400: #d4806a;
   --coral-500: #c8664d;
+  /* The small-text coral: 500 falls under 4.5:1 on the light papers at body
+   * sizes, so text-sized uses take 600. The dark palettes' 500 already
+   * passes on theirs, so each repeats it. */
+  --coral-600: #a84432;
   --blue-500: #4a7f96;
   --shadow-soft: 0 24px 70px rgb(23 25 22 / 0.12);
   --shadow-card: 0 10px 30px rgb(23 25 22 / 0.08);
@@ -208,6 +212,7 @@ html[data-theme='dark'] {
   --amber-600: #9a6020;
   --coral-400: #e08a72;
   --coral-500: #d87a62;
+  --coral-600: #d87a62;
   --blue-500: #5a9ab0;
   --shadow-soft: 0 24px 70px rgb(0 0 0 / 0.4);
   --shadow-card: 0 10px 30px rgb(0 0 0 / 0.3);
@@ -281,6 +286,7 @@ html[data-theme-family='midnight-neon'] {
   --amber-600: #ad6811;
   --coral-400: #ef78a3;
   --coral-500: #d94f85;
+  --coral-600: #b23a67;
   --blue-500: #5266d4;
   --card-dark-bg: #10162b;
   --card-dark-text: #f4f7ff;
@@ -331,6 +337,7 @@ html[data-theme-family='midnight-neon'][data-theme='dark'] {
   --amber-600: #b97a18;
   --coral-400: #ff82ad;
   --coral-500: #f06498;
+  --coral-600: #f06498;
   --blue-500: #8b91ff;
   --card-dark-bg: #080b18;
   --card-dark-text: #f0f6ff;
@@ -389,6 +396,7 @@ html[data-theme-family='minimal-ink'] {
   --amber-600: #8d5519;
   --coral-400: #dd7465;
   --coral-500: #c84d3c;
+  --coral-600: #a63c2d;
   --blue-500: #476f74;
   --card-dark-bg: #202222;
   --card-dark-text: #f6f6f3;
@@ -448,6 +456,7 @@ html[data-theme-family='minimal-ink'][data-theme='dark'] {
   --amber-600: #966529;
   --coral-400: #ee8b7d;
   --coral-500: #df6655;
+  --coral-600: #df6655;
   --blue-500: #83aeb4;
   --card-dark-bg: #111212;
   --card-dark-text: #f3f4f1;

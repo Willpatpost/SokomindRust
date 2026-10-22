@@ -2552,16 +2552,17 @@ details[open] summary {
   background: var(--surface-raised);
 }
 
-/* The destructive counterpart of button.primary. */
+/* The destructive counterpart of button.primary: the small-text coral, at
+ * the button's body size the 500 falls under contrast. */
 button.danger {
   border-color: var(--coral-500);
-  color: var(--coral-500);
+  color: var(--coral-600);
   font-weight: 700;
 }
 
 button.danger:hover:enabled {
-  background: var(--coral-500);
-  border-color: var(--coral-500);
+  background: var(--coral-600);
+  border-color: var(--coral-600);
   color: var(--paper-50);
 }
 
@@ -2789,7 +2790,7 @@ button.danger:hover:enabled {
 #editor-validation p {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--coral-500);
+  color: var(--coral-600);
 }
 
 #editor-validation p.editor-valid {

@@ -127,7 +127,7 @@
               <span id="notation"></span>
               <button id="copy-moves" class="copy" title="Copy the whole move sequence">Copy</button>
             </div>
-            <div class="timeline" aria-label="Move breakdown">
+            <div class="timeline" role="group" aria-label="Move breakdown">
               <div class="timeline-bars">
                 <div id="walks"></div>
                 <div id="pushes-bar"></div>
@@ -445,8 +445,8 @@
                 ></label>
               </div>
               <div class="editor-typed">
-                <button id="editor-typed-box" aria-label="Typed box"></button>
-                <button id="editor-typed-goal" aria-label="Typed goal"></button>
+                <button id="editor-typed-box"></button>
+                <button id="editor-typed-goal"></button>
               </div>
               <p class="fine">Each typed box only fits its matching lowercase goal.</p>
             </section>
@@ -587,7 +587,7 @@
               ><select id="lab-watch"></select
             ></label>
             <div class="board-wrap lab-wrap">
-              <div id="lab-board" role="img"></div>
+              <div id="lab-board" role="img" aria-label="Solver lab board"></div>
             </div>
             <div id="lab-path" class="lab-path" role="img" aria-label="Solution directions"></div>
             <input id="lab-seek" type="range" min="0" max="0" value="0" aria-label="Solution playback position" />
