@@ -831,6 +831,9 @@ in `web/tests/browser`, with `/api` stubbed, against the built app, so
 `npx playwright install chromium`. CI and `validate` run it with `CI=true`, so
 a leftover `test.only` fails the run, and Playwright starts its own preview
 server, failing if port 4173 is already taken rather than reusing that server.
+One spec leaves `/api` real: the native-engine solve runs against the suite's
+second web server, the Rust server on 3000 the preview's proxy targets, whose
+health endpoint is its readiness probe.
 
 CI's `deploy` job checks the deployment files, builds both images, and
 smoke-tests the stack they make; it pushes nothing. The Dockerfile's

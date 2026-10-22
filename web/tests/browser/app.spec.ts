@@ -1249,3 +1249,21 @@ test('a routeless finish steers toward the budgets that route it', async ({ page
   await expect(page.locator('#solver-result-title')).toHaveText('No route returned', { timeout: 20000 });
   await expect(page.locator('#solver-result-guarantee')).toContainText('may find one');
 });
+
+// The native engine through the real API: every other spec stubs /api away,
+// so this is the only one that drives the request encoder, the reply
+// decoders, the proof check and the server's own budget and slot behavior
+// end to end, through the preview's proxy. The suite's second web server is
+// the Rust server itself, whose health endpoint the app's connection label
+// confirms before the search runs.
+test('a native search solves through the server', async ({ page }) => {
+  await page.goto('/#/play/ultra-tiny');
+  await expect(page.locator('#title')).toHaveText('First Steps');
+  await expect(page.locator('#connection')).toHaveText('Native solver connected');
+  await page.click('#open-solver');
+  await page.selectOption('#engine', 'native');
+  await page.selectOption('#mode', 'optimal');
+  await page.click('#solve');
+  await expect(page.locator('#search-status')).toContainText('Search complete.', { timeout: 30000 });
+  await expect(page.locator('#solver-optimal')).toBeVisible();
+});
