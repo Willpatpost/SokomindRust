@@ -65,6 +65,11 @@ impl Queue {
     pub(super) fn peek(&self) -> Option<Key> {
         self.chunks.first()?.first().copied()
     }
+    /// The least `measure` over every entry, the heap's own order aside: a
+    /// full scan, for a floor the key order does not give.
+    pub(super) fn min_of(&self, mut measure: impl FnMut(Key) -> u64) -> Option<u64> {
+        self.chunks.iter().flatten().map(|&key| measure(key)).min()
+    }
     /// Queues `key` without allocating.
     pub(super) fn push(&mut self, key: Key) {
         let at = self.len;

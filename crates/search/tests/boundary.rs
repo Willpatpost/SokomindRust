@@ -201,6 +201,45 @@ fn the_app_state_ceiling_never_wedges_an_optimal_search() {
     assert_eq!(proof, Some(Proof::Optimal { moves: 34 }));
 }
 
+/// A limit-stopped Quality search reports the floor its reopened frontier
+/// sealed, capped by the route it holds — the certificate Optimal computes
+/// live, sealed at the stop because Quality's end polish releases the
+/// arena. Fast claims none: without reopenings its closed nodes can hide
+/// the cheaper path a shorter route would take, so its frontier bounds
+/// nothing. Medium's optimum is 34 moves, so any sound Quality bound on
+/// it stays at or below that.
+#[test]
+fn a_capped_quality_search_reports_its_frontier_floor() {
+    let board =
+        Board::parse("OOOOOOO\nOa   bO\nO AXB O\nO XRX O\nOSCXDSO\nOcS SdO\nOOOOOOO").unwrap();
+    let mut quality =
+        Search::new(board.clone(), board.initial(), Mode::Quality, 2_000, 64).unwrap();
+    while quality.status() == Status::Running {
+        quality.advance(32);
+    }
+    assert_eq!(quality.status(), Status::StateLimit);
+    let best = quality
+        .best_moves()
+        .expect("the route survives the restart");
+    let bound = quality
+        .lower_bound()
+        .expect("the reopened frontier seals a floor");
+    assert!(
+        bound <= best,
+        "the seal caps by the incumbent: {bound} over {best}"
+    );
+    assert!(bound <= 34, "medium's optimum is 34: {bound}");
+    let mut fast = Search::new(board.clone(), board.initial(), Mode::Fast, 2_000, 64).unwrap();
+    while fast.status() == Status::Running {
+        fast.advance(32);
+    }
+    assert_eq!(
+        fast.lower_bound(),
+        None,
+        "Fast never reopens, so its frontier bounds nothing"
+    );
+}
+
 #[test]
 fn same_label_box_order_is_normalized_and_stats_account_for_versions() {
     let board = Board::parse(BOARD).unwrap();

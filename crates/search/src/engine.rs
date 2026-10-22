@@ -449,6 +449,12 @@ pub(crate) struct Engine {
     /// never breaks the memory budget, which a re-size could not fix
     /// once the arena holds records.
     walk_reserved: u64,
+    /// The bound a limit-stopped reopened search sealed at its end: the
+    /// frontier's admissible floor over its last queue, capped by the
+    /// incumbent (see `seal_quality_bound`). `None` for every search that
+    /// never sealed — Fast, which never reopens, and any stop before a
+    /// limit; the exact search needs no seal, computing its floor live.
+    quality_bound: Option<u32>,
     /// The doorway guidance (see `strategic`): `None` unless the weighted
     /// search's knob names it. It shifts the queue's priorities only —
     /// the stored h, the prunes, and the exact search's admissible key
@@ -621,6 +627,7 @@ impl Engine {
             walk_build: None,
             walk_at: u32::MAX,
             walk_reserved: 0,
+            quality_bound: None,
             strategic,
             memory_mib,
             max_states,
@@ -781,6 +788,45 @@ impl Engine {
             .unwrap_or(u64::MAX)
             .min(self.interrupted_f.unwrap_or(u64::MAX))
     }
+    /// Seals the bound a limit-stopped search reports: the least g + h
+    /// over its queued entries at the running weight, an interrupted
+    /// expansion's floor folded in, capped by the incumbent. Sound only
+    /// for a policy that reopens closed nodes — without reopenings a
+    /// closed node can hide the cheaper path a shorter route would take —
+    /// and only over the plain search's own queue: the stage ladder's
+    /// entries are heuristic commits whose h bounds nothing, and a running
+    /// polish has already released the arena. Quality's phases past its
+    /// first route all reopen, and its Fast phase — the routeless one —
+    /// does not, so the seal lands exactly when a route is in hand. The
+    /// exact search needs none: it never polishes, its frontier stays
+    /// readable, and it computes the same floor live.
+    fn seal_quality_bound(&mut self) {
+        debug_assert_eq!(self.status, Status::Running);
+        if !self.policy.reopen_closed
+            || self.staging.is_some()
+            || self.room_build.is_some()
+            || self.walk_build.is_some()
+            || self.polish.is_some()
+        {
+            return;
+        }
+        let frontier = self
+            .arena
+            .min_gh(self.policy.weight)
+            .unwrap_or(u64::MAX)
+            .min(self.interrupted_f.unwrap_or(u64::MAX));
+        let bound = match self.incumbent_moves() {
+            Some(best) if frontier >= u64::from(best) => best,
+            _ if frontier < u32::MAX as u64 => frontier as u32,
+            _ => return,
+        };
+        self.quality_bound = Some(bound);
+    }
+    /// The bound a limit-stopped search sealed, for the search API to
+    /// report: `None` until one did.
+    pub(crate) fn quality_lower_bound(&self) -> Option<u32> {
+        self.quality_bound
+    }
     /// Ends a running search from outside: `reason` is a limit or
     /// `Cancelled`, never a terminal verdict the search did not reach. A
     /// running stage ladder is dropped with its unfinished stage, a running
@@ -789,6 +835,11 @@ impl Engine {
     /// solves, leaving the start queued with M alone.
     pub(crate) fn stop(&mut self, reason: StopReason) {
         if self.status == Status::Running {
+            // Before the ladder drops: its queue holds heuristic commits
+            // whose h bounds nothing, so the seal must see and refuse them.
+            if matches!(reason, StopReason::TimeLimit) {
+                self.seal_quality_bound();
+            }
             self.staging = None;
             self.room_build = None;
             self.walk_build = None;
@@ -875,6 +926,9 @@ impl Engine {
     /// share, which an episode's runs and pairs may not have had.
     fn end(&mut self, status: Status) {
         debug_assert!(self.polish.is_none());
+        if matches!(status, Status::StateLimit | Status::MemoryLimit) {
+            self.seal_quality_bound();
+        }
         if self.policy.polish
             && let Some(id) = self.incumbent
             && let Ok(route) = self.route_to(id)

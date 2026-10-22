@@ -1231,6 +1231,8 @@ test('a quality search over its budget shows the route it kept', async ({ page }
   await expect(page.locator('#search-status')).toContainText('Time budget reached.', { timeout: 20000 });
   await expect(page.locator('#solver-result-title')).toHaveText('Best route found');
   await expect(page.locator('#solver-result-moves')).not.toHaveText('—');
+  // The reopened frontier's sealed floor gives the route a sound gap.
+  await expect(page.locator('#search-status')).toContainText('of optimal');
   await expect(page.locator('#play')).toBeEnabled();
 });
 

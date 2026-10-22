@@ -839,6 +839,20 @@ impl Arena {
     pub(crate) fn min_f(&self) -> Option<u64> {
         self.queue.peek().map(Key::f)
     }
+    /// Least g + h over every queued entry at `weight`, whose keys pack
+    /// g + weight * h, stale entries included: the frontier's admissible
+    /// floor for a search that reopens closed nodes. Any route not yet
+    /// found passes through a queued state whose g is its own prefix and
+    /// whose h bounds its remainder, so no route runs shorter than this —
+    /// but only with reopenings: a search that never reopens can leave a
+    /// closed node's cheaper path unseen, and a shorter route then passes
+    /// under the floor. A saturated key f, standing for any count at or
+    /// above it, only understates the floor, which stays sound.
+    pub(crate) fn min_gh(&self, weight: u32) -> Option<u64> {
+        let inflation = u64::from(weight - 1);
+        self.queue
+            .min_of(|key| key.f().saturating_sub(inflation * u64::from(key.h())))
+    }
     /// Forgets every node and queued entry in place. Every chunk, the queue
     /// and the table keep their allocations, so refilling to the size
     /// already reached allocates nothing; the limit and counters are kept,

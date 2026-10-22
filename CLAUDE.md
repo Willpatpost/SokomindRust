@@ -528,6 +528,14 @@ Only exact/Optimal search should be allowed to produce proofs unless another mod
 
 Preserve this architectural separation.
 
+Quality may report a *lower bound* — the floor its reopened frontier seals
+when a limit stops it with a route in hand, capped by that route — because
+reopenings keep every cheaper path to a known state reachable through the
+queue, so no shorter route can pass under the floor. Fast may not: without
+reopenings a closed node can hide the cheaper path a shorter route would
+take, so its frontier bounds nothing. A bound is not a proof claim; Quality
+still never reports optimal or unsolvable.
+
 Do not add a convenient `proof = optimal` result to Fast or Quality merely because a route looks good, matches a known result, or no better route was found within the budget.
 
 "Nothing better was found" is not proof.

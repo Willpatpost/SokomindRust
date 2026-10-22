@@ -293,12 +293,16 @@ export function mustRecord(diff) {
 
 /**
  * Absolute rules with no escape hatch; any failure is a soundness bug.
- *   I1 only Optimal carries a proof or a lower bound;
- *   I2 the proof agrees with moves, lower_bound and status;
- *   I3 no Optimal bound or "optimal" proof lies above, and no "unsolvable"
- *      sits alongside, a replay-verified route from any mode or evidence case
- *      of the same id. Evidence counts only when its fingerprint matches the
- *      current board's.
+ *   I1 only Optimal carries a proof, and only Optimal and Quality a lower
+ *      bound — Quality's the frontier floor its reopenings seal at a limit
+ *      stop, capped by its route; Fast never one, since without reopenings
+ *      a closed node can hide the cheaper path a shorter route would take;
+ *   I2 the proof agrees with moves, lower_bound and status, and Quality's
+ *      bound never exceeds its own route;
+ *   I3 no Optimal or Quality bound, no "optimal" proof and no "unsolvable"
+ *      claim, lies above a replay-verified route from any mode or evidence
+ *      case of the same id. Evidence counts only when its fingerprint
+ *      matches the current board's.
  * @param {readonly Case[]} cases
  * @param {readonly Case[]} [evidence]
  * @returns {Failure[]}
@@ -327,7 +331,15 @@ export function invariants(cases, evidence = []) {
     const fail = (rule, message) => failures.push({ key: key(c), rule, message });
     const { moves, lower_bound: lower, proof } = c;
     if (c.mode !== 'optimal') {
-      if (proof !== 'none' || lower !== null) fail('I1', `${c.mode} claims proof=${proof} lower_bound=${lower}`);
+      // Quality may carry its sealed frontier floor, capped by its route;
+      // Fast never may, its closed nodes hiding cheaper paths.
+      const claims = proof !== 'none' || (lower !== null && c.mode !== 'quality');
+      if (claims) fail('I1', `${c.mode} claims proof=${proof} lower_bound=${lower}`);
+      if (c.mode === 'quality' && lower !== null && moves !== null && lower > moves)
+        fail('I2', `lower bound ${lower} exceeds its own ${moves}-move route`);
+      const route = best.get(c.id);
+      if (c.mode === 'quality' && lower !== null && route !== undefined && lower > route)
+        fail('I3', `lower bound ${lower} exceeds a verified ${route}-move route`);
       continue;
     }
     const consistent = /** @type {Record<string, boolean>} */ ({

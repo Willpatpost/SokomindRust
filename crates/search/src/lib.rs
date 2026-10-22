@@ -525,15 +525,19 @@ impl Search {
         };
         Ok(Self(kind))
     }
-    /// Live certified lower bound on the optimal move count from the start:
-    /// the least f of any record not yet expanded, or whose expansion a limit
-    /// cut short, capped by the best route.
-    /// `None` for the weighted modes, which claim none, and while no finite
-    /// bound exists, as after an exhausted search.
+    /// Live certified lower bound on the optimal move count from the start.
+    /// Optimal reports the least f of any record not yet expanded, or whose
+    /// expansion a limit cut short, capped by the best route. Quality
+    /// reports one too, once a limit stops it with a route in hand: the
+    /// floor its reopened frontier sealed at the stop, capped by the route.
+    /// Fast claims none — without reopenings a closed node can hide the
+    /// cheaper path a shorter route would take, so its frontier bounds
+    /// nothing — and every mode claims none while no finite bound exists,
+    /// as after an exhausted search.
     pub fn lower_bound(&self) -> Option<u32> {
         match &self.0 {
             Kind::Exact(search) => search.lower_bound(),
-            Kind::Weighted(_) => None,
+            Kind::Weighted(engine) => engine.quality_lower_bound(),
         }
     }
     /// Terminal proof; `None` while running or without a sound certificate.

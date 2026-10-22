@@ -183,6 +183,15 @@ test('invariants I1-I3 catch false proofs and bounds, using only matching eviden
   assert.deepEqual(found([full(), fast(), fast({ mode: 'quality' })]), []);
   assert.deepEqual(found([fast({ proof: 'optimal' })]), ['a:fast I1']);
   assert.deepEqual(found([fast({ lower_bound: 3 })]), ['a:fast I1']);
+  // Quality may carry its sealed frontier floor, capped by its route; a
+  // proof claim, or a floor above its own route, still fails.
+  assert.deepEqual(found([fast({ mode: 'quality', status: 'state_limit', moves: 10, lower_bound: 3 })]), []);
+  assert.deepEqual(found([fast({ mode: 'quality', status: 'state_limit', moves: 10, lower_bound: 11 })]), ['a:quality I2', 'a:quality I3']);
+  assert.deepEqual(found([fast({ mode: 'quality', proof: 'optimal' })]), ['a:quality I1']);
+  // A Quality floor above a route another mode verified fails like Optimal's.
+  assert.deepEqual(found([fast({ mode: 'quality', status: 'state_limit', moves: 12, lower_bound: 11 })], [fast({ moves: 10 })]), [
+    'a:quality I3',
+  ]);
   assert.deepEqual(found([full({ lower_bound: 9 })]), ['a:optimal I2']);
   assert.deepEqual(found([full({ proof: 'bounded' })]), ['a:optimal I2']);
   assert.deepEqual(found([full({ proof: 'none' })]), ['a:optimal I2']);

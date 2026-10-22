@@ -330,7 +330,11 @@ change. A long search that stops improving its route also polishes it in
 episodes, in the part of that share the arena does not hold, and then goes on;
 an episode's route never bounds the search, and the end polish still runs.
 `docs/route-polish.md` covers its bounds, memory and what was left out.
-Neither mode ever proves anything. Optimal wraps the same engine in
+Neither mode ever proves anything; a Quality search that a limit stops with
+a route in hand still reports a sound lower bound — the floor its reopened
+frontier sealed, capped by the route — while Fast reports none, since
+without reopenings a closed node can hide the cheaper path a shorter route
+would take. Optimal wraps the same engine in
 the crate-private `ExactSearch`, reachable only as `Search` in `Mode::Optimal`:
 admissible A* (weight 1) with reopenings, the only source of proofs. Its room
 tables build only at a state budget of at least 1,000,000 states: below, the
