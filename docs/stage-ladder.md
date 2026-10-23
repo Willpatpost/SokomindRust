@@ -335,14 +335,15 @@ From P3 (job 47024, rev `e4172fe`):
 
 ## The app's budgets
 
-The page's defaults — 256,000,000 states, 64 MiB, 5 s — route 50 of the 57
-catalog boards in Quality (median first route 0 ms, p90 450 ms, worst 1.2 s)
-and the same 50 in Fast: the seven give-ups above, which neither mode's
-machinery reaches at those budgets. Higher budgets move the boundary, each
-mode its own way. Quality's capped ladder gives up early and its plain
-restart routes gen-v2-340053-6d91 at 128 MiB and above (95 moves at 256 MiB,
-11 s, 5.9M states) and gen-v2-340046-c9f5 at 1,024 MiB (174 moves, 27 s,
-17.9M states). Fast's limit-grown ladder, given a 30 s budget, routes
+The page's defaults — 256,000,000 states, 256 MiB, 5 s — route 50 of the 57
+catalog boards in Fast and 51 in Quality (Quality's median first route 0 ms,
+p90 493 ms, worst 4.7 s): Quality's extra board, gen-v2-340053-6d91, lands
+its first route at 4.7 s of the 5 s budget, so a slower machine loses it, and
+the six boards neither mode's machinery reaches at those budgets are
+gen-v2-340048-b5d3, 340046-c9f5, 350108-b138, 360313-1615, 370193-8887 and
+350001-a996. Higher budgets move the boundary, each mode its own way.
+Quality's capped ladder gives up early and its plain restart routes
+gen-v2-340046-c9f5 at 1,024 MiB (174 moves, 27 s, 17.9M states). Fast's limit-grown ladder, given a 30 s budget, routes
 gen-v2-350108-b138, 360313-1615 and 370193-8887 in 6 to 17 s, where
 Quality's capped ladder cannot. gen-v2-340048-b5d3 and 350001-a996 stay
 routeless at every budget the page offers: the ladder fails b5d3's last rung

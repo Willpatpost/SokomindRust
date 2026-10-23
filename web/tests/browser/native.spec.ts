@@ -40,7 +40,7 @@ test('native engine solves through the server API', async ({ page }) => {
   expect(body.actions).toBe('');
   expect(body.rows).toHaveLength(5);
   expect(body.max_states).toBeGreaterThan(0);
-  expect(body.memory_mib).toBe(64);
+  expect(body.memory_mib).toBe(256);
   await expect(page.locator('#search-status')).toContainText('1 remaining moves · proven move-optimal from this position');
   await expect(page.locator('#search-status')).toContainText('Search complete.');
   await expect(page.locator('#play')).toBeEnabled();

@@ -55,11 +55,11 @@ const OBSERVE = { maxStates: 1_000_000, memoryMiB: 64, repeat: 3, puzzles: ['hug
 // reaches, so the tier judges only what speed cannot (liveness, in
 // bench-gate.mjs) beside the false-proof invariants; the board set reaches
 // every part of the engine — quick solves, the room bound and its deferred
-// walk term at 64 MiB, the stage ladder, a board with no room structure, and
+// walk term at 256 MiB, the stage ladder, a board with no room structure, and
 // the generated giants. --full runs every board, as the weekly CI job does.
 const APPSCALE = {
   maxStates: 256_000_000,
-  memoryMiB: 64,
+  memoryMiB: 256,
   timeMs: 5_000,
   puzzles: ['tiny', 'medium', 'large', 'huge', 'expert-maze', 'open-field', 'gen-v2-340272-fd819d0e', 'gen-v2-370002-8ea0b852'],
 };

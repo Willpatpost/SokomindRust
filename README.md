@@ -612,12 +612,12 @@ one concurrent CPU job by default (see `SOLVE_CONCURRENCY` under Configuration),
 and take 128 MiB when they name no budget. The search crate accepts budgets up
 to 4095 MiB in the browser worker, the wasm32 ceiling, and 32768 MiB natively,
 so the web app sends the full state cap and the budget its memory select names
-(16 to 1024 MiB, 64 by default) to either engine. A state costs a 12-byte
+(16 to 1024 MiB, 256 by default) to either engine. A state costs a 12-byte
 record, 2 bytes per box, an 8-byte queue entry, and 8 to 16 bytes of index
 table, so every budget the server, the worker and the web app can name binds
 before the state cap: on the catalog's boards 64 MiB holds about 0.91-2.10M
-states, 128 MiB 1.83-4.19M, and 1024 MiB 14.68-33.55M, and a run that fills its
-arena reports a memory limit. A native budget past what holds the full state
+states, 128 MiB 1.83-4.19M, 256 MiB 3.64-8.39M, and 1024 MiB 14.68-33.55M, and
+a run that fills its arena reports a memory limit. A native budget past what holds the full state
 cap — 32768 MiB holds it at every box count — instead ends a full arena at the
 state limit, and the room bound's tables take what such a budget leaves. The
 arena holds at most the smaller of the state cap and what the budget holds. Records and their queue entries grow in blocks of
@@ -831,7 +831,7 @@ or bound, a nondeterministic run, or a crash. `bench:check`'s 20,000 states lie
 below Fast's stage point, so a gate run that stages does so at its full arena;
 `bench:observe`'s runs stage before the arena fills, as production's do.
 `bench:appscale` runs a board set in every mode at the app's own declaration —
-the 256,000,000-state ceiling the page always sends, with its default 64 MiB
+the 256,000,000-state ceiling the page always sends, with its default 256 MiB
 and 5 s budgets — one corpus run per board, each under a wall budget. Machine
 speed changes which routes and bounds a time-capped run reaches, so it judges
 only what speed cannot: every search answers its deadline (a run past four
